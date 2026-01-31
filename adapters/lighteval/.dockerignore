@@ -1,0 +1,55 @@
+# Exclude from container builds
+
+# Example configuration
+meta/job.json
+meta/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Temporary files
+/tmp/
+*.tmp
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+README.md
+MIGRATION.md
+
+# Development files
+k8s-example.yaml
+justfile
+
+# LiteLLM cache
+.litellm_cache/
