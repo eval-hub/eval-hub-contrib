@@ -1,0 +1,9 @@
+meta/job.json
+README.md
+justfile
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.cache
+results/

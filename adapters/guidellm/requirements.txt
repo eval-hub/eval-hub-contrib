@@ -1,0 +1,11 @@
+# GuideLLM framework adapter requirements
+
+# EvalHub SDK (framework adapter)
+git+https://github.com/ruivieira/eval-hub-sdk.git@lmeval
+
+# GuideLLM framework
+guidellm[recommended]>=0.1.0
+
+# Required dependencies
+requests>=2.31.0
+pydantic>=2.0.0
