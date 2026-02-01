@@ -11,18 +11,21 @@ This repository contains adapters that integrate various evaluation frameworks w
 | Framework | Container Image | Local | Kubernetes | Notes |
 |-----------|----------------|-------|------------|-------|
 | [LightEval](https://github.com/huggingface/lighteval) | `quay.io/eval-hub/community-lighteval:latest` | ✗ | ✓ | Lightweight evaluation framework for language models |
+| [GuideLLM](https://github.com/vllm-project/guidellm) | `quay.io/eval-hub/community-guidellm:latest` | ✗ | ✓ | Performance benchmarking platform for LLM inference servers |
 
 ## Building Adapters
 
 ```bash
 # Build specific adapter
 make image-lighteval
+make image-guidellm
 
 # Build all adapters
 make images
 
 # Push to registry
 make push-lighteval REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-guidellm REGISTRY=quay.io/your-org VERSION=v1.0.0
 ```
 
 ## License
