@@ -413,6 +413,11 @@ class LightEvalAdapter(FrameworkAdapter):
             "--save-details",
         ])
 
+        # Add max-samples limit if specified
+        if limit is not None:
+            cmd.extend(["--max-samples", str(limit)])
+            logger.info(f"Limiting evaluation to {limit} samples per task")
+
         logger.info(f"Executing LightEval CLI: {' '.join(cmd)}")
 
         try:

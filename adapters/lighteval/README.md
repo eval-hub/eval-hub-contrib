@@ -86,6 +86,136 @@ The adapter supports all LightEval tasks, organised by category:
 - **endpoint**: Custom OpenAI-compatible endpoints
 - **litellm**: LiteLLM proxy
 
+## Supported Request Payload Parameters
+
+The following parameters can be specified in the `benchmark_config` section or as top-level job parameters when submitting evaluation jobs:
+
+### Model Configuration
+
+- **`provider`** (string, default: `"endpoint"`): Model provider type
+  - `"endpoint"`: OpenAI-compatible API endpoint (uses LiteLLM)
+  - `"openai"`: OpenAI API
+  - `"anthropic"`: Anthropic API
+  - `"transformers"`: HuggingFace Transformers (local)
+  - `"vllm"`: vLLM inference server
+  - `"litellm"`: LiteLLM proxy
+
+### Evaluation Configuration
+
+- **`num_examples`** (integer, optional): Limit evaluation to N samples per task
+  - Useful for quick testing or resource-constrained environments
+  - Example: `100` evaluates only 100 samples per task
+  - If not specified, evaluates the full dataset
+  - Passed via `--max-samples` to LightEval CLI
+
+- **`num_few_shot`** (integer, default: `0`): Number of few-shot examples to include
+  - `0`: Zero-shot evaluation
+  - `1-5`: Few-shot evaluation with N examples
+  - Higher values may improve accuracy but increase latency
+
+- **`batch_size`** (integer, default: `1`): Batch size for evaluation
+  - Higher values may improve throughput
+  - Limited by available memory
+
+- **`tasks`** (array of strings, optional): Specific tasks to run
+  - If not specified, runs all tasks in the benchmark category
+  - Example: `["hellaswag", "winogrande", "piqa"]`
+
+### Provider-Specific Parameters
+
+#### Transformers Provider
+
+- **`device`** (string, optional): Device to use for inference
+  - `"cuda"`: GPU acceleration
+  - `"cpu"`: CPU-only inference
+  - `"cuda:0"`, `"cuda:1"`: Specific GPU device
+
+#### Endpoint/API Providers
+
+- **`parameters`** (object, optional): Additional parameters passed to the model API
+  - Example: `{"temperature": 0.7, "top_p": 0.9, "max_tokens": 100}`
+  - These are appended to the model arguments for LiteLLM
+
+### Example Payloads
+
+#### Quick Test with Limited Samples
+
+```json
+{
+  "model": {
+    "url": "http://vllm-server.evalhub.svc.cluster.local:8000",
+    "name": "tinyllama"
+  },
+  "benchmarks": [
+    {
+      "id": "commonsense_reasoning",
+      "provider_id": "lighteval",
+      "parameters": {
+        "provider": "endpoint",
+        "num_few_shot": 0,
+        "num_examples": 100
+      }
+    }
+  ],
+  "timeout_minutes": 60,
+  "retry_attempts": 1
+}
+```
+
+#### Few-Shot Evaluation
+
+```json
+{
+  "model": {
+    "url": "http://vllm-server.evalhub.svc.cluster.local:8000",
+    "name": "tinyllama"
+  },
+  "benchmarks": [
+    {
+      "id": "mmlu",
+      "provider_id": "lighteval",
+      "parameters": {
+        "provider": "endpoint",
+        "num_few_shot": 5,
+        "num_examples": 500,
+        "batch_size": 4
+      }
+    }
+  ],
+  "timeout_minutes": 120,
+  "retry_attempts": 1
+}
+```
+
+#### Specific Tasks with Custom Parameters
+
+```json
+{
+  "model": {
+    "url": "http://vllm-server.evalhub.svc.cluster.local:8000",
+    "name": "tinyllama"
+  },
+  "benchmarks": [
+    {
+      "id": "custom_suite",
+      "provider_id": "lighteval",
+      "parameters": {
+        "provider": "endpoint",
+        "tasks": ["hellaswag", "winogrande", "arc:easy"],
+        "num_few_shot": 3,
+        "num_examples": 200,
+        "parameters": {
+          "temperature": 0.0,
+          "top_p": 1.0
+        }
+      }
+    }
+  ],
+  "timeout_minutes": 90,
+  "retry_attempts": 1
+}
+```
+
 ## Usage
 
 ### Building the Container

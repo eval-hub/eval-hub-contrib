@@ -284,8 +284,14 @@ class GuideLLMAdapter(FrameworkAdapter):
         if "max_seconds" in config:
             cmd.extend(["--max-seconds", str(config["max_seconds"])])
 
-        if "max_requests" in config:
-            cmd.extend(["--max-requests", str(config["max_requests"])])
+        # Max requests: prefer benchmark_config, fallback to job_spec.num_examples
+        max_requests = config.get("max_requests")
+        if max_requests is None and job_spec.num_examples is not None:
+            max_requests = job_spec.num_examples
+            logger.info(f"Using num_examples={max_requests} as max_requests")
+
+        if max_requests is not None:
+            cmd.extend(["--max-requests", str(max_requests)])
 
         # Error handling
         if "max_errors" in config:
