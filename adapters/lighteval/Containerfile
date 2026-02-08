@@ -1,6 +1,9 @@
 # LightEval adapter container for eval-hub
 FROM registry.access.redhat.com/ubi9/python-311:latest
 
+# Switch to root to set up directories
+USER 0
+
 # Set working directory
 WORKDIR /app
 
@@ -11,8 +14,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy adapter implementation
 COPY main.py .
 
-# Set Python path
+# Create writable cache directories with proper permissions
+RUN mkdir -p /tmp/.litellm_cache && \
+    chmod -R 777 /tmp && \
+    chown -R 1001:0 /app && \
+    chmod -R g+rwX /app
+
+# Set environment variables
 ENV PYTHONUNBUFFERED=1
+ENV EVALHUB_MODE=k8s
+ENV HOME=/tmp
+ENV LITELLM_CACHE_DIR=/tmp/.litellm_cache
 
 # Switch back to non-root user
 USER 1001

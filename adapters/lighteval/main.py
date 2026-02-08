@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from evalhub.adapter import (
+    ErrorInfo,
     EvaluationResult,
     FrameworkAdapter,
     JobCallbacks,
@@ -31,6 +32,7 @@ from evalhub.adapter import (
     JobSpec,
     JobStatus,
     JobStatusUpdate,
+    MessageInfo,
     OCIArtifactSpec,
 )
 
@@ -71,7 +73,7 @@ class LightEvalAdapter(FrameworkAdapter):
             RuntimeError: If LightEval evaluation fails
         """
         start_time = time.time()
-        logger.info(f"Starting LightEval job {config.job_id} for benchmark {config.benchmark_id}")
+        logger.info(f"Starting LightEval job {config.id} for benchmark {config.benchmark_id}")
 
         output_dir: Path | None = None
 
@@ -82,7 +84,10 @@ class LightEvalAdapter(FrameworkAdapter):
                     status=JobStatus.RUNNING,
                     phase=JobPhase.INITIALIZING,
                     progress=0.0,
-                    message=f"Initialising LightEval for benchmark {config.benchmark_id}",
+                    message=MessageInfo(
+                        message=f"Initialising LightEval for benchmark {config.benchmark_id}",
+                        message_code="initializing",
+                    ),
                 )
             )
 
@@ -97,7 +102,10 @@ class LightEvalAdapter(FrameworkAdapter):
                     status=JobStatus.RUNNING,
                     phase=JobPhase.LOADING_DATA,
                     progress=0.2,
-                    message=f"LightEval loading benchmark data for {len(tasks)} task(s)",
+                    message=MessageInfo(
+                        message=f"LightEval loading benchmark data for {len(tasks)} task(s)",
+                        message_code="loading_data",
+                    ),
                     current_step="Preparing evaluation",
                     total_steps=4,
                     completed_steps=1,
@@ -110,7 +118,10 @@ class LightEvalAdapter(FrameworkAdapter):
                     status=JobStatus.RUNNING,
                     phase=JobPhase.RUNNING_EVALUATION,
                     progress=0.3,
-                    message=f"Running LightEval on {len(tasks)} task(s)",
+                    message=MessageInfo(
+                        message=f"Running LightEval on {len(tasks)} task(s)",
+                        message_code="running_evaluation",
+                    ),
                     current_step="Executing benchmark",
                     total_steps=4,
                     completed_steps=2,
@@ -133,7 +144,10 @@ class LightEvalAdapter(FrameworkAdapter):
                     status=JobStatus.RUNNING,
                     phase=JobPhase.POST_PROCESSING,
                     progress=0.8,
-                    message="Processing LightEval results",
+                    message=MessageInfo(
+                        message="Processing LightEval results",
+                        message_code="post_processing",
+                    ),
                     current_step="Extracting metrics",
                     total_steps=4,
                     completed_steps=3,
@@ -148,7 +162,7 @@ class LightEvalAdapter(FrameworkAdapter):
 
             # Save detailed results
             output_files = self._save_detailed_results(
-                job_id=config.job_id,
+                job_id=config.id,
                 benchmark_id=config.benchmark_id,
                 model_name=config.model.name,
                 lighteval_results=lighteval_results,
@@ -166,7 +180,10 @@ class LightEvalAdapter(FrameworkAdapter):
                     status=JobStatus.RUNNING,
                     phase=JobPhase.PERSISTING_ARTIFACTS,
                     progress=0.9,
-                    message="Persisting LightEval artifacts to OCI registry",
+                    message=MessageInfo(
+                        message="Persisting LightEval artifacts to OCI registry",
+                        message_code="persisting_artifacts",
+                    ),
                     current_step="Creating OCI artifact",
                     total_steps=4,
                     completed_steps=4,
@@ -180,16 +197,16 @@ class LightEvalAdapter(FrameworkAdapter):
                         files=output_files,
                         base_path=Path("/tmp/lighteval_results"),
                         title=f"LightEval results for {config.benchmark_id}",
-                        description=f"Results from LightEval job {config.job_id}",
+                        description=f"Results from LightEval job {config.id}",
                         annotations={
-                            "job_id": config.job_id,
+                            "job_id": config.id,
                             "benchmark_id": config.benchmark_id,
                             "model_name": config.model.name,
                             "framework": "lighteval",
                             "overall_score": str(overall_score) if overall_score else "N/A",
                             "num_evaluated": str(num_evaluated),
                         },
-                        job_id=config.job_id,
+                        id=config.id,
                         benchmark_id=config.benchmark_id,
                         model_name=config.model.name,
                     )
@@ -201,7 +218,7 @@ class LightEvalAdapter(FrameworkAdapter):
 
             # Return results
             return JobResults(
-                job_id=config.job_id,
+                id=config.id,
                 benchmark_id=config.benchmark_id,
                 model_name=config.model.name,
                 results=evaluation_results,
@@ -223,10 +240,18 @@ class LightEvalAdapter(FrameworkAdapter):
 
         except Exception as e:
             logger.exception("LightEval evaluation failed")
+            error_msg = str(e)
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
-                    error_message=str(e),
+                    message=MessageInfo(
+                        message=error_msg,
+                        message_code="failed",
+                    ),
+                    error=ErrorInfo(
+                        message=error_msg,
+                        message_code="evaluation_error",
+                    ),
                     error_details={
                         "exception_type": type(e).__name__,
                         "benchmark_id": config.benchmark_id,
@@ -689,11 +714,12 @@ def main() -> None:
     Environment variables:
     - EVALHUB_MODE: "k8s" or "local" (default: local)
     - EVALHUB_JOB_SPEC_PATH: Override job spec path
-    - SERVICE_URL: Sidecar URL for status updates (e.g., http://localhost:8080)
     - REGISTRY_URL: OCI registry URL (e.g., ghcr.io)
     - REGISTRY_USERNAME: Registry username
     - REGISTRY_PASSWORD: Registry password/token
     - REGISTRY_INSECURE: Allow insecure HTTP (default: false)
+
+    Note: The service URL for callbacks comes from job_spec.callback_url (mounted via ConfigMap)
     """
     import sys
     from evalhub.adapter import DefaultCallbacks
@@ -706,16 +732,18 @@ def main() -> None:
     )
 
     try:
-        # Create adapter (automatically loads settings and JobSpec)
-        adapter = LightEvalAdapter()
-        logger.info(f"Loaded job {adapter.job_spec.job_id}")
+        # Create adapter with job spec path from environment or default
+        job_spec_path = os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")
+        adapter = LightEvalAdapter(job_spec_path=job_spec_path)
+        logger.info(f"Loaded job {adapter.job_spec.id}")
         logger.info(f"Benchmark: {adapter.job_spec.benchmark_id}")
         logger.info(f"Model: {adapter.job_spec.model.name}")
 
         # Create callbacks using adapter settings
         callbacks = DefaultCallbacks(
-            job_id=adapter.job_spec.job_id,
-            sidecar_url=str(adapter.settings.service_url) if adapter.settings.service_url else None,
+            job_id=adapter.job_spec.id,
+            benchmark_id=adapter.job_spec.benchmark_id,
+            sidecar_url=adapter.job_spec.callback_url,
             registry_url=adapter.settings.registry_url,
             registry_username=adapter.settings.registry_username,
             registry_password=adapter.settings.registry_password,
@@ -724,7 +752,7 @@ def main() -> None:
 
         # Run benchmark job
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
-        logger.info(f"Job completed successfully: {results.job_id}")
+        logger.info(f"Job completed successfully: {results.id}")
         logger.info(f"Overall score: {results.overall_score}")
         logger.info(f"Evaluated {results.num_examples_evaluated} examples")
 

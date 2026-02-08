@@ -116,7 +116,7 @@ Alternatively, for container testing with a custom job spec:
 # Create a test job spec
 cat > /tmp/job-spec.json <<EOF
 {
-  "job_id": "test-job-123",
+  "id": "test-job-123",
   "benchmark_id": "hellaswag",
   "model": {
     "name": "gpt2",
@@ -132,7 +132,8 @@ cat > /tmp/job-spec.json <<EOF
       "temperature": 0.0,
       "max_tokens": 100
     }
-  }
+  },
+  "callback_url": "http://localhost:8080"
 }
 EOF
 
@@ -151,7 +152,7 @@ docker run \
 
 ```json
 {
-  "job_id": "job-123",
+  "id": "job-123",
   "benchmark_id": "hellaswag",
   "model": {
     "name": "gpt2",
@@ -160,7 +161,8 @@ docker run \
   "benchmark_config": {
     "provider": "endpoint",
     "num_few_shot": 0
-  }
+  },
+  "callback_url": "http://localhost:8080"
 }
 ```
 
@@ -168,7 +170,7 @@ docker run \
 
 ```json
 {
-  "job_id": "job-123",
+  "id": "job-123",
   "benchmark_id": "commonsense_reasoning",
   "model": {
     "name": "gpt2",
@@ -178,7 +180,8 @@ docker run \
     "provider": "endpoint",
     "tasks": ["hellaswag", "winogrande", "piqa"],
     "num_few_shot": 5
-  }
+  },
+  "callback_url": "http://localhost:8080"
 }
 ```
 
@@ -186,7 +189,7 @@ docker run \
 
 ```json
 {
-  "job_id": "job-123",
+  "id": "job-123",
   "benchmark_id": "commonsense_reasoning",
   "model": {
     "name": "gpt2",
@@ -194,7 +197,8 @@ docker run \
   },
   "benchmark_config": {
     "provider": "endpoint"
-  }
+  },
+  "callback_url": "http://localhost:8080"
 }
 ```
 

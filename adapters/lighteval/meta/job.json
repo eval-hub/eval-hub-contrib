@@ -1,5 +1,5 @@
 {
-  "job_id": "lighteval-hellaswag-001",
+  "id": "lighteval-hellaswag-001",
   "benchmark_id": "boolq",
   "model": {
     "url": "http://127.0.0.1:8000/v1",
@@ -13,6 +13,7 @@
     "random_seed": 42,
     "split": "validation"
   },
+  "callback_url": "http://localhost:8080",
   "experiment_name": "qwen-boolq-baseline",
   "tags": {
     "framework": "lighteval",
