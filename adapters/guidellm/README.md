@@ -138,20 +138,29 @@ python main.py
 }
 ```
 
-## Configuration Options
+## Supported Request Payload Parameters
+
+The following parameters can be specified in the `benchmark_config` section or as top-level job parameters when submitting evaluation jobs.
 
 ### Core Parameters
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `profile` | Execution profile (sweep, throughput, concurrent, etc.) | `sweep` |
-| `rate` | Rate value (meaning varies by profile) | Profile-dependent |
+| `profile` | Execution profile (sweep, throughput, concurrent, constant, poisson, synchronous) | `sweep` |
+| `num_examples` | Limit evaluation to N requests (used as fallback for `max_requests`) | None |
+| `max_requests` | Maximum number of requests to send (overrides `num_examples` if specified) | None |
 | `max_seconds` | Maximum duration in seconds | None |
-| `max_requests` | Maximum number of requests | None |
 | `max_errors` | Error threshold before stopping | None |
-| `warmup` | Warmup period to exclude (percentage or absolute) | None |
-| `cooldown` | Cooldown period to exclude (percentage or absolute) | None |
+| `rate` | Rate value (meaning varies by profile) | Profile-dependent |
+| `warmup` | Warmup period to exclude (percentage or absolute, e.g., "10%" or "10") | None |
+| `cooldown` | Cooldown period to exclude (percentage or absolute, e.g., "10%" or "10") | None |
 | `detect_saturation` | Enable over-saturation detection | `false` |
+
+**Note on `num_examples` vs `max_requests`:**
+- `num_examples` is a common parameter across all EvalHub providers for limiting evaluations
+- For GuideLLM, if `max_requests` is not specified in `benchmark_config`, the adapter automatically uses `num_examples` as the limit
+- If both are specified, `max_requests` takes precedence
+- This provides a consistent interface while supporting provider-specific parameters
 
 ### Data Sources
 
@@ -168,6 +177,119 @@ python main.py
 | Parameter | Description | Options |
 |-----------|-------------|---------|
 | `request_type` | API endpoint type | `chat_completions`, `completions`, `audio_transcription`, `audio_translation` |
+
+## Example Payloads
+
+### Quick Performance Test with Limited Requests
+
+```json
+{
+  "model": {
+    "url": "http://vllm-server.evalhub.svc.cluster.local:8000",
+    "name": "tinyllama"
+  },
+  "benchmarks": [
+    {
+      "id": "sweep",
+      "provider_id": "guidellm",
+      "parameters": {
+        "profile": "sweep",
+        "num_examples": 100,
+        "max_seconds": 300,
+        "data": "prompt_tokens=256,output_tokens=128",
+        "request_type": "chat_completions",
+        "detect_saturation": true
+      }
+    }
+  ],
+  "timeout_minutes": 30,
+  "retry_attempts": 1
+}
+```
+
+### Throughput Test with Dataset Limiting
+
+```json
+{
+  "model": {
+    "url": "http://vllm-server.evalhub.svc.cluster.local:8000",
+    "name": "tinyllama"
+  },
+  "benchmarks": [
+    {
+      "id": "throughput",
+      "provider_id": "guidellm",
+      "parameters": {
+        "profile": "throughput",
+        "num_examples": 500,
+        "max_seconds": 600,
+        "data": "prompt_tokens=512,output_tokens=256",
+        "request_type": "chat_completions",
+        "detect_saturation": true,
+        "warmup": "10%",
+        "cooldown": "10%"
+      }
+    }
+  ],
+  "timeout_minutes": 60,
+  "retry_attempts": 1
+}
+```
+
+### Using max_requests (Provider-Specific)
+
+```json
+{
+  "model": {
+    "url": "http://vllm-server.evalhub.svc.cluster.local:8000",
+    "name": "tinyllama"
+  },
+  "benchmarks": [
+    {
+      "id": "concurrent",
+      "provider_id": "guidellm",
+      "parameters": {
+        "profile": "concurrent",
+        "rate": 10,
+        "max_requests": 200,
+        "data": "prompt_tokens=512,output_tokens=256",
+        "warmup": 20
+      }
+    }
+  ],
+  "timeout_minutes": 45,
+  "retry_attempts": 1
+}
+```
+
+### Using HuggingFace Dataset
+
+```json
+{
+  "model": {
+    "url": "http://vllm-server.evalhub.svc.cluster.local:8000",
+    "name": "tinyllama"
+  },
+  "benchmarks": [
+    {
+      "id": "throughput",
+      "provider_id": "guidellm",
+      "parameters": {
+        "profile": "throughput",
+        "num_examples": 100,
+        "max_seconds": 300,
+        "data": "hf:abisee/cnn_dailymail",
+        "data_args": {"name": "3.0.0"},
+        "data_column_mapper": {"text_column": "article"},
+        "data_samples": 100,
+        "request_type": "chat_completions"
+      }
+    }
+  ],
+  "timeout_minutes": 60,
+  "retry_attempts": 1
+}
+```
 
 ## Output Artifacts
 
