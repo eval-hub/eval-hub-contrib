@@ -59,9 +59,14 @@ class GuideLLMAdapter(FrameworkAdapter):
     - Multiple output formats (JSON, CSV, HTML, YAML)
     """
 
-    def __init__(self):
-        """Initialize the GuideLLM adapter."""
-        super().__init__()
+    def __init__(self, job_spec_path: Optional[str] = None):
+        """Initialize the GuideLLM adapter.
+
+        Args:
+            job_spec_path: Optional path to job specification file.
+                          If not provided, uses EVALHUB_JOB_SPEC_PATH env var or default.
+        """
+        super().__init__(job_spec_path=job_spec_path)
         self.results_dir: Optional[Path] = None
         logger.info("GuideLLM adapter initialized")
 
