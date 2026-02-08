@@ -345,8 +345,20 @@ class GuideLLMAdapter(FrameworkAdapter):
             cmd.extend(["--model", model.name])
 
         # Processor for synthetic data
-        if "processor" in config:
-            cmd.extend(["--processor", config["processor"]])
+        # For synthetic data (prompt_tokens=X,output_tokens=Y), GuideLLM needs a HuggingFace tokenizer.
+        # The processor can be specified in benchmark_config, otherwise use a safe default.
+        processor = config.get("processor")
+        if processor is None and "prompt_tokens=" in data and "output_tokens=" in data:
+            # Default to gpt2 tokenizer for synthetic data generation (widely available, small)
+            processor = "gpt2"
+            logger.info(
+                f"No processor specified for synthetic data. Using default '{processor}'. "
+                f"Specify a HuggingFace model in benchmark_config.processor for custom tokenization "
+                f"(e.g., 'google/flan-t5-small' or 'meta-llama/Llama-3.1-8B-Instruct')"
+            )
+
+        if processor:
+            cmd.extend(["--processor", processor])
 
         # Output formats (always generate all for comprehensive reporting)
         # Note: GuideLLM uses --outputs, not --output-format

@@ -170,7 +170,13 @@ The following parameters can be specified in the `benchmark_config` section or a
 | `data_args` | Arguments for dataset loading | `{"name": "3.0.0"}` |
 | `data_column_mapper` | Column mapping for datasets | `{"text_column": "article"}` |
 | `data_samples` | Maximum number of samples to use | `100` |
-| `processor` | Tokenizer/processor for synthetic data | `"gpt2"` |
+| `processor` | HuggingFace tokenizer for synthetic data generation (required for `prompt_tokens=X,output_tokens=Y` format) | `"google/flan-t5-small"`, `"gpt2"` |
+
+**Note on `processor`:**
+- Required when using synthetic data format (`data: "prompt_tokens=X,output_tokens=Y"`)
+- Must be a valid HuggingFace model ID (e.g., `"google/flan-t5-small"`, `"meta-llama/Llama-3.1-8B-Instruct"`)
+- Defaults to `"gpt2"` if not specified (widely available, small)
+- Not needed when using actual datasets (HuggingFace datasets, files, etc.)
 
 ### Request Configuration
 
@@ -198,7 +204,8 @@ The following parameters can be specified in the `benchmark_config` section or a
         "max_seconds": 300,
         "data": "prompt_tokens=256,output_tokens=128",
         "request_type": "chat_completions",
-        "detect_saturation": true
+        "detect_saturation": true,
+        "processor": "google/flan-t5-small"
       }
     }
   ],
@@ -227,7 +234,8 @@ The following parameters can be specified in the `benchmark_config` section or a
         "request_type": "chat_completions",
         "detect_saturation": true,
         "warmup": "10%",
-        "cooldown": "10%"
+        "cooldown": "10%",
+        "processor": "google/flan-t5-small"
       }
     }
   ],
@@ -253,7 +261,8 @@ The following parameters can be specified in the `benchmark_config` section or a
         "rate": 10,
         "max_requests": 200,
         "data": "prompt_tokens=512,output_tokens=256",
-        "warmup": 20
+        "warmup": 20,
+        "processor": "google/flan-t5-small"
       }
     }
   ],
