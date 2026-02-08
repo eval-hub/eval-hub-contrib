@@ -15,10 +15,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 
 # Create writable cache directories with proper permissions
+# Make site-packages writable for lighteval to cache task data
 RUN mkdir -p /tmp/.litellm_cache && \
     chmod -R 777 /tmp && \
     chown -R 1001:0 /app && \
-    chmod -R g+rwX /app
+    chmod -R g+rwX /app && \
+    chown -R 1001:0 /opt/app-root && \
+    chmod -R g+rwX /opt/app-root
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
