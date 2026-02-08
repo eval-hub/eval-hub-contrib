@@ -79,7 +79,7 @@ python main.py
 
 ```json
 {
-  "job_id": "job-123",
+  "id": "job-123",
   "benchmark_id": "performance_sweep",
   "model": {
     "name": "Qwen/Qwen2.5-1.5B-Instruct",
@@ -90,7 +90,8 @@ python main.py
     "max_seconds": 30,
     "data": "prompt_tokens=256,output_tokens=128",
     "detect_saturation": true
-  }
+  },
+  "callback_url": "http://localhost:8080"
 }
 ```
 
@@ -98,7 +99,7 @@ python main.py
 
 ```json
 {
-  "job_id": "job-123",
+  "id": "job-123",
   "benchmark_id": "max_throughput",
   "model": {
     "name": "gpt-3.5-turbo",
@@ -111,7 +112,8 @@ python main.py
     "data_args": {"name": "3.0.0"},
     "data_column_mapper": {"text_column": "article"},
     "data_samples": 100
-  }
+  },
+  "callback_url": "http://localhost:8080"
 }
 ```
 
@@ -119,7 +121,7 @@ python main.py
 
 ```json
 {
-  "job_id": "job-123",
+  "id": "job-123",
   "benchmark_id": "concurrent_users",
   "model": {
     "name": "llama-2-7b",
@@ -131,7 +133,8 @@ python main.py
     "max_requests": 100,
     "data": "prompt_tokens=512,output_tokens=256",
     "warmup": "10%"
-  }
+  },
+  "callback_url": "http://localhost:8080"
 }
 ```
 

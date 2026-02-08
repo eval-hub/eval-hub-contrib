@@ -10,7 +10,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 
+# Set environment variables
 ENV PYTHONUNBUFFERED=1
+ENV EVALHUB_MODE=k8s
 
 # Run as non-root user
 USER 1001

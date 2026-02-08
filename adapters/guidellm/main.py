@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from evalhub.adapter import (
+    ErrorInfo,
     EvaluationResult,
     FrameworkAdapter,
     JobCallbacks,
@@ -34,6 +35,7 @@ from evalhub.adapter import (
     JobSpec,
     JobStatus,
     JobStatusUpdate,
+    MessageInfo,
     OCIArtifactSpec,
 )
 
@@ -83,14 +85,17 @@ class GuideLLMAdapter(FrameworkAdapter):
             JobResults containing performance metrics and artifacts
         """
         start_time = time.time()
-        logger.info(f"Starting GuideLLM benchmark job: {config.job_id}")
+        logger.info(f"Starting GuideLLM benchmark job: {config.id}")
 
         callbacks.report_status(
             JobStatusUpdate(
                 status=JobStatus.RUNNING,
                 phase=JobPhase.INITIALIZING,
                 progress=0.0,
-                message="Initializing GuideLLM benchmark",
+                message=MessageInfo(
+                    message="Initializing GuideLLM benchmark",
+                    message_code="initializing",
+                ),
             )
         )
 
@@ -109,7 +114,10 @@ class GuideLLMAdapter(FrameworkAdapter):
                     status=JobStatus.RUNNING,
                     phase=JobPhase.RUNNING_EVALUATION,
                     progress=0.3,
-                    message="Executing performance benchmark",
+                    message=MessageInfo(
+                        message="Executing performance benchmark",
+                        message_code="running_evaluation",
+                    ),
                 )
             )
             self._run_guidellm(cmd)
@@ -120,7 +128,10 @@ class GuideLLMAdapter(FrameworkAdapter):
                     status=JobStatus.RUNNING,
                     phase=JobPhase.POST_PROCESSING,
                     progress=0.8,
-                    message="Processing benchmark results",
+                    message=MessageInfo(
+                        message="Processing benchmark results",
+                        message_code="post_processing",
+                    ),
                 )
             )
             results_data = self._parse_results(config)
@@ -184,7 +195,7 @@ class GuideLLMAdapter(FrameworkAdapter):
 
             # Create job results
             results = JobResults(
-                job_id=config.job_id,
+                id=config.id,
                 benchmark_id=config.benchmark_id,
                 model_name=config.model.name,
                 results=evaluation_results,
@@ -204,13 +215,16 @@ class GuideLLMAdapter(FrameworkAdapter):
             if oci_artifact:
                 results.oci_artifact = oci_artifact
 
-            logger.info(f"Benchmark completed successfully: {config.job_id}")
+            logger.info(f"Benchmark completed successfully: {config.id}")
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.COMPLETED,
                     phase=JobPhase.COMPLETED,
                     progress=1.0,
-                    message="Benchmark finished successfully",
+                    message=MessageInfo(
+                        message="Benchmark finished successfully",
+                        message_code="completed",
+                    ),
                 )
             )
             return results
@@ -221,7 +235,14 @@ class GuideLLMAdapter(FrameworkAdapter):
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
-                    error_message=error_msg,
+                    message=MessageInfo(
+                        message=error_msg,
+                        message_code="failed",
+                    ),
+                    error=ErrorInfo(
+                        message=error_msg,
+                        message_code="benchmark_error",
+                    ),
                     error_details={
                         "exception_type": type(e).__name__,
                         "benchmark_id": config.benchmark_id,
@@ -483,15 +504,15 @@ class GuideLLMAdapter(FrameworkAdapter):
                 files=output_files,
                 base_path=self.results_dir,
                 title=f"GuideLLM results for {config.benchmark_id}",
-                description=f"Performance benchmark results from GuideLLM job {config.job_id}",
+                description=f"Performance benchmark results from GuideLLM job {config.id}",
                 annotations={
-                    "job_id": config.job_id,
+                    "job_id": config.id,
                     "benchmark_id": config.benchmark_id,
                     "model_name": config.model.name,
                     "framework": "guidellm",
                     "profile": config.benchmark_config.get("profile", "sweep"),
                 },
-                job_id=config.job_id,
+                id=config.id,
                 benchmark_id=config.benchmark_id,
                 model_name=config.model.name,
             )
@@ -516,11 +537,12 @@ def main() -> None:
     Environment variables:
     - EVALHUB_MODE: "k8s" or "local" (default: local)
     - EVALHUB_JOB_SPEC_PATH: Override job spec path
-    - SERVICE_URL: Sidecar URL for status updates (e.g., http://localhost:8080)
     - REGISTRY_URL: OCI registry URL (e.g., ghcr.io)
     - REGISTRY_USERNAME: Registry username
     - REGISTRY_PASSWORD: Registry password/token
     - REGISTRY_INSECURE: Allow insecure HTTP (default: false)
+
+    Note: The service URL for callbacks comes from job_spec.callback_url (mounted via ConfigMap)
     """
     from evalhub.adapter import DefaultCallbacks
 
@@ -532,16 +554,18 @@ def main() -> None:
     )
 
     try:
-        # Create adapter (automatically loads settings and JobSpec)
-        adapter = GuideLLMAdapter()
-        logger.info(f"Loaded job {adapter.job_spec.job_id}")
+        # Create adapter with job spec path from environment or default
+        job_spec_path = os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")
+        adapter = GuideLLMAdapter(job_spec_path=job_spec_path)
+        logger.info(f"Loaded job {adapter.job_spec.id}")
         logger.info(f"Benchmark: {adapter.job_spec.benchmark_id}")
         logger.info(f"Model: {adapter.job_spec.model.name}")
 
         # Create callbacks using adapter settings
         callbacks = DefaultCallbacks(
-            job_id=adapter.job_spec.job_id,
-            sidecar_url=str(adapter.settings.service_url) if adapter.settings.service_url else None,
+            job_id=adapter.job_spec.id,
+            benchmark_id=adapter.job_spec.benchmark_id,
+            sidecar_url=adapter.job_spec.callback_url,
             registry_url=adapter.settings.registry_url,
             registry_username=adapter.settings.registry_username,
             registry_password=adapter.settings.registry_password,
@@ -554,7 +578,7 @@ def main() -> None:
         # Report results to service
         callbacks.report_results(results)
 
-        logger.info(f"Job completed successfully: {results.job_id}")
+        logger.info(f"Job completed successfully: {results.id}")
         if results.overall_score:
             logger.info(f"Overall score: {results.overall_score:.2f} requests/sec")
         logger.info(f"Evaluated {results.num_examples_evaluated} requests")
