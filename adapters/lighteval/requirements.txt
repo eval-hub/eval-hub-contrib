@@ -1,14 +1,14 @@
 # LightEval framework adapter requirements
 
-# EvalHub SDK (framework adapter)
-git+https://github.com/eval-hub/eval-hub-sdk.git@main
-
 # LightEval framework
-lighteval>=0.4.0
+lighteval==0.13.0
 
 # LiteLLM for endpoint support
-litellm[caching]>=1.66.0
+litellm[caching]==1.80.17
 
 # Required dependencies
-requests>=2.31.0
-pydantic>=2.0.0
+requests==2.32.5
+pydantic==2.12.5
+
+# EvalHub SDK (framework adapter with adapter extra only)
+eval-hub-sdk[adapter] @ git+https://github.com/eval-hub/eval-hub-sdk.git@main
