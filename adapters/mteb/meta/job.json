@@ -1,0 +1,25 @@
+{
+  "id": "mteb-sts-example-001",
+  "benchmark_id": "mteb_sts",
+  "model": {
+    "url": "local://sentence-transformers",
+    "name": "sentence-transformers/all-MiniLM-L6-v2"
+  },
+  "num_examples": null,
+  "benchmark_config": {
+    "tasks": ["STS12"],
+    "languages": ["eng"],
+    "batch_size": 32,
+    "verbosity": 2,
+    "co2_tracker": false,
+    "overwrite_results": true
+  },
+  "callback_url": "http://localhost:8080",
+  "experiment_name": "mteb-sts-baseline",
+  "tags": {
+    "framework": "mteb",
+    "model_type": "sentence-transformer",
+    "evaluation_type": "semantic_similarity"
+  },
+  "timeout_seconds": 3600
+}

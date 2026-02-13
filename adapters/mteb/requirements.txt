@@ -1,0 +1,19 @@
+# MTEB adapter requirements for eval-hub
+# See: https://github.com/embeddings-benchmark/mteb
+
+# MTEB framework (includes CLI)
+mteb>=1.14.0
+
+# Sentence Transformers (default model backend for embeddings)
+sentence-transformers>=2.2.0
+
+# EvalHub SDK (framework adapter support)
+eval-hub-sdk[adapter] @ git+https://github.com/eval-hub/eval-hub-sdk.git@main
+
+# Required dependencies
+requests>=2.31.0
+pydantic>=2.0.0
+numpy>=1.24.0
+
+# Note: For GPU support, install PyTorch separately:
+# pip install torch>=2.0.0 --index-url https://download.pytorch.org/whl/cu118
