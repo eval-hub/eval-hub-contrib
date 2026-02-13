@@ -1,0 +1,51 @@
+# Exclude from container builds
+
+# Example configuration (for local testing only)
+meta/job.json
+meta/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+tests/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Temporary files
+/tmp/
+*.tmp
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Documentation (included separately)
+README.md
+
+# HuggingFace cache
+.cache/
