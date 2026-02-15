@@ -1,7 +1,7 @@
 # GuideLLM framework adapter requirements
 
 # EvalHub SDK (framework adapter with adapter extra only)
-eval-hub-sdk[adapter] @ git+https://github.com/eval-hub/eval-hub-sdk.git@main
+eval-hub-sdk[adapter]==0.1.0a7
 
 # GuideLLM framework
 guidellm[recommended]==0.5.3

@@ -221,17 +221,7 @@ class GuideLLMAdapter(FrameworkAdapter):
                 results.oci_artifact = oci_artifact
 
             logger.info(f"Benchmark completed successfully: {config.id}")
-            callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.COMPLETED,
-                    phase=JobPhase.COMPLETED,
-                    progress=1.0,
-                    message=MessageInfo(
-                        message="Benchmark finished successfully",
-                        message_code="completed",
-                    ),
-                )
-            )
+            # Note: Do NOT send COMPLETED status here - report_results() will do it with metrics
             return results
 
         except Exception as e:
@@ -588,6 +578,7 @@ def main() -> None:
         callbacks = DefaultCallbacks(
             job_id=adapter.job_spec.id,
             benchmark_id=adapter.job_spec.benchmark_id,
+            provider_id=adapter.job_spec.provider_id,
             sidecar_url=adapter.job_spec.callback_url,
             registry_url=adapter.settings.registry_url,
             registry_username=adapter.settings.registry_username,
