@@ -748,6 +748,7 @@ def main() -> None:
         callbacks = DefaultCallbacks(
             job_id=adapter.job_spec.id,
             benchmark_id=adapter.job_spec.benchmark_id,
+            provider_id=adapter.job_spec.provider_id,
             sidecar_url=adapter.job_spec.callback_url,
             registry_url=adapter.settings.registry_url,
             registry_username=adapter.settings.registry_username,
