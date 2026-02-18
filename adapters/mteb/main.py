@@ -555,8 +555,8 @@ class MTEBAdapter(FrameworkAdapter):
 
         # Device override (optional)
         device = benchmark_config.get("device")
-        if device:
-            cmd.extend(["--device", device])
+        if device is not None and str(device).strip():
+            cmd.extend(["--device", str(device)])
 
         # CO2 tracker (optional)
         if benchmark_config.get("co2_tracker", False):
@@ -1028,6 +1028,7 @@ def main() -> None:
         # Create callbacks using adapter settings
         callbacks = DefaultCallbacks(
             job_id=adapter.job_spec.id,
+            provider_id=getattr(adapter.job_spec, "provider_id", "mteb"),
             benchmark_id=adapter.job_spec.benchmark_id,
             sidecar_url=adapter.job_spec.callback_url,
             registry_url=adapter.settings.registry_url,
