@@ -27,6 +27,9 @@ make images
 make push-lighteval REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-guidellm REGISTRY=quay.io/your-org VERSION=v1.0.0
 ```
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on adding adapters.
 
 ## License
 
