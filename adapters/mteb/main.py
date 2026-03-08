@@ -1030,6 +1030,7 @@ def main() -> None:
             job_id=adapter.job_spec.id,
             provider_id=getattr(adapter.job_spec, "provider_id", "mteb"),
             benchmark_id=adapter.job_spec.benchmark_id,
+            benchmark_index=adapter.job_spec.benchmark_index,
             sidecar_url=adapter.job_spec.callback_url,
             registry_url=adapter.settings.registry_url,
             registry_username=adapter.settings.registry_username,
