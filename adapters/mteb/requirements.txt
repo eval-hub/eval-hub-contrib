@@ -8,7 +8,7 @@ mteb>=1.14.0
 sentence-transformers>=2.2.0
 
 # EvalHub SDK (framework adapter support)
-eval-hub-sdk[adapter] @ git+https://github.com/eval-hub/eval-hub-sdk.git@main
+eval-hub-sdk[adapter]==0.1.1
 
 # Required dependencies
 requests>=2.31.0
