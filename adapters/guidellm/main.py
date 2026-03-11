@@ -210,8 +210,8 @@ class GuideLLMAdapter(FrameworkAdapter):
                 completed_at=datetime.now(UTC),
                 evaluation_metadata={
                     "framework": "guidellm",
-                    "profile": config.benchmark_config.get("profile", "sweep"),
-                    "request_type": config.benchmark_config.get("request_type", "chat_completions"),
+                    "profile": config.parameters.get("profile", "sweep"),
+                    "request_type": config.parameters.get("request_type", "chat_completions"),
                 },
             )
 
@@ -256,7 +256,7 @@ class GuideLLMAdapter(FrameworkAdapter):
         Returns:
             List of command arguments for subprocess execution
         """
-        config = job_spec.benchmark_config
+        config = job_spec.parameters
         model = job_spec.model
 
         # Base command
@@ -523,7 +523,7 @@ class GuideLLMAdapter(FrameworkAdapter):
                     "benchmark_id": config.benchmark_id,
                     "model_name": config.model.name,
                     "framework": "guidellm",
-                    "profile": config.benchmark_config.get("profile", "sweep"),
+                    "profile": config.parameters.get("profile", "sweep"),
                 },
                 id=config.id,
                 benchmark_id=config.benchmark_id,
@@ -575,17 +575,7 @@ def main() -> None:
         logger.info(f"Model: {adapter.job_spec.model.name}")
 
         # Create callbacks using adapter settings
-        callbacks = DefaultCallbacks(
-            job_id=adapter.job_spec.id,
-            benchmark_id=adapter.job_spec.benchmark_id,
-            benchmark_index=adapter.job_spec.benchmark_index,
-            provider_id=adapter.job_spec.provider_id,
-            sidecar_url=adapter.job_spec.callback_url,
-            registry_url=adapter.settings.registry_url,
-            registry_username=adapter.settings.registry_username,
-            registry_password=adapter.settings.registry_password,
-            insecure=adapter.settings.registry_insecure,
-        )
+        callbacks = DefaultCallbacks.from_adapter(adapter)
 
         # Run benchmark job
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
