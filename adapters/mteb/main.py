@@ -190,7 +190,7 @@ class MTEBAdapter(FrameworkAdapter):
             )
 
             self._validate_config(config)
-            tasks = self._resolve_tasks(config.benchmark_id, config.benchmark_config)
+            tasks = self._resolve_tasks(config.benchmark_id, config.parameters)
             output_dir = Path(tempfile.mkdtemp(prefix="mteb_output_"))
 
             logger.info(
@@ -233,7 +233,7 @@ class MTEBAdapter(FrameworkAdapter):
                 model_name=config.model.name,
                 tasks=tasks,
                 output_dir=output_dir,
-                benchmark_config=config.benchmark_config,
+                benchmark_config=config.parameters,
             )
 
             timeout = getattr(config, "timeout_seconds", None) or 7200  # Default 2 hours
@@ -328,7 +328,7 @@ class MTEBAdapter(FrameworkAdapter):
                     "framework": "mteb",
                     "framework_version": self._get_mteb_version(),
                     "tasks": tasks,
-                    "benchmark_config": config.benchmark_config,
+                    "benchmark_config": config.parameters,
                     "output_dir": str(output_dir),
                 },
                 oci_artifact=oci_artifact,
@@ -394,7 +394,7 @@ class MTEBAdapter(FrameworkAdapter):
             )
 
         # Validate task_types if provided
-        benchmark_config = config.benchmark_config or {}
+        benchmark_config = config.parameters or {}
         task_types = benchmark_config.get("task_types")
         if task_types:
             for task_type in task_types:
@@ -1026,17 +1026,7 @@ def main() -> None:
         logger.info(f"Model: {adapter.job_spec.model.name}")
 
         # Create callbacks using adapter settings
-        callbacks = DefaultCallbacks(
-            job_id=adapter.job_spec.id,
-            provider_id=getattr(adapter.job_spec, "provider_id", "mteb"),
-            benchmark_id=adapter.job_spec.benchmark_id,
-            benchmark_index=adapter.job_spec.benchmark_index,
-            sidecar_url=adapter.job_spec.callback_url,
-            registry_url=adapter.settings.registry_url,
-            registry_username=adapter.settings.registry_username,
-            registry_password=adapter.settings.registry_password,
-            insecure=adapter.settings.registry_insecure,
-        )
+        callbacks = DefaultCallbacks.from_adapter(adapter)
 
         # Run benchmark job
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)

@@ -92,7 +92,7 @@ class LightEvalAdapter(FrameworkAdapter):
             )
 
             self._validate_config(config)
-            tasks = self._parse_benchmark_tasks(config.benchmark_id, config.benchmark_config)
+            tasks = self._parse_benchmark_tasks(config.benchmark_id, config.parameters)
             output_dir = Path(tempfile.mkdtemp(prefix="lighteval_"))
             logger.info(f"Configuration validated. Tasks: {tasks}, Output dir: {output_dir}")
 
@@ -132,10 +132,10 @@ class LightEvalAdapter(FrameworkAdapter):
                 model_config=config.model,
                 tasks=tasks,
                 output_dir=output_dir,
-                num_fewshot=config.benchmark_config.get("num_few_shot", 0),
+                num_fewshot=config.parameters.get("num_few_shot", 0),
                 limit=config.num_examples,
-                batch_size=config.benchmark_config.get("batch_size", 1),
-                benchmark_config=config.benchmark_config,
+                batch_size=config.parameters.get("batch_size", 1),
+                benchmark_config=config.parameters,
             )
 
             # Phase 4: Post-processing
@@ -229,11 +229,11 @@ class LightEvalAdapter(FrameworkAdapter):
                 evaluation_metadata={
                     "framework": "lighteval",
                     "framework_version": self._get_lighteval_version(),
-                    "num_few_shot": config.benchmark_config.get("num_few_shot", 0),
-                    "random_seed": config.benchmark_config.get("random_seed"),
-                    "benchmark_config": config.benchmark_config,
+                    "num_few_shot": config.parameters.get("num_few_shot", 0),
+                    "random_seed": config.parameters.get("random_seed"),
+                    "benchmark_config": config.parameters,
                     "tasks": tasks,
-                    "model_provider": config.benchmark_config.get("provider", "endpoint"),
+                    "model_provider": config.parameters.get("provider", "endpoint"),
                 },
                 oci_artifact=oci_artifact,
             )
@@ -288,7 +288,7 @@ class LightEvalAdapter(FrameworkAdapter):
             raise ValueError("model.name is required")
 
         # Validate model provider (from benchmark_config)
-        provider = config.benchmark_config.get("provider", "endpoint")
+        provider = config.parameters.get("provider", "endpoint")
         valid_providers = ["transformers", "vllm", "openai", "anthropic", "endpoint", "litellm"]
         if provider not in valid_providers:
             logger.warning(
@@ -745,17 +745,7 @@ def main() -> None:
         logger.info(f"Model: {adapter.job_spec.model.name}")
 
         # Create callbacks using adapter settings
-        callbacks = DefaultCallbacks(
-            job_id=adapter.job_spec.id,
-            benchmark_id=adapter.job_spec.benchmark_id,
-            benchmark_index=adapter.job_spec.benchmark_index,
-            provider_id=adapter.job_spec.provider_id,
-            sidecar_url=adapter.job_spec.callback_url,
-            registry_url=adapter.settings.registry_url,
-            registry_username=adapter.settings.registry_username,
-            registry_password=adapter.settings.registry_password,
-            insecure=adapter.settings.registry_insecure,
-        )
+        callbacks = DefaultCallbacks.from_adapter(adapter)
 
         # Run benchmark job
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
