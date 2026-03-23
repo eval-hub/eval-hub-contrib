@@ -10,6 +10,7 @@ VERSION ?= latest
 IMAGE_LIGHTEVAL = $(REGISTRY)/community-lighteval:$(VERSION)
 IMAGE_GUIDELLM = $(REGISTRY)/community-guidellm:$(VERSION)
 IMAGE_MTEB = $(REGISTRY)/community-mteb:$(VERSION)
+IMAGE_AGENTDOJO = $(REGISTRY)/community-agentdojo:$(VERSION)
 
 # Default target
 .PHONY: help
@@ -21,18 +22,21 @@ help:
 	@echo "  make image-lighteval    - Build LightEval adapter image"
 	@echo "  make image-guidellm     - Build GuideLLM adapter image"
 	@echo "  make image-mteb         - Build MTEB adapter image"
+	@echo "  make image-agentdojo    - Build AgentDojo adapter image"
 	@echo "  make images             - Build all adapter images"
 	@echo ""
 	@echo "Image Push:"
 	@echo "  make push-lighteval     - Push LightEval adapter image"
 	@echo "  make push-guidellm      - Push GuideLLM adapter image"
 	@echo "  make push-mteb          - Push MTEB adapter image"
+	@echo "  make push-agentdojo     - Push AgentDojo adapter image"
 	@echo "  make push-images        - Push all adapter images"
 	@echo ""
 	@echo "Clean:"
 	@echo "  make clean-lighteval    - Remove LightEval adapter image"
 	@echo "  make clean-guidellm     - Remove GuideLLM adapter image"
 	@echo "  make clean-mteb         - Remove MTEB adapter image"
+	@echo "  make clean-agentdojo    - Remove AgentDojo adapter image"
 	@echo "  make clean-images       - Remove all adapter images"
 	@echo ""
 	@echo "Variables:"
@@ -65,8 +69,15 @@ image-mteb:
 	$(BUILD_TOOL) build -t $(IMAGE_MTEB) -f Containerfile .
 	@echo "✅ Built: $(IMAGE_MTEB)"
 
+.PHONY: image-agentdojo
+image-agentdojo:
+	@echo "Building AgentDojo adapter image..."
+	cd adapters/agentdojo && \
+	$(BUILD_TOOL) build -t $(IMAGE_AGENTDOJO) -f Containerfile .
+	@echo "Built: $(IMAGE_AGENTDOJO)"
+
 .PHONY: images
-images: image-lighteval image-guidellm image-mteb
+images: image-lighteval image-guidellm image-mteb image-agentdojo
 	@echo "✅ All adapter images built"
 
 # Push targets
@@ -88,8 +99,14 @@ push-mteb:
 	$(BUILD_TOOL) push $(IMAGE_MTEB)
 	@echo "✅ Pushed: $(IMAGE_MTEB)"
 
+.PHONY: push-agentdojo
+push-agentdojo:
+	@echo "Pushing AgentDojo adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_AGENTDOJO)
+	@echo "Pushed: $(IMAGE_AGENTDOJO)"
+
 .PHONY: push-images
-push-images: push-lighteval push-guidellm push-mteb
+push-images: push-lighteval push-guidellm push-mteb push-agentdojo
 	@echo "✅ All adapter images pushed"
 
 # Clean targets
@@ -111,8 +128,14 @@ clean-mteb:
 	$(BUILD_TOOL) rmi $(IMAGE_MTEB) 2>/dev/null || true
 	@echo "✅ Removed: $(IMAGE_MTEB)"
 
+.PHONY: clean-agentdojo
+clean-agentdojo:
+	@echo "Removing AgentDojo adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_AGENTDOJO) 2>/dev/null || true
+	@echo "Removed: $(IMAGE_AGENTDOJO)"
+
 .PHONY: clean-images
-clean-images: clean-lighteval clean-guidellm clean-mteb
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-agentdojo
 	@echo "✅ All adapter images removed"
 
 # Development targets
@@ -128,6 +151,10 @@ build-and-push-guidellm: image-guidellm push-guidellm
 build-and-push-mteb: image-mteb push-mteb
 	@echo "✅ MTEB adapter built and pushed"
 
+.PHONY: build-and-push-agentdojo
+build-and-push-agentdojo: image-agentdojo push-agentdojo
+	@echo "AgentDojo adapter built and pushed"
+
 .PHONY: build-and-push-all
 build-and-push-all: images push-images
-	@echo "✅ All adapters built and pushed"
+	@echo "All adapters built and pushed"

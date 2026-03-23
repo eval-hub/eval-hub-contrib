@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: evalhub-provider-agentdojo
+  namespace: eval-hub
+  labels:
+    trustyai.opendatahub.io/evalhub-provider-type: system
+    trustyai.opendatahub.io/evalhub-provider-name: agentdojo
+data:
+  agentdojo.yaml: |
+    id: agentdojo
+    name: AgentDojo
+    description: Dynamic evaluation of prompt injection attacks and defenses for LLM agents
+    type: builtin
+    runtime:
+      k8s:
+        image: image-registry.openshift-image-registry.svc:5000/eval-hub/agentdojo-adapter:latest
+        entrypoint:
+        - python
+        - main.py
+        cpu_request: 100m
+        memory_request: 256Mi
+        cpu_limit: 1000m
+        memory_limit: 2Gi
+      local: null
+    benchmarks:
+    - id: workspace
+      name: Workspace Suite
+      description: Office productivity tasks (email, calendar, cloud drive)
+      category: prompt_injection
+      metrics:
+      - utility
+      - security
+      tags:
+      - agent
+      - prompt-injection
+      - workspace
+    - id: slack
+      name: Slack Suite
+      description: Slack-like messaging tasks
+      category: prompt_injection
+      metrics:
+      - utility
+      - security
+      tags:
+      - agent
+      - prompt-injection
+      - slack
+    - id: banking
+      name: Banking Suite
+      description: Financial transaction tasks
+      category: prompt_injection
+      metrics:
+      - utility
+      - security
+      tags:
+      - agent
+      - prompt-injection
+      - banking
+    - id: travel
+      name: Travel Suite
+      description: Travel booking and planning tasks
+      category: prompt_injection
+      metrics:
+      - utility
+      - security
+      tags:
+      - agent
+      - prompt-injection
+      - travel
+    - id: agentdojo
+      name: All Suites
+      description: Run all AgentDojo suites (workspace, slack, banking, travel)
+      category: prompt_injection
+      metrics:
+      - utility
+      - security
+      tags:
+      - agent
+      - prompt-injection
+      - full
+    parameters:
+    - name: model_id
+      type: string
+      default: null
+      description: Model ID for openai-compatible endpoints
+    - name: benchmark_version
+      type: string
+      default: v1.2.2
+      description: AgentDojo benchmark version
+    - name: suites
+      type: array
+      default: null
+      description: Specific suites to run (overrides benchmark_id)
+    - name: user_tasks
+      type: array
+      default: null
+      description: Specific user tasks to run
+    - name: injection_tasks
+      type: array
+      default: null
+      description: Specific injection tasks to run
+    - name: attack
+      type: string
+      default: null
+      description: Attack to use (e.g. important_instructions, tool_knowledge)
+    - name: defense
+      type: string
+      default: null
+      description: Defense to use (e.g. tool_filter, transformers_pi_detector)

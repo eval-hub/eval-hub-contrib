@@ -1,0 +1,13 @@
+[project]
+name = "evalhub-agentdojo-adapter"
+version = "0.1.0"
+description = "Eval-hub adapter for AgentDojo prompt injection benchmarks"
+requires-python = ">= 3.11"
+dependencies = [
+    "eval-hub-sdk[adapter]==0.1.2",
+    "agentdojo",
+    "requests>=2.32.5",
+]
+
+[tool.uv.sources]
+agentdojo = { path = "../../../agentdojo", editable = true }

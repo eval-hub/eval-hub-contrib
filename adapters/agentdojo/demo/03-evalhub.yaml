@@ -1,0 +1,18 @@
+apiVersion: trustyai.opendatahub.io/v1alpha1
+kind: EvalHub
+metadata:
+  name: evalhub
+  namespace: eval-hub
+spec:
+  replicas: 1
+  database:
+    type: sqlite
+  providers:
+    - garak
+    - guidellm
+    - lighteval
+    - lm-evaluation-harness
+    - agentdojo
+  env:
+    - name: LOG_LEVEL
+      value: "INFO"

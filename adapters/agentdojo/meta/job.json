@@ -1,0 +1,23 @@
+{
+  "id": "agentdojo-workspace-test-001",
+  "provider_id": "agentdojo",
+  "benchmark_id": "workspace",
+  "benchmark_index": 0,
+  "model": {
+    "url": "http://127.0.0.1:8000/v1",
+    "name": "openai-compatible"
+  },
+  "parameters": {
+    "model_id": "your-model-id",
+    "benchmark_version": "v1.2.2",
+    "suites": ["workspace"],
+    "user_tasks": ["user_task_0"]
+  },
+  "callback_url": "http://localhost:8080",
+  "num_examples": null,
+  "experiment_name": "agentdojo-workspace-test",
+  "tags": {
+    "framework": "agentdojo",
+    "evaluation_type": "utility_only"
+  }
+}
