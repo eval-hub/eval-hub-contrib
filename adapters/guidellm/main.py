@@ -202,6 +202,7 @@ class GuideLLMAdapter(FrameworkAdapter):
             results = JobResults(
                 id=config.id,
                 benchmark_id=config.benchmark_id,
+                benchmark_index=config.benchmark_index,
                 model_name=config.model.name,
                 results=evaluation_results,
                 overall_score=overall_score,
@@ -510,29 +511,30 @@ class GuideLLMAdapter(FrameworkAdapter):
             logger.warning("No output files found in results directory")
             return None
 
+        oci_exports = config.exports.oci if config.exports else None
+        if oci_exports is None:
+            logger.info("No OCI exports configured; skipping artifact persistence")
+            return None
+
         # Create OCI artifact with all files
         logger.info(f"Creating OCI artifact with {len(output_files)} files")
+        coords = oci_exports.coordinates.model_copy(deep=True)
+        coords.annotations.update(
+            {
+                "org.opencontainers.image.created": datetime.now(UTC).isoformat(),
+                "io.github.eval-hub.benchmark": config.benchmark_id,
+                "io.github.eval-hub.model": config.model.name,
+                "io.github.eval-hub.job_id": config.id,
+            }
+        )
         oci_artifact = callbacks.create_oci_artifact(
             OCIArtifactSpec(
-                files=output_files,
-                base_path=self.results_dir,
-                title=f"GuideLLM results for {config.benchmark_id}",
-                description=f"Performance benchmark results from GuideLLM job {config.id}",
-                annotations={
-                    "job_id": config.id,
-                    "benchmark_id": config.benchmark_id,
-                    "model_name": config.model.name,
-                    "framework": "guidellm",
-                    "profile": config.parameters.get("profile", "sweep"),
-                },
-                id=config.id,
-                benchmark_id=config.benchmark_id,
-                model_name=config.model.name,
+                files_path=self.results_dir,
+                coordinates=coords,
             )
         )
 
-        if oci_artifact:
-            logger.info(f"OCI artifact persisted: {oci_artifact.digest}")
+        logger.info(f"OCI artifact created: {oci_artifact.reference}")
 
         return oci_artifact
 
