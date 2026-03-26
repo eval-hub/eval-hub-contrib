@@ -369,12 +369,24 @@ class GuideLLMAdapter(FrameworkAdapter):
             RuntimeError: If GuideLLM execution fails
         """
         try:
+            env = os.environ.copy()
+            # GuideLLM 0.5.3 defaults the HTML report template URL to
+            # blog.vllm.ai which returns a 301 redirect that httpx does
+            # not follow.  Override with the working GitHub-hosted template
+            # used by GuideLLM >= 0.5.4 (see RHOAIENG-55344).
+            env.setdefault(
+                "GUIDELLM__REPORT_GENERATION__SOURCE",
+                "https://raw.githubusercontent.com/vllm-project/guidellm/"
+                "refs/heads/gh-pages/ui/v0.5.3/index.html",
+            )
+
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                env=env,
             )
 
             # Stream output
