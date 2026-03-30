@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""IBM CLEAR agentic adapter for eval-hub (evalhub-sdk FrameworkAdapter)."""
+"""IBM CLEAR agentic adapter for eval-hub.
+
+Loads a JobSpec, resolves trace JSON input, runs CLEAR's step-by-step agentic
+pipeline (prepare traces → judge / analyze → clear_results.json), then maps
+CLEAR output to evalhub-sdk JobResults and optional MLflow or OCI artifacts.
+"""
 
 from __future__ import annotations
 
@@ -45,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 
 def _run_clear_unified_pipeline(agentic_config: dict[str, Any], output_dir: Path) -> None:
+    """Drive IBM CLEAR's agentic layout: output dirs, trace prep, step-by-step run."""
     results_dir = agentic_config["results_dir"]
     run_name = agentic_config["run_name"]
     resolved_out, _ = get_run_output_dir(results_dir, run_name)
@@ -67,6 +73,7 @@ def _run_clear_unified_pipeline(agentic_config: dict[str, Any], output_dir: Path
 
 
 def _find_clear_results_json(output_dir: Path, eval_model_name: str) -> Path | None:
+    """Locate clear_results.json after a run (preferred step_by_step path, then fallbacks)."""
     unified = (
         output_dir / "step_by_step" / "clear_results" / eval_model_name / "clear_results.json"
     )
@@ -83,10 +90,13 @@ def _find_clear_results_json(output_dir: Path, eval_model_name: str) -> Path | N
 
 
 class ClearAdapter(FrameworkAdapter):
+    """eval-hub FrameworkAdapter that runs IBM CLEAR on trace JSON and returns JobResults."""
+
     def __init__(self, job_spec_path: Optional[str] = None) -> None:
         super().__init__(job_spec_path=job_spec_path)
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
+        """Execute one CLEAR job: validate, run pipeline, extract metrics, callbacks, return results."""
         start_time = time.time()
         logger.info(f"Starting CLEAR job {config.id} for benchmark {config.benchmark_id}")
 
@@ -635,6 +645,7 @@ class ClearAdapter(FrameworkAdapter):
 
 
 def main() -> None:
+    """Load JobSpec, run ClearAdapter, emit JobResults via DefaultCallbacks."""
     from evalhub.adapter import DefaultCallbacks
 
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
