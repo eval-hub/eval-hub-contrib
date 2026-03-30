@@ -1,0 +1,6 @@
+eval-hub-sdk[adapter]==0.1.2
+# IBM CLEAR (agentic); PyPI lacks full agentic—pin commit when bumping IBM/CLEAR.
+clear-eval @ https://github.com/IBM/CLEAR/archive/5d4804cde5bd3bda9e8a6f7abcb9aa2d2c8e1968.tar.gz
+
+pandas>=2.0.0
+pydantic>=2.0.0
