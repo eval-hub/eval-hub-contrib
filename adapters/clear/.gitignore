@@ -1,2 +1,5 @@
 .venv/
 .DS_Store
+
+# Local JobSpec created from README sample (real endpoints / experiments)
+meta/my-local-job.json

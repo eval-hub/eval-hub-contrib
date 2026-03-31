@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from evalhub.adapter import (
+    ErrorInfo,
     EvaluationResult,
     FrameworkAdapter,
     JobCallbacks,
@@ -32,6 +33,7 @@ from evalhub.adapter import (
     OCIArtifactResult,
     OCIArtifactSpec,
 )
+from evalhub.adapter.auth import resolve_model_credentials
 from evalhub.adapter.mlflow import MlflowArtifact
 
 try:
@@ -209,7 +211,7 @@ class ClearAdapter(FrameworkAdapter):
 
             if config.model.url and config.parameters.get("inference_backend") != "endpoint":
                 os.environ["OPENAI_BASE_URL"] = config.model.url
-                self._apply_openai_api_key_from_job(config)
+                self._ensure_openai_api_key_for_litellm()
 
             agentic_config = self._build_agentic_config(config, data_dir, output_dir)
             _run_clear_unified_pipeline(agentic_config, output_dir)
@@ -273,9 +275,11 @@ class ClearAdapter(FrameworkAdapter):
                 },
                 oci_artifact=oci_artifact,
             )
-            self._save_results_to_mlflow(
+            rid = self._save_results_to_mlflow(
                 callbacks, config, job_results, output_dir, metrics_summary
             )
+            if rid:
+                job_results = job_results.model_copy(update={"mlflow_run_id": rid})
             return job_results
 
         except Exception as exc:
@@ -288,6 +292,14 @@ class ClearAdapter(FrameworkAdapter):
                         message=error_msg,
                         message_code="failed",
                     ),
+                    error=ErrorInfo(
+                        message=error_msg,
+                        message_code="evaluation_error",
+                    ),
+                    error_details={
+                        "exception_type": type(exc).__name__,
+                        "benchmark_id": config.benchmark_id,
+                    },
                 )
             )
             raise
@@ -315,12 +327,13 @@ class ClearAdapter(FrameworkAdapter):
             raise ValueError("provider is required in parameters")
 
     @staticmethod
-    def _apply_openai_api_key_from_job(config: JobSpec) -> None:
+    def _ensure_openai_api_key_for_litellm() -> None:
+        """Set OPENAI_API_KEY from env or from model auth secret mount (not job parameters)."""
         if os.getenv("OPENAI_API_KEY"):
             return
-        param_key = config.parameters.get("openai_api_key")
-        if param_key:
-            os.environ["OPENAI_API_KEY"] = str(param_key)
+        creds = resolve_model_credentials()
+        if creds.api_key:
+            os.environ["OPENAI_API_KEY"] = creds.api_key
             return
         logger.info("OPENAI_API_KEY not set; some OpenAI-compatible gateways still work without it")
 
@@ -588,26 +601,28 @@ class ClearAdapter(FrameworkAdapter):
         results: JobResults,
         output_dir: Path,
         metrics_summary: dict[str, Any],
-    ) -> None:
+    ) -> str | None:
         name = (config.experiment_name or "").strip()
         if not name:
             raw = config.parameters.get("mlflow_experiment_name")
             if isinstance(raw, str) and raw.strip():
                 name = raw.strip()
         if not name:
-            logger.info("MLflow skipped: set experiment.name or parameters.mlflow_experiment_name")
-            return
+            logger.info(
+                "MLflow skipped: set experiment_name or parameters.mlflow_experiment_name on the job"
+            )
+            return None
 
         spec = config.model_copy(update={"experiment_name": name})
         clear_path = output_dir / "clear_results.json"
         if not clear_path.is_file():
             logger.warning("MLflow: clear_results.json not found at %s", clear_path)
-            return
+            return None
 
         summary_bytes = json.dumps(metrics_summary, indent=2, default=str).encode("utf-8")
 
         try:
-            callbacks.mlflow.save(
+            return callbacks.mlflow.save(
                 results,
                 spec,
                 artifacts=[
@@ -625,6 +640,7 @@ class ClearAdapter(FrameworkAdapter):
             )
         except Exception as e:
             logger.warning("MLflow artifact save failed (job still completes): %s", e, exc_info=True)
+            return None
 
     def _cleanup_intermediate_files(self, output_dir: Path, json_results_path: str) -> None:
         final_json = output_dir / "clear_results.json"
