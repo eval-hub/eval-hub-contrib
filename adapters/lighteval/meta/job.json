@@ -1,12 +1,14 @@
 {
   "id": "lighteval-hellaswag-001",
+  "provider_id": "lighteval",
   "benchmark_id": "boolq",
+  "benchmark_index": 0,
   "model": {
     "url": "http://127.0.0.1:8000/v1",
     "name": "openai/Qwen/Qwen2.5-1.5B-Instruct"
   },
   "num_examples": 5,
-  "benchmark_config": {
+  "parameters": {
     "provider": "endpoint",
     "batch_size": 8,
     "num_few_shot": 0,
@@ -14,11 +16,9 @@
     "split": "validation"
   },
   "callback_url": "http://localhost:8080",
-  "experiment_name": "qwen-boolq-baseline",
-  "tags": {
-    "framework": "lighteval",
-    "model_size": "small",
-    "evaluation_type": "baseline"
-  },
-  "timeout_seconds": 7200
+  "tags": [
+    {"key": "framework", "value": "lighteval"},
+    {"key": "model_size", "value": "small"},
+    {"key": "evaluation_type", "value": "baseline"}
+  ]
 }
