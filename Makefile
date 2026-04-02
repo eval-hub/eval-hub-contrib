@@ -35,6 +35,12 @@ help:
 	@echo "  make clean-mteb         - Remove MTEB adapter image"
 	@echo "  make clean-images       - Remove all adapter images"
 	@echo ""
+	@echo "Test:"
+	@echo "  make test-guidellm     - Run GuideLLM adapter tests"
+	@echo "  make test-lighteval    - Run LightEval adapter tests"
+	@echo "  make test-mteb         - Run MTEB adapter tests"
+	@echo "  make tests             - Run all adapter tests"
+	@echo ""
 	@echo "Variables:"
 	@echo "  REGISTRY=$(REGISTRY)"
 	@echo "  BUILD_TOOL=$(BUILD_TOOL)"
@@ -131,3 +137,35 @@ build-and-push-mteb: image-mteb push-mteb
 .PHONY: build-and-push-all
 build-and-push-all: images push-images
 	@echo "✅ All adapters built and pushed"
+
+# Test targets
+.PHONY: test-guidellm
+test-guidellm:
+	@echo "Running GuideLLM adapter tests..."
+	cd adapters/guidellm && \
+	test -d .venv || python3 -m venv .venv && \
+	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/pytest tests/ -v
+	@echo "✅ GuideLLM tests passed"
+
+.PHONY: test-lighteval
+test-lighteval:
+	@echo "Running LightEval adapter tests..."
+	cd adapters/lighteval && \
+	test -d .venv || python3 -m venv .venv && \
+	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/pytest tests/ -v
+	@echo "✅ LightEval tests passed"
+
+.PHONY: test-mteb
+test-mteb:
+	@echo "Running MTEB adapter tests..."
+	cd adapters/mteb && \
+	test -d .venv || python3 -m venv .venv && \
+	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/pytest tests/ -v
+	@echo "✅ MTEB tests passed"
+
+.PHONY: tests
+tests: test-guidellm test-lighteval test-mteb
+	@echo "✅ All adapter tests passed"
