@@ -39,6 +39,7 @@ help:
 	@echo "  make test-guidellm     - Run GuideLLM adapter tests"
 	@echo "  make test-lighteval    - Run LightEval adapter tests"
 	@echo "  make test-mteb         - Run MTEB adapter tests"
+	@echo "  make test-clear        - Run CLEAR adapter tests"
 	@echo "  make tests             - Run all adapter tests"
 	@echo ""
 	@echo "Variables:"
@@ -166,6 +167,15 @@ test-mteb:
 	.venv/bin/pytest tests/ -v
 	@echo "✅ MTEB tests passed"
 
+.PHONY: test-clear
+test-clear:
+	@echo "Running CLEAR adapter tests..."
+	cd adapters/clear && \
+	test -d .venv || python3 -m venv .venv && \
+	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/pytest tests/ -v
+	@echo "✅ CLEAR tests passed"
+
 .PHONY: tests
-tests: test-guidellm test-lighteval test-mteb
+tests: test-guidellm test-lighteval test-mteb test-clear
 	@echo "✅ All adapter tests passed"
