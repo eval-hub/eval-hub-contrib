@@ -1,0 +1,16 @@
+{
+  "agent.assess_severity.avg_score": 0.95,
+  "agent.assess_severity.num_issues": 0,
+  "agent.classify_log.avg_score": 0.96,
+  "agent.classify_log.num_issues": 0,
+  "agent.diagnose_problem.avg_score": 0.2,
+  "agent.diagnose_problem.num_issues": 7,
+  "average_score": 0.7033333333333333,
+  "interactions_no_issues": 4,
+  "interactions_with_issues": 2,
+  "issues_per_interaction": 1.166667,
+  "pct_interactions_with_issues": 33.3333,
+  "total_agents": 3,
+  "total_interactions": 6,
+  "total_issues": 7
+}

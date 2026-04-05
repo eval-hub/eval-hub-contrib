@@ -1,0 +1,9 @@
+# Ignore generated output by default; allow small committed samples for the tutorial.
+*
+!.gitignore
+!local/
+local/*
+!local/clear_results.json
+!evalhub/
+evalhub/*
+!evalhub/evalhub-clear-metrics.json

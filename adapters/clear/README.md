@@ -154,7 +154,7 @@ Bump the CLEAR archive URL in `requirements.txt` when you adopt a newer IBM/CLEA
   - **`OPENAI_API_KEY`** in the container environment (e.g. local runs).
   Do **not** put the raw key in **`parameters`** (it can end up in a ConfigMap). If no key is set, CLEAR may fail at runtime with a missing `OPENAI_API_KEY` error depending on provider/model.
 
-- **`endpoint`**: The adapter **does not** set **`OPENAI_BASE_URL`** or **`OPENAI_API_KEY`** for LiteLLM; CLEAR is configured with **`parameters.inference_url`** or **`model.url`** as the inference endpoint. Use this when you are not using the LiteLLM/OpenAI-env wiring and do not need an OpenAI API key in this adapter.
+- **`endpoint`**: The adapter **does not** set **`OPENAI_BASE_URL`** or **`OPENAI_API_KEY`** for LiteLLM. IBM CLEAR’s pipeline expects **`endpoint_url`** for this backend; the adapter sets **`endpoint_url`** and **`inference_url`** from **`model.url`**, or from **`parameters.endpoint_url`** / **`parameters.inference_url`** if present. Use this when you are not using the LiteLLM/OpenAI-env wiring and do not need an OpenAI API key in this adapter.
 
 ## Model API key (Kubernetes, `litellm` + OpenAI-style usage)
 
