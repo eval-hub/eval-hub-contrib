@@ -163,6 +163,21 @@ class ClearAdapter(FrameworkAdapter):
                         "or set parameters.data_dir (preferred) or parameters.traces_input_dir"
                     )
                 logger.info("Using data_dir from parameters: %s", data_dir)
+                # S3 / init staging often appears after the adapter process starts; wait before failing.
+                _param_path = Path(data_dir)
+                _deadline = time.monotonic() + 120.0
+                while time.monotonic() < _deadline:
+                    if _param_path.is_dir() and any(_param_path.glob("*.json")):
+                        break
+                    logger.info(
+                        "Waiting for parameters.data_dir to contain *.json: %s", data_dir
+                    )
+                    time.sleep(3)
+                else:
+                    raise ValueError(
+                        f"parameters.data_dir {data_dir!r} missing or has no *.json after 120s "
+                        f"(confirm S3 staging path with: find /test_data /data -name '*.json')"
+                    )
 
             if not Path(data_dir).exists():
                 raise ValueError(f"data_dir not found: {data_dir}")
@@ -375,12 +390,20 @@ class ClearAdapter(FrameworkAdapter):
         }
 
         if agentic_config.get("inference_backend") == "endpoint":
-            if "inference_url" in config.parameters:
-                agentic_config["inference_url"] = config.parameters["inference_url"]
+            if "endpoint_url" in config.parameters:
+                ep = config.parameters["endpoint_url"]
+            elif "inference_url" in config.parameters:
+                ep = config.parameters["inference_url"]
             elif config.model.url:
-                agentic_config["inference_url"] = config.model.url
+                ep = config.model.url
             else:
-                raise ValueError("inference_url is required when inference_backend is 'endpoint'")
+                raise ValueError(
+                    "model.url or parameters.endpoint_url (or inference_url) is required "
+                    "when inference_backend is 'endpoint'"
+                )
+            # CLEAR's eval pipeline expects endpoint_url; keep inference_url for compatibility.
+            agentic_config["endpoint_url"] = ep
+            agentic_config["inference_url"] = ep
 
         if "eval_model_params" in config.parameters:
             agentic_config["eval_model_params"] = config.parameters["eval_model_params"]
