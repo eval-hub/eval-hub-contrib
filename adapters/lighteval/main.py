@@ -576,7 +576,7 @@ class LightEvalAdapter(FrameworkAdapter):
             Overall score (average of primary metrics), or None if not applicable
         """
         # Primary metrics to consider for overall score
-        primary_metric_names = ["accuracy", "acc", "exact_match", "f1", "bleu"]
+        primary_metric_names = ["accuracy", "acc", "exact_match", "extractive_match", "f1", "bleu"]
 
         primary_values = []
         for result in results:
