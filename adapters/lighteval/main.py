@@ -576,7 +576,7 @@ class LightEvalAdapter(FrameworkAdapter):
             Overall score (average of primary metrics), or None if not applicable
         """
         # Primary metrics to consider for overall score
-        primary_metric_names = ["accuracy", "acc", "exact_match", "f1", "bleu"]
+        primary_metric_names = ["accuracy", "acc", "exact_match", "extractive_match", "f1", "bleu"]
 
         primary_values = []
         for result in results:
@@ -611,8 +611,8 @@ class LightEvalAdapter(FrameworkAdapter):
         """
         # LightEval doesn't always provide this directly
         # Try to extract from config or metadata
-        if "config" in lighteval_results and "num_examples" in lighteval_results["config"]:
-            return lighteval_results["config"]["num_examples"]
+        if "config_general" in lighteval_results and "max_samples" in lighteval_results["config_general"]:
+            return lighteval_results["config_general"]["max_samples"]
 
         # Otherwise return 0 (unknown)
         return 0
