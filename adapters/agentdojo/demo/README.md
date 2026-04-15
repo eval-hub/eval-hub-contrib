@@ -1,16 +1,14 @@
 # AgentDojo on EvalHub - OpenShift Demo
 
 End-to-end deployment of the AgentDojo prompt injection benchmark adapter
-on OpenShift, managed by the TrustyAI Service Operator via an EvalHub
-custom resource.
+on OpenShift with EvalHub deployed directly (no operator required).
 
 ## Overview
 
 This demo deploys:
 
-1. **TrustyAI Service Operator** - manages the EvalHub lifecycle (does not require ODH)
-2. **EvalHub service** - evaluation orchestration service with REST API
-3. **AgentDojo adapter** - container that runs AgentDojo benchmarks as EvalHub jobs
+1. **EvalHub service** - evaluation orchestration service with REST API
+2. **AgentDojo adapter** - container that runs AgentDojo benchmarks as EvalHub jobs
 
 The adapter evaluates LLM agents on **utility** (task completion) and
 **security** (resistance to prompt injection) across four simulated
@@ -18,10 +16,8 @@ environments: workspace, slack, banking, and travel.
 
 ## Prerequisites
 
-- OpenShift cluster with `oc` CLI logged in
+- OpenShift cluster with `oc` CLI logged in (cluster-admin)
 - `podman` (or `docker`) for building the adapter image
-- `go` >= 1.22 (for building kustomize during operator install)
-- A clone of the [trustyai-service-operator](https://github.com/trustyai-explainability/trustyai-service-operator)
 - An OpenAI-compatible model endpoint (e.g. vLLM, LiteLLM proxy)
 
 ## Quick Start
@@ -34,27 +30,18 @@ All commands assume you are in this directory (`adapters/agentdojo/demo/`).
 oc apply -f 00-namespace.yaml
 ```
 
-### 2. Deploy the TrustyAI operator
+### 2. Create the EvalHub configuration
 
 ```bash
-chmod +x 01-operator-crds.sh
-OPERATOR_REPO=/path/to/trustyai-service-operator ./01-operator-crds.sh
+oc apply -f 01-evalhub-config.yaml
 ```
 
-This installs the CRDs (including EvalHub) and deploys the operator
-controller into the `eval-hub` namespace.
+This creates a ConfigMap with the EvalHub service configuration
+(SQLite in-memory database, auth disabled for testing). The config
+includes sidecar settings that tell job pods how to call back to
+EvalHub via the in-cluster service URL.
 
-### 3. Build and push the AgentDojo adapter image
-
-```bash
-chmod +x 04-build-and-push-adapter.sh
-./04-build-and-push-adapter.sh
-```
-
-This builds the adapter container from `adapters/agentdojo/` and pushes
-it to the OpenShift internal registry.
-
-### 4. Register the AgentDojo provider
+### 3. Register the AgentDojo provider
 
 ```bash
 oc apply -f 02-agentdojo-provider.yaml
@@ -63,24 +50,61 @@ oc apply -f 02-agentdojo-provider.yaml
 This creates a ConfigMap with the provider definition that EvalHub uses
 to discover and run AgentDojo benchmarks.
 
-### 5. Create the EvalHub instance
+### 4. Deploy EvalHub and configure RBAC
 
 ```bash
 oc apply -f 03-evalhub.yaml
+oc apply -f 03a-rbac.yaml
 ```
+
+This creates the EvalHub Deployment, Service, and Route. The provider
+ConfigMap is mounted via a projected volume (the same mechanism the
+TrustyAI Service Operator uses). The RBAC binding grants the default
+ServiceAccount permissions to create ConfigMaps, Pods, and Secrets
+needed for evaluation job runs.
 
 Wait for it to become ready:
 
 ```bash
-oc get evalhub -n eval-hub -w
-# NAME      PHASE   READY   AGE
-# evalhub   Ready   True    30s
+oc rollout status deployment/evalhub -n eval-hub --timeout=120s
 ```
 
-### 6. (Optional) Create API key secret
+### 5. Expose the internal registry and build the adapter image
 
-If your model endpoint requires authentication, create a secret from
-your environment variables:
+The adapter image must be available in the OpenShift internal registry.
+First, expose the registry route:
+
+```bash
+oc patch configs.imageregistry.operator.openshift.io/cluster \
+  --type=merge -p '{"spec":{"defaultRoute":true}}'
+```
+
+Then log in and build/push using the repo Makefile:
+
+```bash
+REGISTRY_HOST=$(oc get route default-route -n openshift-image-registry \
+  -o jsonpath='{.spec.host}')
+
+podman login "$REGISTRY_HOST" \
+  -u "$(oc whoami)" -p "$(oc whoami -t)" --tls-verify=false
+
+# From the repo root (eval-hub-contrib/):
+make image-agentdojo REGISTRY="$REGISTRY_HOST/eval-hub"
+podman push "$REGISTRY_HOST/eval-hub/community-agentdojo:latest" \
+  --tls-verify=false
+```
+
+Verify the image stream was created:
+
+```bash
+oc get is -n eval-hub
+# NAME                  TAGS     UPDATED
+# community-agentdojo   latest   ...
+```
+
+### 6. Create API key secret
+
+If your model endpoint requires authentication:
 
 ```bash
 # Create a .env file with your endpoint details:
@@ -94,16 +118,74 @@ envsubst < 05-secret.yaml.tpl | oc apply -f -
 ## Verify the deployment
 
 ```bash
-# Check all components are running
-oc get pods -n eval-hub
+# Check the pod is running
+oc get pods -n eval-hub -l app=evalhub
 
-# Check EvalHub is ready with agentdojo provider
-oc get evalhub -n eval-hub
-
-# Check health via the route
-TOKEN=$(oc whoami -t)
+# Check health
 EVALHUB_URL=$(oc get route evalhub -n eval-hub -o jsonpath='{.spec.host}')
-curl -sk -H "Authorization: Bearer $TOKEN" "https://$EVALHUB_URL/api/v1/health"
+curl -sk "https://$EVALHUB_URL/api/v1/health"
+
+# Check agentdojo provider is registered
+curl -sk "https://$EVALHUB_URL/api/v1/evaluations/providers" \
+  -H "X-Tenant: eval-hub"
+```
+
+## Submit a smoke test
+
+Run a minimal evaluation (single task, utility only, no attack):
+
+```bash
+EVALHUB_URL=$(oc get route evalhub -n eval-hub -o jsonpath='{.spec.host}')
+
+curl -sk -X POST \
+  -H "X-Tenant: eval-hub" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "agentdojo-smoke-test",
+    "model": {
+      "url": "https://your-endpoint/v1",
+      "name": "openai-compatible",
+      "auth": {
+        "secret_ref": "agentdojo-api-keys"
+      }
+    },
+    "benchmarks": [
+      {
+        "id": "workspace",
+        "provider_id": "agentdojo",
+        "parameters": {
+          "model_id": "your-model-id",
+          "user_tasks": ["user_task_0"],
+          "benchmark_version": "v1.2.2"
+        }
+      }
+    ]
+  }' \
+  "https://$EVALHUB_URL/api/v1/evaluations/jobs"
+```
+
+Check job status:
+
+```bash
+JOB_ID="<job-id-from-response>"
+curl -sk -H "X-Tenant: eval-hub" \
+  "https://$EVALHUB_URL/api/v1/evaluations/jobs/$JOB_ID"
+```
+
+## Adding more providers
+
+To add additional providers, create a ConfigMap and add it to the
+projected volume in `03-evalhub.yaml`:
+
+```yaml
+volumes:
+- name: evalhub-providers
+  projected:
+    sources:
+    - configMap:
+        name: evalhub-provider-agentdojo
+    - configMap:
+        name: evalhub-provider-lighteval
 ```
 
 ## File Reference
@@ -111,11 +193,21 @@ curl -sk -H "Authorization: Bearer $TOKEN" "https://$EVALHUB_URL/api/v1/health"
 | File | Description |
 |------|-------------|
 | `00-namespace.yaml` | Creates the `eval-hub` namespace |
-| `01-operator-crds.sh` | Installs CRDs and deploys the TrustyAI operator |
+| `01-evalhub-config.yaml` | EvalHub service configuration (SQLite, auth disabled, sidecar config) |
 | `02-agentdojo-provider.yaml` | AgentDojo provider ConfigMap for EvalHub |
-| `03-evalhub.yaml` | EvalHub custom resource |
-| `04-build-and-push-adapter.sh` | Builds and pushes the adapter container image |
+| `03-evalhub.yaml` | EvalHub Deployment, Service, and Route |
+| `03a-rbac.yaml` | RBAC for the default ServiceAccount to manage job resources |
+| `04-build-and-push-adapter.sh` | Builds and pushes the adapter container image (standalone script) |
 | `05-secret.yaml.tpl` | Secret template for model endpoint credentials (uses `envsubst`) |
+
+## Operator-managed deployment
+
+For production use, EvalHub can be managed by the
+[TrustyAI Service Operator](https://github.com/trustyai-explainability/trustyai-service-operator)
+via an `EvalHub` custom resource. The operator handles provider ConfigMap
+discovery, RBAC, TLS, sidecar configuration, and lifecycle management
+automatically. See the
+[EvalHub documentation](https://github.com/eval-hub/eval-hub) for details.
 
 ## AgentDojo Benchmarks
 
@@ -133,12 +225,11 @@ Each suite measures **utility** (does the agent complete the task?) and
 ## Cleanup
 
 ```bash
-oc delete evalhub evalhub -n eval-hub
-oc delete configmap evalhub-provider-agentdojo -n eval-hub
-# To remove the operator:
-OPERATOR_REPO=/path/to/trustyai-service-operator NAMESPACE=eval-hub \
-  $OPERATOR_REPO/bin/kustomize build $OPERATOR_REPO/config/base 2>/dev/null \
-  | sed 's/namespace: system/namespace: eval-hub/g' \
-  | oc delete -f -
+oc delete deployment evalhub -n eval-hub
+oc delete service evalhub -n eval-hub
+oc delete route evalhub -n eval-hub
+oc delete configmap evalhub-config evalhub-provider-agentdojo -n eval-hub
+oc delete secret agentdojo-api-keys -n eval-hub
+oc delete rolebinding evalhub-admin -n eval-hub
 oc delete namespace eval-hub
 ```

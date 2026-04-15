@@ -14,7 +14,7 @@ data:
     type: builtin
     runtime:
       k8s:
-        image: image-registry.openshift-image-registry.svc:5000/eval-hub/agentdojo-adapter:latest
+        image: image-registry.openshift-image-registry.svc:5000/eval-hub/community-agentdojo:latest
         entrypoint:
         - python
         - main.py

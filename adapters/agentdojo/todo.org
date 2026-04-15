@@ -1,0 +1,7 @@
+* TODO Verify correct sidecar container image
+  The upstream config at =config/config.yaml= uses =quay.io/rh-ee-nbs/nbs-dev:eval-hub_v27=
+  which looks like a dev image. The demo currently uses =quay.io/evalhub/evalhub:latest=
+  since the same binary can run as both the main service and the sidecar
+  (the Containerfile builds both =eval-hub= and =eval-runtime-sidecar=).
+  Confirm which image is correct for production sidecar use and update
+  =demo/01-evalhub-config.yaml= accordingly.

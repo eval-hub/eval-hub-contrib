@@ -120,11 +120,10 @@ podman run --rm \
     "url": null,
     "name": "gpt-4o-2024-05-13"
   },
-  "benchmark_config": {
+  "parameters": {
     "benchmark_version": "v1.2.2"
   },
-  "callback_url": "http://localhost:8080",
-  "timeout_seconds": 7200
+  "callback_url": "http://localhost:8080"
 }
 ```
 
@@ -138,13 +137,11 @@ podman run --rm \
     "url": null,
     "name": "claude-3-5-sonnet-20241022"
   },
-  "benchmark_config": {
+  "parameters": {
     "attack": "important_instructions",
-    "defense": null,
     "benchmark_version": "v1.2.2"
   },
-  "callback_url": "http://localhost:8080",
-  "timeout_seconds": 7200
+  "callback_url": "http://localhost:8080"
 }
 ```
 
@@ -158,14 +155,13 @@ podman run --rm \
     "url": null,
     "name": "gpt-4o-2024-05-13"
   },
-  "benchmark_config": {
+  "parameters": {
     "attack": "tool_knowledge",
     "defense": "spotlighting_with_delimiting",
     "suites": ["workspace", "banking"],
     "benchmark_version": "v1.2.2"
   },
-  "callback_url": "http://localhost:8080",
-  "timeout_seconds": 7200
+  "callback_url": "http://localhost:8080"
 }
 ```
 
@@ -179,12 +175,11 @@ podman run --rm \
     "url": "http://localhost:8000/v1",
     "name": "local"
   },
-  "benchmark_config": {
+  "parameters": {
     "attack": "direct",
     "benchmark_version": "v1.2.2"
   },
-  "callback_url": "http://localhost:8080",
-  "timeout_seconds": 7200
+  "callback_url": "http://localhost:8080"
 }
 ```
 
