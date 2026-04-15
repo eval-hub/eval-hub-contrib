@@ -11,7 +11,7 @@ from evalhub.adapter import JobCallbacks, JobPhase, OCIArtifactResult
 from main import LightEvalAdapter
 
 # Canned output matching LightEval's results JSON structure.
-# Based loosely on: https://huggingface.co/datasets/open-llm-leaderboard/results/blob/main/meta-llama/Llama-3.2-1B-Instruct/results_2025-02-13T18-27-04.338360.json
+# Based losely on https://github.com/huggingface/lighteval/blob/main/docs/source/saving-and-reading-results.mdx#general-configuration
 CANNED_RESULTS = {
     "results": {
         "boolq": {
@@ -19,8 +19,8 @@ CANNED_RESULTS = {
             "accuracy_stderr": 0.02,
         }
     },
-    "config": {
-        "num_examples": 5,
+    "config_general": {
+        "max_samples": 5,
     },
 }
 
