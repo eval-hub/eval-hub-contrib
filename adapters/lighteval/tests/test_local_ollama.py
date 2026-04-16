@@ -92,7 +92,7 @@ def test_lighteval_local_ollama(tmp_path, mock_sidecar):
             "url": "http://localhost:11434/v1",
             "name": OLLAMA_MODEL,
         },
-        "num_examples": 5,
+        "num_examples": 20,
         "parameters": {
             "provider": "endpoint",
             "batch_size": 1,
