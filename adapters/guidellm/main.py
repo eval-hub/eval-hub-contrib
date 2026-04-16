@@ -351,6 +351,10 @@ class GuideLLMAdapter(FrameworkAdapter):
         if processor:
             cmd.extend(["--processor", processor])
 
+        # Backend kwargs (e.g., validate_backend: false for Ollama, which does not expose a /health endpoint)
+        if "backend_kwargs" in config:
+            cmd.extend(["--backend-kwargs", json.dumps(config["backend_kwargs"])])
+
         # Output formats (always generate all for comprehensive reporting)
         # Note: GuideLLM uses --outputs, not --output-format
         cmd.extend(["--outputs", "json,csv,html,yaml"])
