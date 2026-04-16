@@ -110,12 +110,17 @@ DEFAULT_METRICS = [
 # ---------------------------------------------------------------------------
 # OpenAI-compatible LLM wrapper
 # ---------------------------------------------------------------------------
+_SECRET_DIR = Path("/var/run/secrets/model")
+
+
 def _get_api_key() -> str:
-    return (
-        os.environ.get("OPENAICOMPATIBLE_API_KEY")
-        or os.environ.get("OPENAI_API_KEY")
-        or "DUMMY"
-    )
+    for name in ("OPENAICOMPATIBLE_API_KEY", "OPENAI_API_KEY"):
+        if val := os.environ.get(name):
+            return val
+        secret_file = _SECRET_DIR / name
+        if secret_file.exists():
+            return secret_file.read_text().strip()
+    return "DUMMY"
 
 
 def _openai_client(base_url: str) -> Any:
