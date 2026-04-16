@@ -8,4 +8,4 @@ openai>=1.0.0
 langchain-core>=0.3.0
 
 # EvalHub SDK (framework adapter with adapter extra only)
-eval-hub-sdk[adapter]==0.1.2
+eval-hub-sdk[adapter]==0.1.5
