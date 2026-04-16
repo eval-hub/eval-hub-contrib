@@ -1,0 +1,102 @@
+# RAGAS Provider Configuration
+# Retrieval Augmented Generation Assessment — evaluation for RAG pipelines
+
+id: ragas
+name: RAGAS
+description: >
+  Retrieval Augmented Generation Assessment — evaluates RAG pipeline quality
+  using metrics like faithfulness, answer relevancy, context precision/recall,
+  and more. Models are accessed via OpenAI-compatible endpoints.
+type: builtin
+
+runtime:
+  k8s:
+    image: quay.io/evalhub/community-ragas:latest
+    entrypoint:
+      - python
+      - main.py
+    cpu_request: 100m
+    memory_request: 128Mi
+    cpu_limit: 1000m
+    memory_limit: 2Gi
+  local:
+    # Reserved for local runtime configuration
+
+benchmarks:
+  - id: ragas_rag_default
+    name: RAG Default Suite
+    description: Default RAG evaluation with answer relevancy, context precision, faithfulness, and context recall
+    category: rag_evaluation
+    metrics:
+      - answer_relevancy
+      - context_precision
+      - faithfulness
+      - context_recall
+    tags:
+      - ragas
+      - rag
+      - default
+
+  - id: ragas_rag_full
+    name: RAG Full Suite
+    description: Comprehensive RAG evaluation with all available RAGAS metrics
+    category: rag_evaluation
+    metrics:
+      - answer_relevancy
+      - answer_similarity
+      - context_precision
+      - faithfulness
+      - context_recall
+      - context_entity_recall
+      - nv_accuracy
+      - nv_context_relevance
+      - factual_correctness
+      - noise_sensitivity
+      - nv_response_groundedness
+    tags:
+      - ragas
+      - rag
+      - comprehensive
+
+parameters:
+  - name: metrics
+    type: array
+    default: null
+    description: >
+      List of RAGAS metric names to evaluate. Available: answer_relevancy,
+      answer_similarity, context_precision, faithfulness, context_recall,
+      context_entity_recall, nv_accuracy, nv_context_relevance,
+      factual_correctness, noise_sensitivity, nv_response_groundedness.
+      Defaults to the benchmark's metric list.
+
+  - name: embedding_model
+    type: string
+    default: null
+    description: Model name for embeddings (defaults to the same model as LLM)
+
+  - name: embedding_url
+    type: string
+    default: null
+    description: Base URL for embeddings endpoint (defaults to model URL)
+
+  - name: max_tokens
+    type: integer
+    default: null
+    description: Maximum tokens for LLM completions
+
+  - name: temperature
+    type: number
+    default: null
+    description: Sampling temperature for LLM completions
+
+  - name: column_map
+    type: object
+    default: null
+    description: >
+      Mapping from dataset column names to RAGAS expected names
+      (user_input, response, retrieved_contexts, reference)
+
+  - name: data_path
+    type: string
+    default: null
+    description: Explicit path to dataset file (overrides default /test_data and /data resolution)
