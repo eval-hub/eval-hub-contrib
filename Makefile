@@ -146,7 +146,7 @@ test-guidellm:
 	cd adapters/guidellm && \
 	test -d .venv || python3 -m venv .venv && \
 	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
-	.venv/bin/pytest tests/ -v
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ GuideLLM tests passed"
 
 .PHONY: test-lighteval
@@ -155,7 +155,7 @@ test-lighteval:
 	cd adapters/lighteval && \
 	test -d .venv || python3 -m venv .venv && \
 	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
-	.venv/bin/pytest tests/ -v
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ LightEval tests passed"
 
 .PHONY: test-mteb
@@ -164,7 +164,7 @@ test-mteb:
 	cd adapters/mteb && \
 	test -d .venv || python3 -m venv .venv && \
 	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
-	.venv/bin/pytest tests/ -v
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ MTEB tests passed"
 
 .PHONY: test-clear
@@ -173,7 +173,7 @@ test-clear:
 	cd adapters/clear && \
 	test -d .venv || python3 -m venv .venv && \
 	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
-	.venv/bin/pytest tests/ -v
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ CLEAR tests passed"
 
 .PHONY: tests

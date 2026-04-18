@@ -27,4 +27,38 @@ jobs:
           uv pip install --system "$SDK_DEP" -r requirements-test.txt
       - name: Run tests
         working-directory: adapters/guidellm
-        run: pytest tests/ -v
+        run: pytest tests/ -v -m "not local"  # keep lightweight testing isolated which can mock the installation and run of real benchmark code
+
+  test-local:
+    runs-on: ubuntu-latest
+    env:
+      OLLAMA_MODELS: /home/runner/.ollama-models
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install all dependencies
+        working-directory: adapters/guidellm
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+      - name: Cache Ollama model
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.OLLAMA_MODELS }}
+          key: ollama-qwen2.5-0.5b
+      - name: Start Ollama and pull model
+        run: |
+          # Stop the systemd service started by the install script
+          sudo systemctl stop ollama 2>/dev/null || true
+          # Start ollama with our custom model path
+          ollama serve &
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/tags >/dev/null && break; sleep 1; done
+          ollama pull qwen2.5:0.5b
+      - name: Run local tests
+        working-directory: adapters/guidellm
+        run: pytest tests/ -v -m local
