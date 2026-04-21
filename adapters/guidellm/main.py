@@ -202,6 +202,7 @@ class GuideLLMAdapter(FrameworkAdapter):
             results = JobResults(
                 id=config.id,
                 benchmark_id=config.benchmark_id,
+                benchmark_index=config.benchmark_index,
                 model_name=config.model.name,
                 results=evaluation_results,
                 overall_score=overall_score,
@@ -350,6 +351,10 @@ class GuideLLMAdapter(FrameworkAdapter):
         if processor:
             cmd.extend(["--processor", processor])
 
+        # Backend kwargs (e.g., validate_backend: false for Ollama, which does not expose a /health endpoint)
+        if "backend_kwargs" in config:
+            cmd.extend(["--backend-kwargs", json.dumps(config["backend_kwargs"])])
+
         # Output formats (always generate all for comprehensive reporting)
         # Note: GuideLLM uses --outputs, not --output-format
         cmd.extend(["--outputs", "json,csv,html,yaml"])
@@ -368,12 +373,24 @@ class GuideLLMAdapter(FrameworkAdapter):
             RuntimeError: If GuideLLM execution fails
         """
         try:
+            env = os.environ.copy()
+            # GuideLLM 0.5.3 defaults the HTML report template URL to
+            # blog.vllm.ai which returns a 301 redirect that httpx does
+            # not follow.  Override with the working GitHub-hosted template
+            # used by GuideLLM >= 0.5.4 (see RHOAIENG-55344).
+            env.setdefault(
+                "GUIDELLM__REPORT_GENERATION__SOURCE",
+                "https://raw.githubusercontent.com/vllm-project/guidellm/"
+                "refs/heads/gh-pages/ui/v0.5.3/index.html",
+            )
+
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                env=env,
             )
 
             # Stream output
@@ -510,29 +527,30 @@ class GuideLLMAdapter(FrameworkAdapter):
             logger.warning("No output files found in results directory")
             return None
 
+        oci_exports = config.exports.oci if config.exports else None
+        if oci_exports is None:
+            logger.info("No OCI exports configured; skipping artifact persistence")
+            return None
+
         # Create OCI artifact with all files
         logger.info(f"Creating OCI artifact with {len(output_files)} files")
+        coords = oci_exports.coordinates.model_copy(deep=True)
+        coords.annotations.update(
+            {
+                "org.opencontainers.image.created": datetime.now(UTC).isoformat(),
+                "io.github.eval-hub.benchmark": config.benchmark_id,
+                "io.github.eval-hub.model": config.model.name,
+                "io.github.eval-hub.job_id": config.id,
+            }
+        )
         oci_artifact = callbacks.create_oci_artifact(
             OCIArtifactSpec(
-                files=output_files,
-                base_path=self.results_dir,
-                title=f"GuideLLM results for {config.benchmark_id}",
-                description=f"Performance benchmark results from GuideLLM job {config.id}",
-                annotations={
-                    "job_id": config.id,
-                    "benchmark_id": config.benchmark_id,
-                    "model_name": config.model.name,
-                    "framework": "guidellm",
-                    "profile": config.parameters.get("profile", "sweep"),
-                },
-                id=config.id,
-                benchmark_id=config.benchmark_id,
-                model_name=config.model.name,
+                files_path=self.results_dir,
+                coordinates=coords,
             )
         )
 
-        if oci_artifact:
-            logger.info(f"OCI artifact persisted: {oci_artifact.digest}")
+        logger.info(f"OCI artifact created: {oci_artifact.reference}")
 
         return oci_artifact
 

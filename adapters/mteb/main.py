@@ -289,27 +289,26 @@ class MTEBAdapter(FrameworkAdapter):
             )
 
             oci_artifact = None
-            if output_files:
+            oci_exports = config.exports.oci if config.exports else None
+            if oci_exports is not None and output_files:
+                coords = oci_exports.coordinates.model_copy(deep=True)
+                coords.annotations.update(
+                    {
+                        "org.opencontainers.image.created": datetime.now(UTC).isoformat(),
+                        "io.github.eval-hub.benchmark": config.benchmark_id,
+                        "io.github.eval-hub.model": config.model.name,
+                        "io.github.eval-hub.job_id": config.id,
+                    }
+                )
                 oci_artifact = callbacks.create_oci_artifact(
                     OCIArtifactSpec(
-                        files=output_files,
-                        base_path=Path("/tmp/mteb_results"),
-                        title=f"MTEB results for {config.benchmark_id}",
-                        description=f"Results from MTEB job {config.id}",
-                        annotations={
-                            "job_id": config.id,
-                            "benchmark_id": config.benchmark_id,
-                            "model_name": config.model.name,
-                            "framework": "mteb",
-                            "overall_score": str(overall_score) if overall_score else "N/A",
-                            "num_tasks": str(len(tasks)),
-                        },
-                        id=config.id,
-                        benchmark_id=config.benchmark_id,
-                        model_name=config.model.name,
+                        files_path=Path("/tmp/mteb_results") / config.id,
+                        coordinates=coords,
                     )
                 )
-                logger.info(f"OCI artifact persisted: {oci_artifact.digest}")
+                logger.info(f"OCI artifact created: {oci_artifact.reference}")
+            else:
+                logger.info("No OCI exports configured; skipping artifact persistence")
 
             # Compute final duration
             duration = time.time() - start_time
@@ -318,6 +317,7 @@ class MTEBAdapter(FrameworkAdapter):
             return JobResults(
                 id=config.id,
                 benchmark_id=config.benchmark_id,
+                benchmark_index=config.benchmark_index,
                 model_name=config.model.name,
                 results=evaluation_results,
                 overall_score=overall_score,

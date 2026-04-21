@@ -1,0 +1,52 @@
+name: Test MTEB
+
+on:
+  push:
+    branches: [main]
+    paths: ['adapters/mteb/**']
+  pull_request:
+    branches: [main]
+    paths: ['adapters/mteb/**']
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        working-directory: adapters/mteb
+        run: |
+          SDK_DEP=$(grep 'eval-hub-sdk' requirements.txt)
+          uv pip install --system "$SDK_DEP" -r requirements-test.txt
+      - name: Run tests
+        working-directory: adapters/mteb
+        run: pytest tests/ -v -m "not local"  # keep lightweight testing isolated which can mock the installation and run of real benchmark code
+
+  test-local:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install all dependencies
+        working-directory: adapters/mteb
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-sentence-transformers-all-MiniLM-L6-v2
+      - name: Run local tests
+        working-directory: adapters/mteb
+        run: pytest tests/ -v -m local
