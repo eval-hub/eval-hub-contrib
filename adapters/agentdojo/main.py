@@ -849,6 +849,29 @@ def main() -> None:
         logger.info(f"Overall score: {results.overall_score}")
         logger.info(f"Evaluated {results.num_examples_evaluated} tasks")
 
+        from evalhub.adapter.mlflow import MlflowArtifact
+
+        mlflow_artifacts = []
+        content_types = {
+            ".json": "application/json",
+            ".txt": "text/plain",
+            ".gz": "application/gzip",
+        }
+        output_dir = Path("/tmp/agentdojo_results") / results.id
+        if output_dir.is_dir():
+            for f in output_dir.iterdir():
+                if f.is_file():
+                    ct = content_types.get(f.suffix, "application/octet-stream")
+                    mlflow_artifacts.append(
+                        MlflowArtifact(f.name, f.read_bytes(), ct)
+                    )
+
+        mlflow_run_id = callbacks.mlflow.save(
+            results, adapter.job_spec, artifacts=mlflow_artifacts
+        )
+        if mlflow_run_id:
+            results.mlflow_run_id = mlflow_run_id
+
         callbacks.report_results(results)
 
         sys.exit(0)
