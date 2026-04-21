@@ -24,7 +24,9 @@ benchmarks:
     name: Workspace Suite
     description: Office productivity tasks (email, calendar, cloud drive)
     category: prompt_injection
-    primary_score: avg_utility
+    primary_score:
+      metric: avg_utility
+      lower_is_better: false
     metrics:
       - utility
       - security
@@ -37,7 +39,9 @@ benchmarks:
     name: Slack Suite
     description: Slack-like messaging tasks
     category: prompt_injection
-    primary_score: avg_utility
+    primary_score:
+      metric: avg_utility
+      lower_is_better: false
     metrics:
       - utility
       - security
@@ -50,7 +54,9 @@ benchmarks:
     name: Banking Suite
     description: Financial transaction tasks
     category: prompt_injection
-    primary_score: avg_utility
+    primary_score:
+      metric: avg_utility
+      lower_is_better: false
     metrics:
       - utility
       - security
@@ -63,7 +69,9 @@ benchmarks:
     name: Travel Suite
     description: Travel booking and planning tasks
     category: prompt_injection
-    primary_score: avg_utility
+    primary_score:
+      metric: avg_utility
+      lower_is_better: false
     metrics:
       - utility
       - security
@@ -76,7 +84,9 @@ benchmarks:
     name: All Suites
     description: Run all AgentDojo suites (workspace, slack, banking, travel)
     category: prompt_injection
-    primary_score: avg_utility
+    primary_score:
+      metric: avg_utility
+      lower_is_better: false
     metrics:
       - utility
       - security
