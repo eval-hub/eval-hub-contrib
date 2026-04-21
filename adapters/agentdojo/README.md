@@ -66,6 +66,7 @@ The adapter runs `python -m agentdojo.scripts.benchmark` as a subprocess, parses
 
 | Parameter            | Type           | Default    | Description                                    |
 |----------------------|----------------|------------|------------------------------------------------|
+| `provider_type`      | `string`       | `"openai-compatible"` | AgentDojo provider type (e.g. `openai-compatible`, `local`, `vllm_parsed`) |
 | `attack`             | `string\|null` | `null`     | Attack to use (see table above)                |
 | `defense`            | `string\|null` | `null`     | Defense to use (see table above)               |
 | `benchmark_version`  | `string`       | `"v1.2.2"` | AgentDojo benchmark version                    |
@@ -173,9 +174,10 @@ podman run --rm \
   "benchmark_id": "workspace",
   "model": {
     "url": "http://localhost:8000/v1",
-    "name": "local"
+    "name": "meta-llama/Llama-3.1-8B-Instruct"
   },
   "parameters": {
+    "provider_type": "local",
     "attack": "direct",
     "benchmark_version": "v1.2.2"
   },
@@ -211,8 +213,8 @@ The adapter produces the following files in the OCI artifact:
 
 ## Submitting Jobs via the EvalHub API
 
-Once deployed on OpenShift (see [demo/README.md](demo/README.md)), submit
-evaluation jobs via the EvalHub REST API.
+Submit evaluation jobs via the EvalHub REST API. See the
+[EvalHub docs](https://eval-hub.github.io/) for installation and deployment.
 
 ### Workspace suite with prompt injection attack
 
@@ -228,7 +230,7 @@ curl -sk -X POST \
     "name": "agentdojo-workspace-attack",
     "model": {
       "url": "https://your-openai-compatible-endpoint/v1",
-      "name": "openai-compatible",
+      "name": "your-model-id",
       "auth": {
         "secret_ref": "agentdojo-api-keys"
       }
@@ -238,7 +240,6 @@ curl -sk -X POST \
         "id": "workspace",
         "provider_id": "agentdojo",
         "parameters": {
-          "model_id": "your-model-id",
           "attack": "important_instructions"
         }
       }
@@ -258,18 +259,12 @@ curl -sk -X POST \
     "name": "agentdojo-full-utility",
     "model": {
       "url": "https://your-openai-compatible-endpoint/v1",
-      "name": "openai-compatible",
-      "auth": {
-        "secret_ref": "agentdojo-api-keys"
-      }
+      "name": "your-model-id"
     },
     "benchmarks": [
       {
         "id": "agentdojo",
-        "provider_id": "agentdojo",
-        "parameters": {
-          "model_id": "your-model-id"
-        }
+        "provider_id": "agentdojo"
       }
     ]
   }' \
@@ -287,7 +282,7 @@ curl -sk -X POST \
     "name": "agentdojo-attack-defense",
     "model": {
       "url": "https://your-openai-compatible-endpoint/v1",
-      "name": "openai-compatible",
+      "name": "your-model-id",
       "auth": {
         "secret_ref": "agentdojo-api-keys"
       }
@@ -297,7 +292,6 @@ curl -sk -X POST \
         "id": "workspace",
         "provider_id": "agentdojo",
         "parameters": {
-          "model_id": "your-model-id",
           "attack": "tool_knowledge",
           "defense": "spotlighting_with_delimiting"
         }
@@ -316,15 +310,8 @@ curl -sk -H "Authorization: Bearer $TOKEN" -H "X-Tenant: eval-hub" \
 ```
 
 The `model.auth.secret_ref` should reference a k8s Secret in the same
-namespace containing keys like `OPENAI_COMPATIBLE_API_KEY` and
-`OPENAI_COMPATIBLE_BASE_URL`. EvalHub mounts this secret into the adapter
-pod at `/var/run/secrets/model/`.
-
-## Deploying on OpenShift with EvalHub
-
-See [demo/README.md](demo/README.md) for a full walkthrough that deploys
-EvalHub with the AgentDojo adapter on a fresh OpenShift cluster using the
-TrustyAI Service Operator (no ODH or RHOAI required).
+namespace containing keys like `OPENAI_COMPATIBLE_API_KEY`. The adapter
+reads these via the SDK's `read_model_auth_key()` helper.
 
 ## References
 

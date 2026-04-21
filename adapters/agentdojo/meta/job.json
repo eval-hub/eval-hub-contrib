@@ -5,10 +5,9 @@
   "benchmark_index": 0,
   "model": {
     "url": "http://127.0.0.1:8000/v1",
-    "name": "openai-compatible"
+    "name": "your-model-id"
   },
   "parameters": {
-    "model_id": "your-model-id",
     "benchmark_version": "v1.2.2",
     "suites": ["workspace"],
     "user_tasks": ["user_task_0"]

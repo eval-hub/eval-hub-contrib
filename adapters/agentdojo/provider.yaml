@@ -24,6 +24,7 @@ benchmarks:
     name: Workspace Suite
     description: Office productivity tasks (email, calendar, cloud drive)
     category: prompt_injection
+    primary_score: avg_utility
     metrics:
       - utility
       - security
@@ -36,6 +37,7 @@ benchmarks:
     name: Slack Suite
     description: Slack-like messaging tasks
     category: prompt_injection
+    primary_score: avg_utility
     metrics:
       - utility
       - security
@@ -48,6 +50,7 @@ benchmarks:
     name: Banking Suite
     description: Financial transaction tasks
     category: prompt_injection
+    primary_score: avg_utility
     metrics:
       - utility
       - security
@@ -60,6 +63,7 @@ benchmarks:
     name: Travel Suite
     description: Travel booking and planning tasks
     category: prompt_injection
+    primary_score: avg_utility
     metrics:
       - utility
       - security
@@ -72,6 +76,7 @@ benchmarks:
     name: All Suites
     description: Run all AgentDojo suites (workspace, slack, banking, travel)
     category: prompt_injection
+    primary_score: avg_utility
     metrics:
       - utility
       - security
@@ -81,10 +86,10 @@ benchmarks:
       - full
 
 parameters:
-  - name: model_id
+  - name: provider_type
     type: string
-    default: null
-    description: Model ID for openai-compatible endpoints
+    default: openai-compatible
+    description: AgentDojo provider type (e.g. openai-compatible, local, vllm_parsed)
 
   - name: benchmark_version
     type: string

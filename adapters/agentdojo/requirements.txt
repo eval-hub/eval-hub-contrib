@@ -2,7 +2,7 @@
 agentdojo @ git+https://github.com/dmaniloff/agentdojo.git@add-openai-compatible-provider
 
 # EvalHub SDK (framework adapter)
-eval-hub-sdk[adapter]==0.1.2
+eval-hub-sdk[adapter]==0.1.5
 
 # Required dependencies
 requests==2.32.5

@@ -157,7 +157,12 @@ class AgentDojoAdapter(FrameworkAdapter):
                 )
             )
 
+            provider_type = config.parameters.get(
+                "provider_type", "openai-compatible"
+            )
+
             self._run_agentdojo(
+                provider_type=provider_type,
                 model_name=config.model.name,
                 model_url=config.model.url,
                 suites=suites,
@@ -357,6 +362,7 @@ class AgentDojoAdapter(FrameworkAdapter):
 
     def _run_agentdojo(
         self,
+        provider_type: str,
         model_name: str,
         model_url: str,
         suites: list[str],
@@ -369,7 +375,8 @@ class AgentDojoAdapter(FrameworkAdapter):
         """Execute AgentDojo benchmark CLI.
 
         Args:
-            model_name: Model identifier (e.g., 'gpt-4o-2024-05-13')
+            provider_type: AgentDojo provider type (e.g., 'openai-compatible')
+            model_name: Model identifier (e.g., 'meta-llama/Llama-3.1-8B-Instruct')
             model_url: Optional model endpoint URL (for local/vllm models)
             suites: List of suite names to run
             attack: Attack name or None
@@ -382,36 +389,34 @@ class AgentDojoAdapter(FrameworkAdapter):
             RuntimeError: If AgentDojo CLI fails
         """
         logger.info(
-            f"Running AgentDojo: model={model_name}, suites={suites}, "
-            f"attack={attack}, defense={defense}, version={benchmark_version}"
+            f"Running AgentDojo: provider={provider_type}, model={model_name}, "
+            f"suites={suites}, attack={attack}, defense={defense}, "
+            f"version={benchmark_version}"
         )
 
         # Click 8.2+ matches enum choices by name, not value.
-        # Convert model value (e.g. "openai-compatible") to enum name ("OPENAI_COMPATIBLE").
+        # Convert provider value (e.g. "openai-compatible") to enum name ("OPENAI_COMPATIBLE").
         from agentdojo.models import ModelsEnum
 
         try:
-            cli_model_name = ModelsEnum(model_name).name
+            cli_provider = ModelsEnum(provider_type).name
         except ValueError:
-            cli_model_name = model_name
+            cli_provider = provider_type
 
         cmd = [
             sys.executable,
             "-m",
             "agentdojo.scripts.benchmark",
             "--model",
-            cli_model_name,
+            cli_provider,
+            "--model-id",
+            model_name,
             "--benchmark-version",
             benchmark_version,
             "--logdir",
             str(logdir),
             "--force-rerun",
         ]
-
-        # Pass model-id from parameters (used by openai-compatible and local models)
-        model_id = parameters.get("model_id")
-        if model_id:
-            cmd.extend(["--model-id", model_id])
 
         for suite in suites:
             cmd.extend(["--suite", suite])
@@ -452,28 +457,21 @@ class AgentDojoAdapter(FrameworkAdapter):
         for module in modules_to_load:
             cmd.extend(["--module-to-load", module])
 
-        # Load secrets from mounted volume (EvalHub mounts auth.secret_ref here)
-        env = os.environ.copy()
-        secrets_dir = Path("/var/run/secrets/model")
-        if secrets_dir.is_dir():
-            for secret_file in secrets_dir.iterdir():
-                if secret_file.is_file() and not secret_file.name.startswith("."):
-                    env[secret_file.name] = secret_file.read_text().strip()
-                    logger.info(f"Loaded secret from {secret_file.name}")
+        from evalhub.adapter.auth import read_model_auth_key
 
-        # Set environment for model providers
-        if model_name in ("local", "vllm_parsed") and model_url:
-            # Extract port from URL like http://localhost:8000/v1
+        env = os.environ.copy()
+
+        if provider_type in ("local", "vllm_parsed") and model_url:
             port = str(model_url).rstrip("/").split(":")[-1].split("/")[0]
             env["LOCAL_LLM_PORT"] = port
-        elif model_name == "openai-compatible" and model_url:
+        elif provider_type == "openai-compatible" and model_url:
             env["OPENAI_COMPATIBLE_BASE_URL"] = model_url
-            # Use OPENAI_COMPATIBLE_API_KEY from env if set, otherwise
-            # fall back to LITELLM_API_KEY for LiteLLM proxy compatibility
-            if "OPENAI_COMPATIBLE_API_KEY" not in env:
-                litellm_key = env.get("LITELLM_API_KEY")
-                if litellm_key:
-                    env["OPENAI_COMPATIBLE_API_KEY"] = litellm_key
+            api_key = (
+                read_model_auth_key("OPENAI_COMPATIBLE_API_KEY")
+                or read_model_auth_key("LITELLM_API_KEY")
+            )
+            if api_key:
+                env["OPENAI_COMPATIBLE_API_KEY"] = api_key
 
         timeout = parameters.get("timeout_seconds", 7200)
 
@@ -586,11 +584,10 @@ class AgentDojoAdapter(FrameworkAdapter):
             security = task.get("security", True)
             duration = task.get("duration", 0.0)
 
-            task_label = f"{suite_name}.{user_task_id}"
+            task_label = user_task_id
             if injection_task_id and injection_task_id != "none":
                 task_label += f".{injection_task_id}"
 
-            # Per-task utility
             evaluation_results.append(
                 EvaluationResult(
                     metric_name=f"{task_label}.utility",
@@ -633,7 +630,7 @@ class AgentDojoAdapter(FrameworkAdapter):
                 avg_utility = sum(utilities) / len(utilities)
                 evaluation_results.append(
                     EvaluationResult(
-                        metric_name=f"{suite_name}.avg_utility",
+                        metric_name="avg_utility",
                         metric_value=round(avg_utility, 4),
                         metric_type="float",
                         num_samples=len(utilities),
@@ -647,7 +644,7 @@ class AgentDojoAdapter(FrameworkAdapter):
                     avg_security = sum(securities) / len(securities)
                     evaluation_results.append(
                         EvaluationResult(
-                            metric_name=f"{suite_name}.avg_security",
+                            metric_name="avg_security",
                             metric_value=round(avg_security, 4),
                             metric_type="float",
                             num_samples=len(securities),
@@ -674,10 +671,10 @@ class AgentDojoAdapter(FrameworkAdapter):
         security_scores = []
 
         for r in results:
-            if r.metric_name.endswith(".avg_utility"):
+            if r.metric_name == "avg_utility":
                 if isinstance(r.metric_value, (int, float)):
                     utility_scores.append(float(r.metric_value))
-            elif r.metric_name.endswith(".avg_security"):
+            elif r.metric_name == "avg_security":
                 if isinstance(r.metric_value, (int, float)):
                     security_scores.append(float(r.metric_value))
 
@@ -778,7 +775,7 @@ class AgentDojoAdapter(FrameworkAdapter):
             f.write("-" * 70 + "\n")
             for result in evaluation_results:
                 # Only show aggregate metrics in summary
-                if result.metric_name.endswith((".avg_utility", ".avg_security")):
+                if result.metric_name in ("avg_utility", "avg_security"):
                     value = result.metric_value
                     if isinstance(value, float):
                         f.write(f"{result.metric_name}: {value * 100:.2f}%\n")
