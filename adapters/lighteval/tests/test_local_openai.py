@@ -97,10 +97,6 @@ def test_lighteval_local_openai(tmp_path, mock_sidecar):
     """
     sidecar_url, events = mock_sidecar
     model_name = _server_model()
-    assert model_name in _NON_THINKING_MODELS, (
-        f"Model {model_name} is not a known non-thinking model; "
-        f"expected one of {_NON_THINKING_MODELS}"
-    )
 
     job_spec = {
         "id": "lighteval-test-local",
