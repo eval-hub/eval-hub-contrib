@@ -22,7 +22,10 @@ runtime:
 benchmarks:
   - id: agentic-evaluation
     name: Agentic Evaluation
-    description: Agentic evaluation that identifies error categories from agent traces and quantifies their frequencies
+    description: >
+      Default agentic CLEAR run: clusters recurring failure patterns across agents using the
+      standard agent-mode judge criteria (correctness, completeness, clarity, etc.). Use this
+      when you want IBM CLEAR’s baseline “what went wrong and how often.”
     category: error-analysis
     metrics:
       - total_interactions
@@ -36,3 +39,39 @@ benchmarks:
     tags:
       - erroranalysis
       - ibmclear
+
+  - id: agentic-evaluation-custom-criteria
+    name: Agentic evaluation (custom criteria)
+    description: >
+      Caller supplies parameters.evaluation_criteria (criterion name -> description). Required for this benchmark id.
+    category: error-analysis
+    metrics:
+      - total_interactions
+      - total_issues
+      - interactions_with_issues
+      - interactions_no_issues
+      - total_agents
+      - pct_interactions_with_issues
+      - issues_per_interaction
+      - average_score
+    tags:
+      - ibmclear
+      - custom-rubric
+
+  - id: agentic-evaluation-predefined-issues
+    name: Agentic evaluation (predefined issues)
+    description: >
+      Caller supplies parameters.predefined_issues (list of issue strings). CLEAR skips automatic issue discovery.
+    category: error-analysis
+    metrics:
+      - total_interactions
+      - total_issues
+      - interactions_with_issues
+      - interactions_no_issues
+      - total_agents
+      - pct_interactions_with_issues
+      - issues_per_interaction
+      - average_score
+    tags:
+      - ibmclear
+      - predefined-issues

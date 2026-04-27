@@ -2,7 +2,8 @@ eval-hub-sdk[adapter]==0.1.5
 # IBM CLEAR (agentic): PyPI `clear-eval` (e.g. 1.0.8) does not ship `clear_eval.agentic`—verified
 # the wheel has no agentic tree. This adapter needs a GitHub tarball/commit until IBM publishes
 # agentic on PyPI (then `clear-eval==...` or extras). See https://pypi.org/project/clear-eval/
-clear-eval @ https://github.com/IBM/CLEAR/archive/5d4804cde5bd3bda9e8a6f7abcb9aa2d2c8e1968.tar.gz
+# Pinned to IBM/CLEAR @ main (refresh this tarball SHA when you need newer upstream fixes).
+clear-eval @ https://github.com/IBM/CLEAR/archive/273a665e79aff678ba12b40a47b3a42042db8a29.tar.gz
 
 pandas>=2.0.0
 pydantic>=2.0.0
