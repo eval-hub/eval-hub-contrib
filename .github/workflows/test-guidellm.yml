@@ -92,6 +92,8 @@ jobs:
             docker.io/vllm/vllm-openai-cpu:v0.19.1 \
             --model Qwen/Qwen2.5-0.5B-Instruct \
             --dtype bfloat16
+          docker logs -f vllm-cpu &
+          LOGS_PID=$!
           echo "Waiting for vLLM health endpoint..."
           for i in $(seq 1 60); do
             if curl -sf http://localhost:11434/health >/dev/null 2>&1; then
@@ -100,11 +102,15 @@ jobs:
             fi
             if [ "$i" -eq 60 ]; then
               echo "vLLM failed to start within 300s"
-              docker logs vllm-cpu
+              kill $LOGS_PID 2>/dev/null || true
               exit 1
             fi
             sleep 5
           done
+          kill $LOGS_PID 2>/dev/null || true
+          # Docker writes to the HF cache as root; fix ownership so GuideLLM
+          # (which downloads the gpt2 tokenizer) can write to the _same_ cache.
+          sudo chown -R $(id -u):$(id -g) ~/.cache/huggingface
       - name: Run local tests
         working-directory: adapters/guidellm
         run: pytest tests/ -v -s --log-cli-level=INFO -m "local and openai_endpoint"
