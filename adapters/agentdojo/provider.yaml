@@ -27,6 +27,8 @@ benchmarks:
     primary_score:
       metric: avg_utility
       lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
     metrics:
       - utility
       - security
@@ -42,6 +44,8 @@ benchmarks:
     primary_score:
       metric: avg_utility
       lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
     metrics:
       - utility
       - security
@@ -57,6 +61,8 @@ benchmarks:
     primary_score:
       metric: avg_utility
       lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
     metrics:
       - utility
       - security
@@ -72,6 +78,8 @@ benchmarks:
     primary_score:
       metric: avg_utility
       lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
     metrics:
       - utility
       - security
@@ -87,6 +95,8 @@ benchmarks:
     primary_score:
       metric: avg_utility
       lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
     metrics:
       - utility
       - security
