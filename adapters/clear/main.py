@@ -123,18 +123,36 @@ def _find_clear_results_json(output_dir: Path, eval_model_name: str) -> Path | N
 
 def _preserve_html_reports_from_clear_output(output_dir: Path) -> list[Path]:
     """
-    Copy HTML reports from CLEAR subdirs to output_dir before cleanup removes them.
+    Preserve CLEAR HTML artifacts before cleanup.
 
-    If IBM CLEAR later writes *.html under step_by_step/ or similar, we keep copies at the
-    run root (clear_html__*) so MLflow/OCI and local inspection still see them after cleanup.
+    CLEAR may write a static dashboard (e.g., `step_by_step/clear_results.html`) and other
+    HTML files under intermediate directories. We copy key files to the run root so they
+    survive adapter cleanup and can be shipped via MLflow/OCI.
     """
     saved: list[Path] = []
+
+    # Keep the static dashboard "next to JSON" at the run root.
+    step_static = output_dir / "step_by_step"
+    for name in ("clear_results.html", "clear_results.dashboard_data.json"):
+        src = step_static / name
+        if src.is_file():
+            dest = output_dir / name
+            try:
+                shutil.copy2(src, dest)
+                saved.append(dest)
+                logger.info("Preserved CLEAR dashboard: %s -> %s", src, dest.name)
+            except OSError as exc:
+                logger.warning("Could not preserve %s: %s", src, exc)
+
     for sub in ("step_by_step", "full_trajectory", "traces_data", "clear_data", "clear_results"):
         base = output_dir / sub
         if not base.is_dir():
             continue
         for p in sorted(base.rglob("*.html")):
             if not p.is_file():
+                continue
+            if p.name == "clear_results.html" and p.parent == step_static:
+                # Already copied above with a stable name.
                 continue
             rel = p.relative_to(output_dir)
             tag = "__".join(rel.parts).replace(" ", "_")
