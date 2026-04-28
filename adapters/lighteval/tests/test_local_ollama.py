@@ -101,7 +101,9 @@ def test_lighteval_local_ollama(tmp_path, mock_sidecar):
         "callback_url": sidecar_url,
         "timeout_seconds": 120,
     }
-    job_path = tmp_path / "job.json"
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    job_path = meta_dir / "job.json"
     job_path.write_text(json.dumps(job_spec))
 
     # Run the adapter
