@@ -61,4 +61,56 @@ jobs:
           ollama pull qwen2.5:0.5b
       - name: Run local tests
         working-directory: adapters/guidellm
-        run: pytest tests/ -v -m local
+        run: pytest tests/ -v -s --log-cli-level=INFO -m "local and openai_endpoint"
+
+  test-local-vllm-cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install all dependencies
+        working-directory: adapters/guidellm
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-qwen2.5-0.5b-instruct
+      - name: Start vLLM-CPU server
+        run: |
+          docker run --rm --detach \
+            --name vllm-cpu \
+            --shm-size=4g \
+            -p 11434:8000 \
+            -v ~/.cache/huggingface:/root/.cache/huggingface \
+            -e VLLM_CPU_KVCACHE_SPACE=4 \
+            docker.io/vllm/vllm-openai-cpu:v0.19.1 \
+            --model Qwen/Qwen2.5-0.5B-Instruct \
+            --dtype bfloat16
+          docker logs -f vllm-cpu &
+          LOGS_PID=$!
+          echo "Waiting for vLLM health endpoint..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:11434/health >/dev/null 2>&1; then
+              echo "vLLM ready (after ${i}x5s)"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "vLLM failed to start within 300s"
+              kill $LOGS_PID 2>/dev/null || true
+              exit 1
+            fi
+            sleep 5
+          done
+          kill $LOGS_PID 2>/dev/null || true
+          # Docker writes to the HF cache as root; fix ownership so GuideLLM
+          # (which downloads the gpt2 tokenizer) can write to the _same_ cache.
+          sudo chown -R $(id -u):$(id -g) ~/.cache/huggingface
+      - name: Run local tests
+        working-directory: adapters/guidellm
+        run: pytest tests/ -v -s --log-cli-level=INFO -m "local and openai_endpoint"

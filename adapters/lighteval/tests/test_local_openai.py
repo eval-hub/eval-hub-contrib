@@ -1,7 +1,8 @@
-"""Local integration test for the LightEval adapter against a real Ollama instance.
+"""Local integration test for the LightEval adapter against a real OpenAI-compatible endpoint.
 
 Requires:
-- Ollama running at http://localhost:11434 with a model loaded
+- An OpenAI-compatible server running at http://localhost:11434 with a model loaded
+  (e.g. Ollama, vLLM-CPU, or any server exposing /v1/models and /v1/chat/completions)
 - The adapter venv with all dependencies installed
 
 The test spins up a mock eval-hub sidecar HTTP server, runs the full adapter
@@ -20,22 +21,34 @@ from evalhub.adapter import DefaultCallbacks
 from main import LightEvalAdapter
 
 
-# Must be a non-thinking model. Thinking models (e.g. qwen3) wrap output in
-# <think>...</think> tags.  Ollama's OpenAI-compatible API places all thinking
-# tokens in a separate "reasoning" field, leaving "content" empty until
-# reasoning finishes -- which exhausts the task's token budget.  LightEval
-# reads "content", gets an empty string, and every metric evaluates to zero.
-OLLAMA_MODEL = "qwen2.5:0.5b"
+# Must be a non-thinking model.  Thinking models (e.g. qwen3) wrap output in
+# <think>…</think> tags.  At least Ollama's OpenAI-compatible API moves all
+# thinking tokens into a separate "reasoning" field, leaving "content" empty.
+# LightEval reads "content", gets an empty string, and every metric evaluates
+# to zero.  This behaviour may be Ollama-specific, but since both Ollama and
+# vLLM are actively used serving runtimes we restrict to models that are known
+# to work correctly across both.
+_NON_THINKING_MODELS = {"qwen2.5:0.5b", "Qwen/Qwen2.5-0.5B-Instruct"}
 
 
-def _ollama_has_model():
-    """Check if Ollama is reachable and serves the required non-thinking model."""
+def _server_available():
+    """Check if the server is reachable and serves a known non-thinking model."""
     try:
         resp = requests.get("http://localhost:11434/v1/models", timeout=3)
-        ids = [m["id"] for m in resp.json().get("data", [])]
-        return OLLAMA_MODEL in ids
+        ids = {m["id"] for m in resp.json().get("data", [])}
+        return bool(ids & _NON_THINKING_MODELS)
     except Exception:
         return False
+
+
+def _server_model():
+    """Return the first available non-thinking model name from the server."""
+    resp = requests.get("http://localhost:11434/v1/models", timeout=3)
+    ids = [m["id"] for m in resp.json()["data"]]
+    for mid in ids:
+        if mid in _NON_THINKING_MODELS:
+            return mid
+    raise RuntimeError(f"No non-thinking model found on server; available: {ids}")
 
 
 # ── mock sidecar ──────────────────────────────────────────────────────
@@ -72,17 +85,19 @@ def mock_sidecar():
 
 
 @pytest.mark.local
-@pytest.mark.ollama
-@pytest.mark.skipif(not _ollama_has_model(), reason=f"Ollama not running or {OLLAMA_MODEL} not available")
-def test_lighteval_local_ollama(tmp_path, mock_sidecar):
-    """Run a minimal LightEval benchmark against Ollama and verify sidecar events.
+@pytest.mark.openai_endpoint
+@pytest.mark.skipif(not _server_available(), reason="OpenAI-compatible server not running on localhost:11434")
+def test_lighteval_local_openai(tmp_path, mock_sidecar):
+    """Run a minimal LightEval benchmark against an OpenAI-compatible endpoint and verify sidecar events.
 
     Uses gsm8k (extractive_match metric) with a non-thinking model so that
-    the generative endpoint actually produces scorable content.
+    the generative endpoint actually produces scorable content.  Thinking
+    models (e.g. qwen3) place all reasoning tokens in a separate field,
+    leaving "content" empty and every metric at zero.
     """
     sidecar_url, events = mock_sidecar
+    model_name = _server_model()
 
-    # Write a minimal job spec pointing at the mock sidecar
     job_spec = {
         "id": "lighteval-test-local",
         "provider_id": "lighteval",
@@ -90,7 +105,7 @@ def test_lighteval_local_ollama(tmp_path, mock_sidecar):
         "benchmark_index": 0,
         "model": {
             "url": "http://localhost:11434/v1",
-            "name": OLLAMA_MODEL,
+            "name": model_name,
         },
         "num_examples": 20,
         "parameters": {
@@ -113,7 +128,7 @@ def test_lighteval_local_ollama(tmp_path, mock_sidecar):
     # ── assert adapter results ────────────────────────────────────────
     assert results.id == "lighteval-test-local"
     assert results.benchmark_id == "gsm8k"
-    assert results.model_name == OLLAMA_MODEL
+    assert results.model_name == model_name
     assert results.duration_seconds > 0
 
     # Should have extracted at least one metric (extractive_match for gsm8k)

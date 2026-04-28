@@ -1,7 +1,8 @@
-"""Local integration test for the GuideLLM adapter against a real Ollama instance.
+"""Local integration test for the GuideLLM adapter against a real OpenAI-compatible endpoint.
 
 Requires:
-- Ollama running at http://localhost:11434 with a model loaded
+- An OpenAI-compatible server running at http://localhost:11434 with a model loaded
+  (e.g. Ollama, vLLM-CPU, or any server exposing /v1/models and /v1/chat/completions)
 - The adapter venv with all dependencies installed
 
 The test spins up a mock eval-hub sidecar HTTP server, runs the full adapter
@@ -10,7 +11,6 @@ and final metrics.
 """
 
 import json
-import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -21,8 +21,8 @@ from evalhub.adapter import DefaultCallbacks
 from main import GuideLLMAdapter
 
 
-def _ollama_available():
-    """Check if Ollama is reachable and has at least one model."""
+def _server_available():
+    """Check if the OpenAI-compatible server is reachable and has at least one model."""
     try:
         resp = requests.get("http://localhost:11434/v1/models", timeout=3)
         data = resp.json()
@@ -31,10 +31,18 @@ def _ollama_available():
         return False
 
 
-def _ollama_model():
-    """Return the first available Ollama model name."""
+def _server_model():
+    """Return the first available model name from the server."""
     resp = requests.get("http://localhost:11434/v1/models", timeout=3)
     return resp.json()["data"][0]["id"]
+
+
+def _server_has_health():
+    """Check if the server exposes a /health endpoint (vLLM does, Ollama doesn't)."""
+    try:
+        return requests.get("http://localhost:11434/health", timeout=3).status_code == 200
+    except Exception:
+        return False
 
 
 # ── mock sidecar ──────────────────────────────────────────────────────
@@ -71,14 +79,25 @@ def mock_sidecar():
 
 
 @pytest.mark.local
-@pytest.mark.ollama
-@pytest.mark.skipif(not _ollama_available(), reason="Ollama not running on localhost:11434")
-def test_guidellm_local_ollama(tmp_path, mock_sidecar):
-    """Run a minimal GuideLLM benchmark against Ollama and verify sidecar events."""
+@pytest.mark.openai_endpoint
+@pytest.mark.skipif(not _server_available(), reason="OpenAI-compatible server not running on localhost:11434")
+def test_guidellm_local_openai(tmp_path, mock_sidecar):
+    """Run a minimal GuideLLM benchmark against an OpenAI-compatible endpoint and verify sidecar events."""
     sidecar_url, events = mock_sidecar
-    model_name = _ollama_model()
+    model_name = _server_model()
 
-    # Write a minimal job spec pointing at the mock sidecar
+    params = {
+        "profile": "synchronous",
+        "max_requests": 2,
+        "data": "prompt_tokens=30,output_tokens=10",
+        "request_type": "chat_completions",
+        "warmup": "0",
+        "detect_saturation": False,
+    }
+    # Ollama doesn't expose /health, so skip GuideLLM's backend validation
+    if not _server_has_health():
+        params["backend_kwargs"] = {"validate_backend": False}
+
     job_spec = {
         "id": "guidellm-test-local",
         "provider_id": "guidellm",
@@ -88,15 +107,7 @@ def test_guidellm_local_ollama(tmp_path, mock_sidecar):
             "url": "http://localhost:11434/v1",
             "name": model_name,
         },
-        "parameters": {
-            "profile": "synchronous",
-            "max_requests": 2,
-            "data": "prompt_tokens=30,output_tokens=10",
-            "request_type": "chat_completions",
-            "warmup": "0",
-            "detect_saturation": False,
-            "backend_kwargs": {"validate_backend": False},
-        },
+        "parameters": params,
         "callback_url": sidecar_url,
         "timeout_seconds": 120,
     }
