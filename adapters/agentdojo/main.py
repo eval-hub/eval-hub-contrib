@@ -472,6 +472,9 @@ class AgentDojoAdapter(FrameworkAdapter):
             )
             if api_key:
                 env["OPENAI_COMPATIBLE_API_KEY"] = api_key
+            else:
+                logger.warning("No API key found for openai-compatible provider, using dummy key")
+                env["OPENAI_COMPATIBLE_API_KEY"] = "dummy"
 
         timeout = parameters.get("timeout_seconds", 7200)
 
