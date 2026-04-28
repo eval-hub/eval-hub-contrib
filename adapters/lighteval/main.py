@@ -204,7 +204,7 @@ class LightEvalAdapter(FrameworkAdapter):
                 )
                 oci_artifact = callbacks.create_oci_artifact(
                     OCIArtifactSpec(
-                        files_path=Path("/tmp/lighteval_results") / config.id,
+                        files_path=output_files[0].parent,
                         coordinates=coords,
                     )
                 )
@@ -637,7 +637,10 @@ class LightEvalAdapter(FrameworkAdapter):
         Returns:
             List of paths to saved files
         """
-        output_dir = Path("/tmp/lighteval_results") / job_id
+        if self.local_jobs_base_path is not None:
+            output_dir = self.local_jobs_base_path / "results"
+        else:
+            output_dir = Path(__file__).parent / "results"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         files = []
