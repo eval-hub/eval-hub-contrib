@@ -3,6 +3,9 @@ FROM registry.access.redhat.com/ubi9/python-311:latest
 WORKDIR /app
 
 USER 0
+# clear-eval is installed from git in requirements.txt; pip clone needs git in the image.
+# (ubi9/python-311 provides dnf; microdnf is not guaranteed.)
+RUN dnf install -y git && dnf clean all
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

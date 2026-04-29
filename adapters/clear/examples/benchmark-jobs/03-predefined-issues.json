@@ -1,0 +1,38 @@
+{
+  "id": "local-bm-03-predefined-issues",
+  "provider_id": "ibm-clear",
+  "benchmark_id": "agentic-evaluation-predefined-issues",
+  "benchmark_index": 0,
+  "experiment_name": "clear-agentic-eval-example",
+  "model": {
+    "url": "http://127.0.0.1:8000/v1",
+    "name": "example-model",
+    "auth": {
+      "secret_ref": "your-model-api-key-secret"
+    }
+  },
+  "parameters": {
+    "data_dir": "input-trace",
+    "eval_model_name": "openai/example-model",
+    "provider": "openai",
+    "agent_framework": "langgraph",
+    "observability_framework": "mlflow",
+    "inference_backend": "litellm",
+    "predefined_issues": [
+      "Incomplete reasoning — jumps to conclusions",
+      "Incorrect tool selection for the task",
+      "Ignored user constraint or policy"
+    ]
+  },
+  "test_data_ref": {
+    "s3": {
+      "bucket": "clear-traces",
+      "path": "traces/",
+      "secret_ref": {
+        "name": "clear-traces-bucket",
+        "namespace": "your-namespace"
+      }
+    }
+  },
+  "callback_url": "http://localhost:8080"
+}

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from evalhub.adapter import (
+    DefaultCallbacks,
     ErrorInfo,
     EvaluationResult,
     FrameworkAdapter,
@@ -49,6 +50,31 @@ except ImportError as exc:
     ) from exc
 
 logger = logging.getLogger(__name__)
+
+
+def _local_only_run() -> bool:
+    """True when running without Eval Hub callbacks or MLflow (local iteration on job.json)."""
+    mode = os.getenv("EVALHUB_MODE", "").strip().lower()
+    if mode == "local":
+        return True
+    return os.getenv("CLEAR_LOCAL_ONLY", "").strip().lower() in ("1", "true", "yes")
+
+
+def _callbacks_for_adapter(adapter: FrameworkAdapter) -> JobCallbacks:
+    """DefaultCallbacks with no sidecar when local; otherwise mirror job_spec.callback_url."""
+    if _local_only_run():
+        return DefaultCallbacks(
+            job_id=adapter.job_spec.id,
+            provider_id=adapter.job_spec.provider_id,
+            benchmark_id=adapter.job_spec.benchmark_id,
+            benchmark_index=adapter.job_spec.benchmark_index,
+            sidecar_url=None,
+            insecure=adapter.settings.evalhub_insecure,
+            oci_auth_config_path=adapter.settings.oci_auth_config_path,
+            oci_insecure=adapter.settings.oci_insecure,
+            mlflow_backend=adapter.settings.mlflow_backend,
+        )
+    return DefaultCallbacks.from_adapter(adapter)
 
 
 def _run_clear_unified_pipeline(agentic_config: dict[str, Any], output_dir: Path) -> None:
@@ -81,6 +107,10 @@ def _find_clear_results_json(output_dir: Path, eval_model_name: str) -> Path | N
     )
     if unified.is_file():
         return unified
+    # Agentic pipeline writes here before cleanup (see save_comprehensive_json_results).
+    step_flat = output_dir / "step_by_step" / "clear_results.json"
+    if step_flat.is_file():
+        return step_flat
     legacy = output_dir / "clear_results" / eval_model_name / "clear_results.json"
     if legacy.is_file():
         return legacy
@@ -89,6 +119,53 @@ def _find_clear_results_json(output_dir: Path, eval_model_name: str) -> Path | N
         return flat
     matches = sorted(output_dir.rglob("clear_results.json"))
     return matches[0] if matches else None
+
+
+def _preserve_html_reports_from_clear_output(output_dir: Path) -> list[Path]:
+    """
+    Preserve CLEAR HTML artifacts before cleanup.
+
+    CLEAR may write a static dashboard (e.g., `step_by_step/clear_results.html`) and other
+    HTML files under intermediate directories. We copy key files to the run root so they
+    survive adapter cleanup and can be shipped via MLflow/OCI.
+    """
+    saved: list[Path] = []
+
+    # Keep the static dashboard "next to JSON" at the run root.
+    step_static = output_dir / "step_by_step"
+    for name in ("clear_results.html", "clear_results.dashboard_data.json"):
+        src = step_static / name
+        if src.is_file():
+            dest = output_dir / name
+            try:
+                shutil.copy2(src, dest)
+                saved.append(dest)
+                logger.info("Preserved CLEAR dashboard: %s -> %s", src, dest.name)
+            except OSError as exc:
+                logger.warning("Could not preserve %s: %s", src, exc)
+
+    for sub in ("step_by_step", "full_trajectory", "traces_data", "clear_data", "clear_results"):
+        base = output_dir / sub
+        if not base.is_dir():
+            continue
+        for p in sorted(base.rglob("*.html")):
+            if not p.is_file():
+                continue
+            if p.name == "clear_results.html" and p.parent == step_static:
+                # Already copied above with a stable name.
+                continue
+            rel = p.relative_to(output_dir)
+            tag = "__".join(rel.parts).replace(" ", "_")
+            if len(tag) > 200:
+                tag = tag[:180] + "__etc"
+            dest = output_dir / f"clear_html__{tag}"
+            try:
+                shutil.copy2(p, dest)
+                saved.append(dest)
+                logger.info("Preserved CLEAR HTML: %s -> %s", p, dest.name)
+            except OSError as exc:
+                logger.warning("Could not preserve HTML %s: %s", p, exc)
+    return saved
 
 
 class ClearAdapter(FrameworkAdapter):
@@ -260,6 +337,7 @@ class ClearAdapter(FrameworkAdapter):
                 config, evaluation_results, overall_score, num_evaluated
             )
 
+            clear_html_artifacts = _preserve_html_reports_from_clear_output(output_dir)
             self._cleanup_intermediate_files(output_dir, str(json_results_path))
 
             final_results_path = output_dir / "clear_results.json"
@@ -270,6 +348,7 @@ class ClearAdapter(FrameworkAdapter):
                 evaluation_results=evaluation_results,
                 overall_score=overall_score,
                 num_evaluated=num_evaluated,
+                extra_files=clear_html_artifacts,
             )
 
             duration = time.time() - start_time
@@ -291,7 +370,7 @@ class ClearAdapter(FrameworkAdapter):
                 oci_artifact=oci_artifact,
             )
             rid = self._save_results_to_mlflow(
-                callbacks, config, job_results, output_dir, metrics_summary
+                callbacks, config, job_results, output_dir, metrics_summary, clear_html_artifacts
             )
             if rid:
                 job_results = job_results.model_copy(update={"mlflow_run_id": rid})
@@ -340,6 +419,29 @@ class ClearAdapter(FrameworkAdapter):
 
         if "provider" not in config.parameters:
             raise ValueError("provider is required in parameters")
+
+        self._validate_benchmark_contract(config)
+
+    def _validate_benchmark_contract(self, config: JobSpec) -> None:
+        """Enforce required parameters for catalog benchmark ids (see provider.yaml)."""
+        bid = config.benchmark_id or ""
+        params = config.parameters or {}
+
+        if bid == "agentic-evaluation-custom-criteria":
+            ec = params.get("evaluation_criteria")
+            if not ec or not isinstance(ec, dict) or len(ec) == 0:
+                raise ValueError(
+                    "benchmark_id agentic-evaluation-custom-criteria requires a non-empty "
+                    "parameters.evaluation_criteria object (criterion name -> description)."
+                )
+
+        if bid == "agentic-evaluation-predefined-issues":
+            pi = params.get("predefined_issues")
+            if not pi or not isinstance(pi, list) or len(pi) == 0:
+                raise ValueError(
+                    "benchmark_id agentic-evaluation-predefined-issues requires a non-empty "
+                    "parameters.predefined_issues list of strings."
+                )
 
     @staticmethod
     def _ensure_openai_api_key_for_litellm() -> None:
@@ -409,6 +511,11 @@ class ClearAdapter(FrameworkAdapter):
             agentic_config["eval_model_params"] = config.parameters["eval_model_params"]
         else:
             agentic_config["eval_model_params"] = {"temperature": 0.0, "max_tokens": 8096}
+
+        if config.parameters and "evaluation_criteria" in config.parameters:
+            agentic_config["evaluation_criteria"] = config.parameters["evaluation_criteria"]
+        if config.parameters and "predefined_issues" in config.parameters:
+            agentic_config["predefined_issues"] = config.parameters["predefined_issues"]
 
         return agentic_config
 
@@ -557,6 +664,7 @@ class ClearAdapter(FrameworkAdapter):
         evaluation_results: list[EvaluationResult],
         overall_score: Optional[float],
         num_evaluated: int,
+        extra_files: Optional[list[Path]] = None,
     ) -> Optional[OCIArtifactResult]:
         if not config.exports or not config.exports.oci:
             return None
@@ -591,6 +699,13 @@ class ClearAdapter(FrameworkAdapter):
             encoding="utf-8",
         )
 
+        for html_f in extra_files or []:
+            if isinstance(html_f, Path) and html_f.is_file():
+                try:
+                    shutil.copy2(html_f, results_dir / html_f.name)
+                except OSError as exc:
+                    logger.warning("OCI: could not copy %s: %s", html_f, exc)
+
         oci_artifact = callbacks.create_oci_artifact(
             OCIArtifactSpec(
                 files_path=results_dir,
@@ -624,7 +739,12 @@ class ClearAdapter(FrameworkAdapter):
         results: JobResults,
         output_dir: Path,
         metrics_summary: dict[str, Any],
+        clear_html_artifacts: Optional[list[Path]] = None,
     ) -> str | None:
+        if _local_only_run():
+            logger.info("MLflow skipped: local-only run (EVALHUB_MODE=local or CLEAR_LOCAL_ONLY=1)")
+            return None
+
         name = (config.experiment_name or "").strip()
         if not name:
             raw = config.parameters.get("mlflow_experiment_name")
@@ -644,22 +764,34 @@ class ClearAdapter(FrameworkAdapter):
 
         summary_bytes = json.dumps(metrics_summary, indent=2, default=str).encode("utf-8")
 
+        mlflow_artifacts: list[MlflowArtifact] = [
+            MlflowArtifact(
+                "clear_results.json",
+                clear_path.read_bytes(),
+                "application/json",
+            ),
+            MlflowArtifact(
+                "metrics_summary.json",
+                summary_bytes,
+                "application/json",
+            ),
+        ]
+        for h in clear_html_artifacts or []:
+            if h.is_file():
+                mlflow_artifacts.append(
+                    MlflowArtifact(
+                        h.name,
+                        h.read_bytes(),
+                        "text/html",
+                    )
+                )
+                logger.info("MLflow artifact: %s (HTML from CLEAR)", h.name)
+
         try:
             return callbacks.mlflow.save(
                 results,
                 spec,
-                artifacts=[
-                    MlflowArtifact(
-                        "clear_results.json",
-                        clear_path.read_bytes(),
-                        "application/json",
-                    ),
-                    MlflowArtifact(
-                        "metrics_summary.json",
-                        summary_bytes,
-                        "application/json",
-                    ),
-                ],
+                artifacts=mlflow_artifacts,
             )
         except Exception as e:
             logger.warning("MLflow artifact save failed (job still completes): %s", e, exc_info=True)
@@ -685,8 +817,6 @@ class ClearAdapter(FrameworkAdapter):
 
 def main() -> None:
     """Load JobSpec, run ClearAdapter, emit JobResults via DefaultCallbacks."""
-    from evalhub.adapter import DefaultCallbacks
-
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
         level=getattr(logging, log_level, logging.INFO),
@@ -698,7 +828,7 @@ def main() -> None:
         adapter = ClearAdapter(job_spec_path=job_spec_path)
         logger.info("Job %s benchmark=%s model=%s", adapter.job_spec.id, adapter.job_spec.benchmark_id, adapter.job_spec.model.name)
 
-        callbacks = DefaultCallbacks.from_adapter(adapter)
+        callbacks = _callbacks_for_adapter(adapter)
 
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
 
