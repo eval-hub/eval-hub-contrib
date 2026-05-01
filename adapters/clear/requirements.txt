@@ -1,3 +1,5 @@
+# Use Python 3.11 or 3.12 (3.13 often works). Python 3.14+ fails dependency resolution:
+# CLEAR pulls ibm-watsonx-ai, which currently requires Python <3.14 on PyPI.
 eval-hub-sdk[adapter]==0.1.5
 # IBM CLEAR (agentic): PyPI `clear-eval` (e.g. 1.0.8) does not ship `clear_eval.agentic`—verified
 # the wheel has no agentic tree. Install from IBM/CLEAR until agentic is on PyPI.
@@ -7,5 +9,6 @@ clear-eval @ git+https://github.com/IBM/CLEAR.git@v1.1.0
 pandas>=2.0.0
 pydantic>=2.0.0
 
-# Optional (local MLflow): if artifact upload needs the upstream Python client, set
-# EVALHUB_MLFLOW_BACKEND=upstream and: pip install mlflow-skinny
+# MLflow: experiment trace import (parameters.mlflow_traces_experiment_*) uses MlflowClient.search_traces.
+mlflow>=2.16
+# Optional: for MLflow artifact upload only, set EVALHUB_MLFLOW_BACKEND=upstream and use mlflow-skinny.

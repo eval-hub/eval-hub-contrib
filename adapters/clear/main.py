@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """IBM CLEAR agentic adapter for eval-hub.
 
-Loads a JobSpec, resolves trace JSON input, runs CLEAR's step-by-step agentic
-pipeline (prepare traces → judge / analyze → clear_results.json), then maps
-CLEAR output to evalhub-sdk JobResults and optional MLflow or OCI artifacts.
+Loads a JobSpec, resolves trace JSON input (MLflow experiment traces via
+``mlflow_traces_experiment_*``, ``parameters.data_dir`` / mounts, or pod paths), runs
+CLEAR's step-by-step agentic pipeline (prepare traces → judge / analyze →
+clear_results.json), then maps CLEAR output to evalhub-sdk JobResults and
+optional MLflow or OCI artifacts.
 """
 
 from __future__ import annotations
@@ -52,12 +54,148 @@ except ImportError as exc:
 logger = logging.getLogger(__name__)
 
 
+def _mlflow_traces_source_configured(parameters: dict[str, Any]) -> bool:
+    """True when job should pull raw trace JSON from MLflow instead of a local directory."""
+    if not parameters:
+        return False
+    exp_id = parameters.get("mlflow_traces_experiment_id")
+    if exp_id is not None and str(exp_id).strip():
+        return True
+    name = parameters.get("mlflow_traces_experiment_name")
+    return isinstance(name, str) and bool(name.strip())
+
+
+def _materialize_traces_from_mlflow(parameters: dict[str, Any]) -> tuple[str, Path]:
+    """
+    Fetch traces via MlflowClient.search_traces and write one JSON file per trace.
+
+    Requires ``pip install 'mlflow>=2.16'`` (Tracing APIs). Filenames look like
+    ``tr-<trace_id>.json``, compatible with CLEAR's raw-trace layout.
+
+    Returns:
+        (data_dir path, temp directory path to delete after the run)
+    """
+    try:
+        from mlflow.tracking import MlflowClient
+    except ImportError as exc:
+        raise ImportError(
+            "Fetching traces from an MLflow experiment requires the mlflow package. "
+            "Install with: pip install 'mlflow>=2.16'"
+        ) from exc
+
+    tracking_uri = parameters.get("mlflow_tracking_uri") or os.getenv("MLFLOW_TRACKING_URI")
+    client = MlflowClient(tracking_uri=tracking_uri) if tracking_uri else MlflowClient()
+
+    exp_id_raw = parameters.get("mlflow_traces_experiment_id")
+    exp_name = parameters.get("mlflow_traces_experiment_name")
+    if exp_id_raw is not None and str(exp_id_raw).strip():
+        experiment_id = str(exp_id_raw).strip()
+    elif isinstance(exp_name, str) and exp_name.strip():
+        exp = client.get_experiment_by_name(exp_name.strip())
+        if exp is None:
+            raise ValueError(f"MLflow experiment not found: {exp_name.strip()!r}")
+        experiment_id = exp.experiment_id
+    else:
+        raise ValueError(
+            "Set parameters.mlflow_traces_experiment_id or parameters.mlflow_traces_experiment_name"
+        )
+
+    max_results = int(parameters.get("mlflow_traces_max_results", 500))
+    filter_string = parameters.get("mlflow_traces_filter")
+    if not isinstance(filter_string, str) or not filter_string.strip():
+        filter_string = None
+    include_spans = bool(parameters.get("mlflow_traces_include_spans", True))
+    run_id = parameters.get("mlflow_traces_run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        run_id = None
+
+    tmp_root = Path(tempfile.mkdtemp(prefix="clear_mlflow_traces_"))
+    traces_written = 0
+    try:
+        collected = 0
+        page_token: str | None = None
+        while collected < max_results:
+            page_size = min(100, max_results - collected)
+            if page_size <= 0:
+                break
+            kwargs: dict[str, Any] = {
+                "experiment_ids": [experiment_id],
+                "max_results": page_size,
+                "include_spans": include_spans,
+            }
+            if filter_string is not None:
+                kwargs["filter_string"] = filter_string
+            if run_id is not None:
+                kwargs["run_id"] = run_id
+            if page_token is not None:
+                kwargs["page_token"] = page_token
+
+            page = client.search_traces(**kwargs)
+            batch = list(page)
+            if not batch:
+                break
+            for trace in batch:
+                tid = trace.info.trace_id
+                prefix = "" if str(tid).startswith("tr-") else "tr-"
+                out_path = tmp_root / f"{prefix}{tid}.json"
+                out_path.write_text(trace.to_json(pretty=True), encoding="utf-8")
+                traces_written += 1
+                collected += 1
+                if collected >= max_results:
+                    break
+            page_token = getattr(page, "token", None)
+            if not page_token:
+                break
+
+        if traces_written == 0:
+            raise ValueError(
+                "No traces returned from MLflow "
+                f"(experiment_id={experiment_id!r}, filter={filter_string!r}, run_id={run_id!r}). "
+                "Confirm traces exist and optional mlflow_traces_filter matches."
+            )
+        logger.info(
+            "Materialized %d trace JSON file(s) from MLflow experiment %s -> %s",
+            traces_written,
+            experiment_id,
+            tmp_root,
+        )
+        return str(tmp_root), tmp_root
+    except Exception:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        raise
+
+
 def _local_only_run() -> bool:
-    """True when running without Eval Hub callbacks or MLflow (local iteration on job.json)."""
+    """True when running without Eval Hub sidecar-style callbacks (local iteration on job.json)."""
     mode = os.getenv("EVALHUB_MODE", "").strip().lower()
     if mode == "local":
         return True
     return os.getenv("CLEAR_LOCAL_ONLY", "").strip().lower() in ("1", "true", "yes")
+
+
+def _local_mlflow_results_save_enabled() -> bool:
+    """When EVALHUB_MODE=local, MLflow *result* upload is skipped unless CLEAR_SAVE_MLFLOW_RESULTS is set."""
+    return os.getenv("CLEAR_SAVE_MLFLOW_RESULTS", "").strip().lower() in ("1", "true", "yes")
+
+
+def _mlflow_results_experiment_name(config: JobSpec) -> str:
+    """
+    Target MLflow experiment for CLEAR *outputs* (callbacks.mlflow.save).
+
+    Separate from trace ingest (``mlflow_traces_experiment_id`` /
+    ``mlflow_traces_experiment_name``).
+
+    Resolved only from ``parameters``:
+
+    1. ``parameters.mlflow_results_experiment_name``
+    2. ``parameters.mlflow_experiment_name`` (legacy alias)
+    """
+    params = config.parameters or {}
+    for key in ("mlflow_results_experiment_name", "mlflow_experiment_name"):
+        raw = params.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return ""
 
 
 def _callbacks_for_adapter(adapter: FrameworkAdapter) -> JobCallbacks:
@@ -179,6 +317,7 @@ class ClearAdapter(FrameworkAdapter):
         start_time = time.time()
         logger.info(f"Starting CLEAR job {config.id} for benchmark {config.benchmark_id}")
 
+        mlflow_traces_temp: Path | None = None
         try:
             callbacks.report_status(
                 JobStatusUpdate(
@@ -193,77 +332,83 @@ class ClearAdapter(FrameworkAdapter):
             )
 
             self._validate_config(config)
-
+            params = config.parameters or {}
             data_dir: str | None = None
-            test_data_path = Path("/test_data")
-            if test_data_path.exists() and any(test_data_path.iterdir()):
-                traces_sub = test_data_path / "traces"
-                if traces_sub.exists() and any(traces_sub.iterdir()):
-                    data_dir = "/test_data/traces"
-                    logger.info("Using traces from /test_data/traces")
-                elif any(test_data_path.glob("*.json")):
-                    data_dir = "/test_data"
-                    logger.info("Using traces from /test_data")
-                else:
-                    json_files = list(test_data_path.rglob("*.json"))
-                    if json_files:
-                        data_dir = str(json_files[0].parent)
-                        logger.info("Using traces from %s (nested JSON)", data_dir)
-                    else:
-                        logger.warning(
-                            "/test_data is non-empty but no JSON traces found: %s",
-                            [c.name for c in test_data_path.iterdir()],
-                        )
 
-            if not data_dir:
-                data_path = Path("/data")
-                if data_path.exists() and any(data_path.iterdir()):
-                    if (data_path / "traces").exists() and any((data_path / "traces").iterdir()):
-                        data_dir = "/data/traces"
-                        logger.info("Using S3-mounted data from /data/traces directory")
-                    elif any(data_path.glob("*.json")):
-                        data_dir = "/data"
-                        logger.info("Using traces from /data")
+            if _mlflow_traces_source_configured(params):
+                data_dir, mlflow_traces_temp = _materialize_traces_from_mlflow(params)
+                logger.info("Using traces pulled from MLflow (staging directory %s)", data_dir)
+            else:
+                test_data_path = Path("/test_data")
+                if test_data_path.exists() and any(test_data_path.iterdir()):
+                    traces_sub = test_data_path / "traces"
+                    if traces_sub.exists() and any(traces_sub.iterdir()):
+                        data_dir = "/test_data/traces"
+                        logger.info("Using traces from /test_data/traces")
+                    elif any(test_data_path.glob("*.json")):
+                        data_dir = "/test_data"
+                        logger.info("Using traces from /test_data")
                     else:
-                        logger.warning(
-                            "/data exists but no trace files: %s",
-                            [c.name for c in data_path.iterdir()],
-                        )
+                        json_files = list(test_data_path.rglob("*.json"))
+                        if json_files:
+                            data_dir = str(json_files[0].parent)
+                            logger.info("Using traces from %s (nested JSON)", data_dir)
+                        else:
+                            logger.warning(
+                                "/test_data is non-empty but no JSON traces found: %s",
+                                [c.name for c in test_data_path.iterdir()],
+                            )
 
-            if not data_dir:
-                data_dir = config.parameters.get("data_dir") or config.parameters.get(
-                    "traces_input_dir"
-                )
                 if not data_dir:
-                    raise ValueError(
-                        "No input traces: mount data under /test_data or /data, "
-                        "or set parameters.data_dir (preferred) or parameters.traces_input_dir"
-                    )
-                logger.info("Using data_dir from parameters: %s", data_dir)
-                # S3 / init staging often appears after the adapter process starts; wait before failing.
-                _param_path = Path(data_dir)
-                _deadline = time.monotonic() + 120.0
-                while time.monotonic() < _deadline:
-                    if _param_path.is_dir() and any(_param_path.glob("*.json")):
-                        break
-                    logger.info(
-                        "Waiting for parameters.data_dir to contain *.json: %s", data_dir
-                    )
-                    time.sleep(3)
-                else:
-                    raise ValueError(
-                        f"parameters.data_dir {data_dir!r} missing or has no *.json after 120s "
-                        f"(confirm S3 staging path with: find /test_data /data -name '*.json')"
-                    )
+                    data_path = Path("/data")
+                    if data_path.exists() and any(data_path.iterdir()):
+                        if (data_path / "traces").exists() and any(
+                            (data_path / "traces").iterdir()
+                        ):
+                            data_dir = "/data/traces"
+                            logger.info("Using S3-mounted data from /data/traces directory")
+                        elif any(data_path.glob("*.json")):
+                            data_dir = "/data"
+                            logger.info("Using traces from /data")
+                        else:
+                            logger.warning(
+                                "/data exists but no trace files: %s",
+                                [c.name for c in data_path.iterdir()],
+                            )
 
-            if not Path(data_dir).exists():
-                raise ValueError(f"data_dir not found: {data_dir}")
+                if not data_dir:
+                    data_dir = params.get("data_dir") or params.get("traces_input_dir")
+                    if not data_dir:
+                        raise ValueError(
+                            "No input traces: set parameters.mlflow_traces_experiment_id or "
+                            "mlflow_traces_experiment_name, mount data under /test_data or /data, "
+                            "or set parameters.data_dir (preferred) or traces_input_dir"
+                        )
+                    logger.info("Using data_dir from parameters: %s", data_dir)
+                    # S3 / init staging often appears after the adapter process starts; wait before failing.
+                    _param_path = Path(data_dir)
+                    _deadline = time.monotonic() + 120.0
+                    while time.monotonic() < _deadline:
+                        if _param_path.is_dir() and any(_param_path.glob("*.json")):
+                            break
+                        logger.info(
+                            "Waiting for parameters.data_dir to contain *.json: %s", data_dir
+                        )
+                        time.sleep(3)
+                    else:
+                        raise ValueError(
+                            f"parameters.data_dir {data_dir!r} missing or has no *.json after 120s "
+                            f"(confirm S3 staging path with: find /test_data /data -name '*.json')"
+                        )
 
-            trace_files = list(Path(data_dir).glob("*.json"))
-            if not trace_files:
-                raise ValueError(f"No JSON trace files found in {data_dir}")
+                if not Path(data_dir).exists():
+                    raise ValueError(f"data_dir not found: {data_dir}")
 
-            logger.info("Found %d trace file(s) in %s", len(trace_files), data_dir)
+                trace_files = list(Path(data_dir).glob("*.json"))
+                if not trace_files:
+                    raise ValueError(f"No JSON trace files found in {data_dir}")
+
+                logger.info("Found %d trace file(s) in %s", len(trace_files), data_dir)
 
             callbacks.report_status(
                 JobStatusUpdate(
@@ -271,7 +416,11 @@ class ClearAdapter(FrameworkAdapter):
                     phase=JobPhase.LOADING_DATA,
                     progress=0.2,
                     message=MessageInfo(
-                        message="Processing MLflow traces",
+                        message=(
+                            "Loading traces from MLflow experiment"
+                            if mlflow_traces_temp
+                            else "Loading trace JSON files"
+                        ),
                         message_code="loading_data",
                     ),
                 )
@@ -366,6 +515,21 @@ class ClearAdapter(FrameworkAdapter):
                     "framework": "clear",
                     "data_dir": data_dir,
                     "output_dir": str(output_dir),
+                    **(
+                        {
+                            "mlflow_traces_experiment_id": (
+                                params.get("mlflow_traces_experiment_id")
+                                or params.get("mlflow_traces_experiment_name")
+                            ),
+                        }
+                        if mlflow_traces_temp
+                        else {}
+                    ),
+                    **(
+                        {"mlflow_results_experiment_name": rname}
+                        if (rname := _mlflow_results_experiment_name(config))
+                        else {}
+                    ),
                 },
                 oci_artifact=oci_artifact,
             )
@@ -397,21 +561,25 @@ class ClearAdapter(FrameworkAdapter):
                 )
             )
             raise
+        finally:
+            if mlflow_traces_temp is not None and mlflow_traces_temp.is_dir():
+                shutil.rmtree(mlflow_traces_temp, ignore_errors=True)
 
     def _validate_config(self, config: JobSpec) -> None:
         if not config.benchmark_id:
             raise ValueError("benchmark_id is required")
 
+        params = config.parameters or {}
         has_test_data = Path("/test_data").exists() and any(Path("/test_data").iterdir())
         has_data = Path("/data").exists() and any(Path("/data").iterdir())
-        has_traces_param = (
-            "data_dir" in config.parameters or "traces_input_dir" in config.parameters
-        )
+        has_traces_param = "data_dir" in params or "traces_input_dir" in params
+        has_mlflow_traces = _mlflow_traces_source_configured(params)
 
-        if not has_test_data and not has_data and not has_traces_param:
+        if not has_test_data and not has_data and not has_traces_param and not has_mlflow_traces:
             raise ValueError(
-                "Provide parameters.data_dir (or traces_input_dir) or mount test data under "
-                "/test_data or /data"
+                "Provide parameters.mlflow_traces_experiment_id or mlflow_traces_experiment_name, "
+                "parameters.data_dir (or traces_input_dir), or mount test data under /test_data or "
+                "/data"
             )
 
         if "eval_model_name" not in config.parameters:
@@ -742,17 +910,19 @@ class ClearAdapter(FrameworkAdapter):
         clear_html_artifacts: Optional[list[Path]] = None,
     ) -> str | None:
         if _local_only_run():
-            logger.info("MLflow skipped: local-only run (EVALHUB_MODE=local or CLEAR_LOCAL_ONLY=1)")
-            return None
+            if not _local_mlflow_results_save_enabled():
+                logger.info(
+                    "MLflow results upload skipped: EVALHUB_MODE=local or CLEAR_LOCAL_ONLY=1. "
+                    "Set CLEAR_SAVE_MLFLOW_RESULTS=1 to upload artifacts via evalhub-sdk "
+                    "(needs a results experiment and MLflow setup)."
+                )
+                return None
 
-        name = (config.experiment_name or "").strip()
-        if not name:
-            raw = config.parameters.get("mlflow_experiment_name")
-            if isinstance(raw, str) and raw.strip():
-                name = raw.strip()
+        name = _mlflow_results_experiment_name(config)
         if not name:
             logger.info(
-                "MLflow skipped: set experiment_name or parameters.mlflow_experiment_name on the job"
+                "MLflow skipped: set parameters.mlflow_results_experiment_name "
+                "or parameters.mlflow_experiment_name for where to log the run"
             )
             return None
 

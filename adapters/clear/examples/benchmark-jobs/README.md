@@ -1,6 +1,6 @@
 # Example CLEAR jobs (three benchmarks)
 
-These JSON files use the **same JobSpec shape as `meta/job.json`**: deployed **Eval Hub**, **S3-backed traces** via `test_data_ref`, model **auth** secret ref, `parameters.data_dir` pointing at where traces appear **in the job pod** (here `input-trace`, same as the default sample), and a real **`callback_url`** for the sidecar.
+These JSON files use the **same JobSpec shape as `meta/job.json`**: model **auth** secret ref (for cluster jobs), **`parameters.mlflow_traces_experiment_name`** (MLflow experiment that holds traces to ingest), **`parameters.mlflow_results_experiment_name`** (MLflow experiment for CLEAR outputs), optional **`mlflow_tracking_uri`**, and a **`callback_url`** for the sidecar when using Eval Hub.
 
 | File | `benchmark_id` | Purpose |
 |------|----------------|---------|
@@ -8,9 +8,9 @@ These JSON files use the **same JobSpec shape as `meta/job.json`**: deployed **E
 | `02-custom-criteria.json` | `agentic-evaluation-custom-criteria` | Adds **`parameters.evaluation_criteria`** (name → description). |
 | `03-predefined-issues.json` | `agentic-evaluation-predefined-issues` | Adds **`parameters.predefined_issues`** (list of strings). |
 
-Replace **placeholders** (`your-model-api-key-secret`, S3 bucket/path/secret, `callback_url`, `model.url`, `experiment_name`, etc.) with your environment’s values before submitting to Eval Hub.
+Replace **placeholders** (`your-model-api-key-secret`, `callback_url`, `model.url`, `your-mlflow-traces-experiment`, `parameters.mlflow_results_experiment_name`, `mlflow_tracking_uri`, etc.) with your environment’s values before submitting to Eval Hub.
 
-For **local-only** iteration (no sidecar / no MLflow), you can still set `EVALHUB_MODE=local` and ensure trace JSONs exist under **`parameters.data_dir`** on disk (or under `/test_data` / `/data` per adapter rules); adjust paths in a **private** copy of the JSON if needed.
+For **local-only** iteration, set `EVALHUB_MODE=local` and point **`parameters.mlflow_traces_experiment_name`** at an experiment on your tracking server (see **`meta/job.local-mlflow-traces.json`**), or use a **private** job copy with **`parameters.data_dir`** / pod mounts per **`main.py`** if you are not using MLflow trace ingest.
 
 ---
 
