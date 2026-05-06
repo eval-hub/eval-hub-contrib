@@ -27,9 +27,15 @@ CANNED_RESULTS = {
 
 
 @pytest.mark.integration
-def test_lighteval_happy_path(monkeypatch):
+def test_lighteval_happy_path(tmp_path, monkeypatch):
     """Full run_benchmark_job with mocked _run_lighteval returning canned results."""
-    adapter = LightEvalAdapter(job_spec_path="meta/job.json")
+    import shutil
+
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    shutil.copy(Path("meta/job.json"), meta_dir / "job.json")
+
+    adapter = LightEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
 
     callbacks = create_autospec(JobCallbacks)
     callbacks.create_oci_artifact.return_value = OCIArtifactResult(

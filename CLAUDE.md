@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-eval-hub-contrib is a collection of community-contributed evaluation framework adapters for the eval-hub service. Each adapter under `adapters/` wraps an external evaluation framework (LightEval, GuideLLM, MTEB, IBM CLEAR) and implements the `FrameworkAdapter` pattern from the `eval-hub-sdk`.
+eval-hub-contrib is a collection of community-contributed evaluation framework adapters for the eval-hub service. Each adapter under `adapters/` wraps an external evaluation framework (LightEval, GuideLLM, MTEB, IBM CLEAR) and implements the `FrameworkAdapter` pattern from the `evalhub-sdk`.
 
 ## Build and test commands
 
@@ -50,10 +50,10 @@ Every adapter lives in `adapters/<name>/` with a consistent layout:
 - `main.py` -- single-file adapter implementing `FrameworkAdapter.run_benchmark_job(config, callbacks) -> JobResults`
 - `provider.yaml` -- declares the adapter to eval-hub (id, runtime resources, benchmarks, parameters). CI validates this file on new-adapter PRs.
 - `meta/job.json` -- sample `JobSpec` used by tests
-- `tests/` -- pytest suite; `conftest.py` sets up fixtures, `test_adapter.py` tests the happy-path plumbing by monkeypatching the framework execution (not the eval-hub-sdk layer)
+- `tests/` -- pytest suite; `conftest.py` sets up fixtures, `test_adapter.py` tests the happy-path plumbing by monkeypatching the framework execution (not the evalhub-sdk layer)
 - `Containerfile`, `requirements.txt`, `requirements-test.txt`
 
-### FrameworkAdapter contract (from eval-hub-sdk)
+### FrameworkAdapter contract (from evalhub-sdk)
 
 Each adapter subclass:
 
