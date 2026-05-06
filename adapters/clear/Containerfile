@@ -10,6 +10,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
+# Imported by main (RED_HAT_CLEAR_DASHBOARD_CSS, RED_HAT_DASHBOARD_JS_PATCHES); not fetched remotely.
+COPY themes ./themes
 
 ENV PYTHONUNBUFFERED=1 EVALHUB_MODE=k8s
 
