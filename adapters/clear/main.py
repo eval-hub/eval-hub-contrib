@@ -38,6 +38,8 @@ from evalhub.adapter import (
 from evalhub.adapter.auth import resolve_model_credentials
 from evalhub.adapter.mlflow import MlflowArtifact
 
+from themes import RED_HAT_CLEAR_DASHBOARD_CSS, RED_HAT_DASHBOARD_JS_PATCHES
+
 try:
     from clear_eval.agentic.pipeline.run_clear_agentic_eval import (
         create_output_structure,
@@ -169,140 +171,10 @@ def _preserve_html_reports_from_clear_output(output_dir: Path) -> list[Path]:
     return saved
 
 
-_RED_HAT_CLEAR_DASHBOARD_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@300;400;500;600;700;900&family=Red+Hat+Text:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Red+Hat+Mono:wght@300;400;500;600;700&display=swap');:root {--primary:#ee0000;--primary-dark:#a60000;--primary-bg:#fce3e3;--text:#151515;--text-secondary:#4d4d4d;--text-light:#707070;--border:#e0e0e0;--page-bg:#f2f2f2;}*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Red Hat Text',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--page-bg);color:var(--text);line-height:1.6}.container{max-width:1400px;margin:0 auto;padding:24px 32px}.dashboard-header{background:#151515;border-bottom:4px solid #ee0000;color:#fff;padding:40px 48px;border-radius:16px;margin-bottom:32px;box-shadow:0 4px 16px rgba(0,0,0,.2)}.dashboard-header h1{font-size:32px;font-weight:700;letter-spacing:-.02em;font-family:'Red Hat Display',sans-serif}.dashboard-header p{margin:12px 0 0;color:#e0e0e0;font-size:16px}.metrics-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:32px}.metric-card{background:#fff;border:1px solid var(--border);border-radius:16px;padding:24px 28px;box-shadow:0 1px 3px rgba(0,0,0,.06);text-align:center;transition:all .3s ease}.metric-card:hover{box-shadow:0 10px 25px rgba(0,0,0,.1);transform:translateY(-2px)}.metric-label{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--text-light);margin-bottom:8px}.metric-value{font-size:32px;font-weight:700;color:#151515}.section-header{margin:32px 0 16px}.section-title{font-size:20px;font-weight:700;color:#151515;letter-spacing:-.02em;font-family:'Red Hat Display',sans-serif}.section-subtitle{font-size:14px;color:var(--text-secondary);margin-top:4px}.divider{height:1px;background:var(--border);margin:24px 0}.graph-container{background:#fff;border-radius:16px;box-shadow:0 4px 6px rgba(0,0,0,.1);overflow:hidden;margin-bottom:24px;position:relative}.graph-canvas{width:100%;height:600px;display:block}.graph-tooltip{display:none;position:absolute;background:#fff;border:1px solid #c7c7c7;border-radius:8px;padding:12px 16px;box-shadow:0 4px 12px rgba(0,0,0,.15);pointer-events:none;font-size:13px;z-index:100;max-width:280px}.graph-tooltip.visible{display:block}.graph-tooltip b{color:#151515}.node-table{width:100%;border-collapse:collapse;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,.07);border-radius:10px;overflow:hidden}.node-table thead tr{background:#151515;color:#fff;font-size:12px;text-transform:uppercase;letter-spacing:.05em}.node-table th{padding:11px 16px;font-weight:600;text-align:left}.node-table th:nth-child(2),.node-table th:nth-child(3){text-align:center}.node-table td{padding:11px 16px}.node-table td:nth-child(2),.node-table td:nth-child(3){text-align:center;font-weight:700;font-size:15px}.node-table tbody tr{border-bottom:1px solid #e0e0e0}.major-divider{margin:48px 0;padding:0;border:none;height:3px;background:linear-gradient(90deg,transparent,#ee0000,transparent);position:relative}.major-divider::after{content:'';display:block;width:12px;height:12px;background:#ee0000;border-radius:50%;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)}.agent-section{background:#fff;border-radius:16px;border:1px solid #151515;padding:24px;margin-bottom:32px}.agent-section h3{font-size:18px;font-weight:700;color:#151515;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid var(--primary-bg);font-family:'Red Hat Display',sans-serif}.agent-metrics-banner{background:#ffffff;border-top:4px solid #ee0000;padding:24px;border-radius:12px;margin-bottom:24px;box-shadow:0 2px 8px rgba(0,0,0,.08)}.agent-metrics-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:24px}.agent-metric{text-align:center}.agent-metric-label{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#707070;margin-bottom:4px}.agent-metric-value{font-size:32px;font-weight:700;color:#ee0000}.issues-table{width:100%;border-collapse:collapse;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,.07);border-radius:10px;overflow:hidden}.issues-table thead tr{background:#151515;color:#fff;font-size:12px;text-transform:uppercase;letter-spacing:.05em}.issues-table th{padding:11px 16px;font-weight:600;text-align:left}.issues-table th:nth-child(2),.issues-table th:nth-child(3),.issues-table th:nth-child(4){text-align:center}.issues-table td{padding:9px 16px}.issues-table td:nth-child(2),.issues-table td:nth-child(3),.issues-table td:nth-child(4){text-align:center}.issues-table tbody tr{border-bottom:1px solid #e0e0e0}.issues-table tbody tr:nth-child(even){background:#f2f2f2}.issues-table tbody tr:nth-child(odd){background:#FFF}.severity-badge{padding:2px 10px;border-radius:999px;font-weight:600;font-size:13px;display:inline-block}.no-issue-row{background:#F0FDF4!important;border-top:2px solid #BBF7D0!important}.no-issue-row td:first-child{color:#15803D;font-weight:600}.issue-main-row{cursor:pointer}.issue-main-row:hover{background:#fce3e3!important}.issue-example-row td{padding:0!important;background:#f2f2f2}.issue-examples-wrap{padding:18px 18px 22px 18px}.issue-examples-title{font-size:15px;font-weight:800;color:#4d4d4d;text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px;font-family:'Red Hat Display',sans-serif}.issue-examples-list{display:grid;gap:14px}.issue-example-card{background:linear-gradient(180deg,#FFFFFF 0%,#f2f2f2 100%);border:1px solid #e0e0e0;border-radius:14px;box-shadow:0 2px 6px rgba(21,21,21,.05);overflow:hidden}.issue-example-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;cursor:pointer;list-style:none;background:#FFFFFF}.issue-example-summary::-webkit-details-marker{display:none}.issue-example-summary:hover{background:#fce3e3}.issue-example-summary-main{display:flex;flex-direction:column;gap:4px}.issue-example-card-title{font-size:16px;font-weight:800;color:#151515;font-family:'Red Hat Display',sans-serif}.issue-example-meta{font-size:13px;color:#707070;line-height:1.4}.issue-example-chevron{font-size:16px;font-weight:800;color:#ee0000;transition:transform .2s ease;flex-shrink:0}.issue-example-card[open] .issue-example-chevron{transform:rotate(90deg)}.issue-example-card-body{padding:18px 16px 18px 16px;border-top:1px solid #e0e0e0;background:linear-gradient(180deg,#FFFFFF 0%,#f2f2f2 100%)}.issue-example-fields{display:grid;gap:18px}.issue-example-field{display:grid;gap:8px}.issue-example-label{font-size:13px;font-weight:800;color:#a60000;text-transform:uppercase;letter-spacing:.08em}.issue-example-value{font-size:14px;color:#4d4d4d;white-space:pre-wrap;word-break:break-word;line-height:1.6}.issue-example-value.code{font-family:'Red Hat Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:#151515;color:#e0e0e0;padding:14px 16px;border-radius:10px;overflow:auto;max-height:260px;min-height:84px}.issue-example-scrollbox{overflow:auto;max-height:260px;min-height:84px}.chat-message-list{display:grid;gap:12px}.chat-message{border:1px solid #e0e0e0;border-radius:12px;padding:12px 14px;background:#fff}.chat-message.system{background:#fce3e3}.chat-message.user{background:#f2f2f2}.chat-message.assistant{background:#ECFDF5}.chat-message-header{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:#a60000;margin-bottom:8px}.chat-message-content{font-size:14px;color:#151515;white-space:pre-wrap;word-break:break-word;line-height:1.6}.chat-message-tools{margin-top:10px;padding-top:10px;border-top:1px dashed #c7c7c7}.expand-indicator{display:block;margin-top:8px;color:#ee0000;font-weight:800;font-size:13px}@media(max-width:768px){.container{padding:16px}.dashboard-header{padding:24px}.agent-metrics-grid{grid-template-columns:repeat(2,1fr)}}.info-tooltip{position:relative;display:inline-block}.info-tooltip-trigger{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:6px;border-radius:50%;background:#e0e0e0;color:#4d4d4d;font-size:11px;font-weight:700;cursor:help;vertical-align:middle}.info-tooltip-bubble{visibility:hidden;opacity:0;position:absolute;left:calc(100% + 8px);top:50%;transform:translateY(-50%);width:280px;background:#151515;color:#fff;padding:10px 12px;border-radius:8px;font-size:12px;line-height:1.4;box-shadow:0 8px 24px rgba(21,21,21,.2);transition:opacity .2s ease;z-index:20;text-transform:none;letter-spacing:normal;font-weight:400}.info-tooltip:hover .info-tooltip-bubble,.info-tooltip:focus-within .info-tooltip-bubble{visibility:visible;opacity:1}
-"""
-
-
-_NC_RH = (
-    "const nc = cnt => { if(maxC===minC) return '#e0e0e0'; const n=(cnt-minC)/(maxC-minC); "
-    "return n>.7?'#151515':n>.4?'#707070':'#bdbdbd'; };"
-)
-_HEAT_BG_RH = (
-    "function heatBg(val, min, max) {\n"
-    "  if(max===min) return '#fce3e3';\n"
-    "  const t=(val-min)/(max-min);\n"
-    "  const r=Math.round(255-t*3), g=Math.round(255-t*28), b=Math.round(255-t*28);\n"
-    "  return `rgb(${r},${g},${b})`;\n"
-    "}\n"
-)
-_HEAT_BG_RH_NODE_USAGE = (
-    "function heatBg(val, min, max) {\n"
-    "  // Blend #ffffff → #fce3e3 (--primary-bg) for Node Usage cells\n"
-    "  if(max===min) return '#fce3e3';\n"
-    "  const t=(val-min)/(max-min);\n"
-    "  const r=Math.round(255-t*3), g=Math.round(255-t*28), b=Math.round(255-t*28);\n"
-    "  return `rgb(${r},${g},${b})`;\n"
-    "}\n"
-)
-_HEAT_FG_RH = (
-    "function heatFg(val, min, max) {\n"
-    "  if(max===min) return '#151515';\n"
-    "  const t=(val-min)/(max-min);\n"
-    "  return t>0.5 ? '#a60000' : '#151515';\n"
-    "}\n"
-)
-
-_RED_HAT_DASHBOARD_JS_PATCHES: tuple[tuple[str, str], ...] = (
-    (
-        "const nc = cnt => { if(maxC===minC) return '#A5B4FC'; const n=(cnt-minC)/(maxC-minC); "
-        "return n>.7?'#4F46E5':n>.4?'#6366F1':'#818CF8'; };",
-        _NC_RH,
-    ),
-    (
-        "const nc = cnt => { if(maxC===minC) return '#FECACA'; const n=(cnt-minC)/(maxC-minC); "
-        "return n>.7?'#CC0000':n>.4?'#EE0000':'#F87171'; };",
-        _NC_RH,
-    ),
-    (
-        "function heatBg(val, min, max) {\n"
-        "  // Returns a background color from light blue to deep indigo based on normalized value\n"
-        "  if(max===min) return 'rgba(99,102,241,0.10)';\n"
-        "  const t=(val-min)/(max-min);\n"
-        "  const r=Math.round(238 - t*139);  // 238 -> 99\n"
-        "  const g=Math.round(242 - t*140);  // 242 -> 102\n"
-        "  const b=Math.round(255 - t*14);   // 255 -> 241\n"
-        "  const a=(0.08 + t*0.25).toFixed(2);\n"
-        "  return `rgba(${99},${102},${241},${a})`;\n"
-        "}\n",
-        _HEAT_BG_RH_NODE_USAGE,
-    ),
-    (
-        "function heatBg(val, min, max) {\n"
-        "  // Returns a background color from light red to deep red based on normalized value\n"
-        "  if(max===min) return 'rgba(238,0,0,0.10)';\n"
-        "  const t=(val-min)/(max-min);\n"
-        "  const a=(0.08 + t*0.25).toFixed(2);\n"
-        "  return `rgba(238,0,0,${a})`;\n"
-        "}\n",
-        _HEAT_BG_RH,
-    ),
-    (
-        "function heatBg(val, min, max) {\n"
-        "  if(max===min) return 'rgba(238,0,0,0.06)';\n"
-        "  const t=(val-min)/(max-min);\n"
-        "  const a=(0.06 + t*0.22).toFixed(2);\n"
-        "  return `rgba(238,0,0,${a})`;\n"
-        "}\n",
-        _HEAT_BG_RH,
-    ),
-    (
-        "function heatFg(val, min, max) {\n"
-        "  if(max===min) return '#334155';\n"
-        "  const t=(val-min)/(max-min);\n"
-        "  return t>0.5 ? '#312E81' : '#334155';\n"
-        "}\n",
-        _HEAT_FG_RH,
-    ),
-    (
-        "function heatFg(val, min, max) {\n"
-        "  if(max===min) return '#334155';\n"
-        "  const t=(val-min)/(max-min);\n"
-        "  return t>0.5 ? '#7F1D1D' : '#334155';\n"
-        "}\n",
-        _HEAT_FG_RH,
-    ),
-    ("ctx.strokeStyle='#4338CA';", "ctx.strokeStyle='#151515';"),
-    ("ctx.strokeStyle='#CC0000';", "ctx.strokeStyle='#151515';"),
-    ("ctx.font='600 13px Inter,sans-serif';", "ctx.font=\"600 13px 'Red Hat Text',sans-serif\";"),
-    ("ctx.font='600 12px Inter,sans-serif';", "ctx.font=\"600 12px 'Red Hat Text',sans-serif\";"),
-    ("ctx.clearRect(0,0,W,H); ctx.fillStyle='#FAFBFC';", "ctx.clearRect(0,0,W,H); ctx.fillStyle='#f2f2f2';"),
-    ('<span style="color:#93C5FD">', '<span style="color:#a60000">'),
-    ('<span style="color:#F87171">', '<span style="color:#a60000">'),
-    ("word-break:break-word;color:#E2E8F0", "word-break:break-word;color:#e0e0e0"),
-    ("ctx.strokeStyle='#94A3B8'", "ctx.strokeStyle='#c7c7c7'"),
-    ("ctx.fillStyle='#64748B'", "ctx.fillStyle='#707070'"),
-    ("ctx.strokeStyle='#CBD5E1'", "ctx.strokeStyle='#e0e0e0'"),
-    ("ctx.fillStyle='#1E293B'", "ctx.fillStyle='#151515'"),
-    (
-        "let fc='#16A34A'; if(t>=.66) fc='#DC2626'; else if(t>=.33) fc='#D97706';",
-        "let fc='#16A34A'; if(t>=.66) fc='#ee0000'; else if(t>=.33) fc='#D97706';",
-    ),
-    (
-        "let fc='#707070'; if(t>=.66) fc='#ee0000'; else if(t>=.33) fc='#a60000';",
-        "let fc='#16A34A'; if(t>=.66) fc='#ee0000'; else if(t>=.33) fc='#D97706';",
-    ),
-    (
-        "if(d.severity>=.7){sb='#fce3e3';sf='#a60000';}else if(d.severity>=.4){sb='#f5f5f5';sf='#707070';}else{sb='#f2f2f2';sf='#151515';}",
-        "if(d.severity>=.7){sb='#FEE2E2';sf='#991B1B';}else if(d.severity>=.4){sb='#FEF9C3';sf='#854D0E';}else{sb='#D1FAE5';sf='#065F46';}",
-    ),
-    (
-        "<td style=\"font-weight:700;color:#707070\">${d.freq}%</td><td><span class=\"severity-badge\" style=\"background:#f2f2f2;color:#151515\">0.00</span>",
-        "<td style=\"font-weight:700;color:#065F46\">${d.freq}%</td><td><span class=\"severity-badge\" style=\"background:#D1FAE5;color:#065F46\">0.00</span>",
-    ),
-    (
-        "<div style=\"text-align:center;padding:20px;color:#707070;\">No issues discovered",
-        "<div style=\"text-align:center;padding:20px;color:#10B981;\">No issues discovered",
-    ),
-    ("<td style=\"font-weight:600;color:#334155\">", "<td style=\"font-weight:600;color:#4d4d4d\">"),
-    ("<td style=\"color:#1E293B\">", "<td style=\"color:#151515\">"),
-)
-
-
 def _patch_red_hat_dashboard_js(html: str) -> str:
     """Align embedded canvas/table helpers with Red Hat neutrals and primary reds."""
     out = html
-    for old, new in _RED_HAT_DASHBOARD_JS_PATCHES:
+    for old, new in RED_HAT_DASHBOARD_JS_PATCHES:
         out = out.replace(old, new)
     return out
 
@@ -311,7 +183,7 @@ def _apply_red_hat_clear_dashboard_html(html: str) -> str:
     """Replace CLEAR's default dashboard stylesheet with Red Hat branded CSS and patch embedded JS."""
     out = re.sub(
         r"<style\b[^>]*>.*?</style>",
-        f"<style>\n{_RED_HAT_CLEAR_DASHBOARD_CSS}\n</style>",
+        f"<style>\n{RED_HAT_CLEAR_DASHBOARD_CSS}\n</style>",
         html,
         count=1,
         flags=re.DOTALL | re.IGNORECASE,
