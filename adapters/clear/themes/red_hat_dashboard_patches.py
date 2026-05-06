@@ -1,7 +1,4 @@
-"""String replacements to align CLEAR's embedded dashboard JS with Red Hat styling.
-
-Kept separate from main.py so theme assets can be updated without editing adapter logic.
-"""
+"""String replacements to align CLEAR's embedded dashboard JS with Red Hat styling."""
 
 from __future__ import annotations
 
