@@ -162,7 +162,7 @@ Prefer **`model.auth.secret_ref`** on the job so credentials stay in a **Kuberne
 
 ## MLflow
 
-Configure **`MLFLOW_TRACKING_URI`** (and any other MLflow env) on the runtime. On the job, set top-level **`experiment_name`** (as in **`meta/job.json`**) or **`parameters.mlflow_experiment_name`**. When set, the adapter logs **`clear_results.json`** and a **`metrics_summary.json`** alongside the standard eval-hub MLflow flow.
+Configure **`MLFLOW_TRACKING_URI`** (and any other MLflow env) on the runtime. On the job, set top-level **`experiment_name`** (as in **`meta/job.json`**) or **`parameters.mlflow_experiment_name`**. When set, the adapter logs **`clear_results.json`** and a **`metrics_summary.json`** alongside the standard eval-hub MLflow flow. **Local runs follow the same rules:** MLflow upload is skipped when there is no experiment name or **`MLFLOW_TRACKING_URI`** is unset—there is no separate “local mode always skips MLflow” path.
 
 ## Layout
 
