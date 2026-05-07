@@ -1,4 +1,4 @@
-"""String replacements to align CLEAR's embedded dashboard JS with Red Hat styling."""
+"""String replacements to align CLEAR's embedded dashboard JS with RHOAI / PatternFly styling."""
 
 from __future__ import annotations
 
@@ -8,18 +8,18 @@ _NC_RH = (
 )
 _HEAT_BG_RH = (
     "function heatBg(val, min, max) {\n"
-    "  if(max===min) return '#fce3e3';\n"
+    "  if(max===min) return '#e7f1fa';\n"
     "  const t=(val-min)/(max-min);\n"
-    "  const r=Math.round(255-t*3), g=Math.round(255-t*28), b=Math.round(255-t*28);\n"
+    "  const r=Math.round(255-t*24), g=Math.round(255-t*39), b=Math.round(255-t*54);\n"
     "  return `rgb(${r},${g},${b})`;\n"
     "}\n"
 )
 _HEAT_BG_RH_NODE_USAGE = (
     "function heatBg(val, min, max) {\n"
-    "  // Blend #ffffff → #fce3e3 (--primary-bg) for Node Usage cells\n"
-    "  if(max===min) return '#fce3e3';\n"
+    "  // Blend #ffffff → #e7f1fa (--primary-bg) for Node Usage cells\n"
+    "  if(max===min) return '#e7f1fa';\n"
     "  const t=(val-min)/(max-min);\n"
-    "  const r=Math.round(255-t*3), g=Math.round(255-t*28), b=Math.round(255-t*28);\n"
+    "  const r=Math.round(255-t*24), g=Math.round(255-t*39), b=Math.round(255-t*54);\n"
     "  return `rgb(${r},${g},${b})`;\n"
     "}\n"
 )
@@ -27,7 +27,7 @@ _HEAT_FG_RH = (
     "function heatFg(val, min, max) {\n"
     "  if(max===min) return '#151515';\n"
     "  const t=(val-min)/(max-min);\n"
-    "  return t>0.5 ? '#a60000' : '#151515';\n"
+    "  return t>0.5 ? '#0066cc' : '#151515';\n"
     "}\n"
 )
 
@@ -95,8 +95,8 @@ RED_HAT_DASHBOARD_JS_PATCHES: tuple[tuple[str, str], ...] = (
     ("ctx.font='600 13px Inter,sans-serif';", "ctx.font=\"600 13px 'Red Hat Text',sans-serif\";"),
     ("ctx.font='600 12px Inter,sans-serif';", "ctx.font=\"600 12px 'Red Hat Text',sans-serif\";"),
     ("ctx.clearRect(0,0,W,H); ctx.fillStyle='#FAFBFC';", "ctx.clearRect(0,0,W,H); ctx.fillStyle='#f2f2f2';"),
-    ('<span style="color:#93C5FD">', '<span style="color:#a60000">'),
-    ('<span style="color:#F87171">', '<span style="color:#a60000">'),
+    ('<span style="color:#93C5FD">', '<span style="color:#0066cc">'),
+    ('<span style="color:#F87171">', '<span style="color:#0066cc">'),
     ("word-break:break-word;color:#E2E8F0", "word-break:break-word;color:#e0e0e0"),
     ("ctx.strokeStyle='#94A3B8'", "ctx.strokeStyle='#c7c7c7'"),
     ("ctx.fillStyle='#64748B'", "ctx.fillStyle='#707070'"),
@@ -104,11 +104,11 @@ RED_HAT_DASHBOARD_JS_PATCHES: tuple[tuple[str, str], ...] = (
     ("ctx.fillStyle='#1E293B'", "ctx.fillStyle='#151515'"),
     (
         "let fc='#16A34A'; if(t>=.66) fc='#DC2626'; else if(t>=.33) fc='#D97706';",
-        "let fc='#16A34A'; if(t>=.66) fc='#ee0000'; else if(t>=.33) fc='#D97706';",
+        "let fc='#16A34A'; if(t>=.66) fc='#c9190b'; else if(t>=.33) fc='#D97706';",
     ),
     (
         "let fc='#707070'; if(t>=.66) fc='#ee0000'; else if(t>=.33) fc='#a60000';",
-        "let fc='#16A34A'; if(t>=.66) fc='#ee0000'; else if(t>=.33) fc='#D97706';",
+        "let fc='#16A34A'; if(t>=.66) fc='#c9190b'; else if(t>=.33) fc='#D97706';",
     ),
     (
         "if(d.severity>=.7){sb='#fce3e3';sf='#a60000';}else if(d.severity>=.4){sb='#f5f5f5';sf='#707070';}else{sb='#f2f2f2';sf='#151515';}",
