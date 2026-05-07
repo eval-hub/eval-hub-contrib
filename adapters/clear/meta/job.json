@@ -17,7 +17,8 @@
     "provider": "openai",
     "agent_framework": "langgraph",
     "observability_framework": "mlflow",
-    "inference_backend": "litellm"
+    "inference_backend": "litellm",
+    "clear_dashboard_theme": "red_hat"
   },
   "test_data_ref": {
     "s3": {

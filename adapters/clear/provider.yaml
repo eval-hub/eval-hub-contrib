@@ -1,5 +1,10 @@
 # IBM CLEAR — provider definition (same shape as eval-hub config/providers/*.yaml).
 # Mount into eval-hub or sync via your operator’s provider sync process.
+#
+# Discovery: eval-hub may surface `parameters` in UI. The adapter validates required
+# inputs early in run_benchmark_job (`_validate_config`). Benchmark-specific keys are
+# enforced in `_validate_benchmark_contract` (see benchmarks below).
+# MLflow: set MLFLOW_TRACKING_URI and job experiment_name (or parameters.mlflow_experiment_name).
 
 id: ibm-clear
 name: IBM CLEAR
@@ -75,3 +80,65 @@ benchmarks:
     tags:
       - ibmclear
       - predefined-issues
+
+parameters:
+  - name: data_dir
+    type: string
+    description: >
+      Directory of trace JSON files for CLEAR (preferred). Required unless Eval Hub mounts
+      traces under /test_data or /data in the job pod, or you set traces_input_dir instead.
+
+  - name: traces_input_dir
+    type: string
+    description: >
+      Alternate name for the trace directory (same semantics as data_dir).
+
+  - name: eval_model_name
+    type: string
+    description: >
+      Required. CLEAR judge model id (e.g. openai/your-model) passed through to the agentic pipeline.
+
+  - name: provider
+    type: string
+    description: >
+      Required. LiteLLM/OpenAI-style provider name for the judge (e.g. openai, azure).
+
+  - name: inference_backend
+    type: string
+    default: litellm
+    description: >
+      CLEAR inference backend. Use "endpoint" with model.url or parameters.endpoint_url (or inference_url)
+      for a fixed HTTP endpoint; default litellm uses the usual CLEAR LiteLLM path.
+
+  - name: endpoint_url
+    type: string
+    description: >
+      When inference_backend is "endpoint", HTTP base URL for the judge (inference_url is accepted as an alias).
+
+  - name: inference_url
+    type: string
+    description: >
+      Same role as endpoint_url when inference_backend is "endpoint".
+
+  - name: evaluation_criteria
+    type: object
+    description: >
+      Required when benchmark_id is agentic-evaluation-custom-criteria: map of criterion name -> description.
+
+  - name: predefined_issues
+    type: array
+    description: >
+      Required when benchmark_id is agentic-evaluation-predefined-issues: non-empty list of issue strings.
+
+  - name: mlflow_experiment_name
+    type: string
+    description: >
+      Optional fallback experiment name for MLflow artifact upload if JobSpec.experiment_name is unset.
+
+  - name: clear_dashboard_theme
+    type: string
+    default: red_hat
+    description: >
+      Dashboard theme for the generated static CLEAR HTML report.
+      Default (omit / "red_hat" / "redhat"): apply the branded theme.
+      Opt out ("clear", "default", "original", "ibm", "none", "false", "0", "off"): keep CLEAR's stock HTML.
