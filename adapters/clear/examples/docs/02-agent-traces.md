@@ -4,6 +4,8 @@
 
 An **agent trace** is a machine-readable record of how an agent behaved over one or more turns: prompts, tool calls, model outputs, errors, and metadata. CLEAR expects traces in a form its **agentic** pipeline can normalize (often **JSON** files on disk).
 
+**LangGraph-based agents:** For this integration, traces should come from **LangGraph-based** agents (state graphs where workflow steps map to graph nodes). CLEAR’s workflow analysis assumes **named spans per graph node** so it can score and summarize **per node / per component**. Traces from non–LangGraph stacks may still be usable if you can emit a compatible span shape, but the supported path documented here is **LangGraph + MLflow-style autologging**—see **[§ MLflow-style traces](#mlflow-style-traces-shape-and-expectations)** below for shape rules and autologging notes.
+
 Eval Hub jobs typically receive traces as files under a directory inside the pod (for example after staging from **object storage**) or via **`parameters.data_dir`** when you run locally.
 
 ## MLflow-style traces (shape and expectations)
@@ -38,7 +40,7 @@ Summary of what that document covers:
 
 Traces for local demos live under **[`input-traces/`](../input-traces/)** as top-level **`*.json`** files. Point **`parameters.data_dir`** at that folder in your job JSON ([03-local-run.md](03-local-run.md)).
 
-**What is checked in today:** **`tr-0e1ef041647642c958a8aaa1892fdb88.json`** is a single MLflow-exported trace (multi-node style agent, research question about city population density). Add more **`*.json`** files in the same folder if you want longer runs or richer dashboards. Large benchmark dumps are usually kept outside this repo.
+**What is checked in today:** **`tr-236907d3019ea2a5f8e81baeb258753b.json`** and **`tr-e08208946684c866332b7416670bad41.json`** are MLflow-exported traces from LangGraph-style runs (multi-node / richer workflow graphs). Add more **`*.json`** files in the same folder if you want longer runs or richer dashboards. Large benchmark dumps are usually kept outside this repo.
 
 ## Next
 
