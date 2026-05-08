@@ -1,5 +1,7 @@
 # Example CLEAR jobs (three benchmarks)
 
+**Tutorial:** step-by-step docs live in **[`../README.md`](../README.md)** (folder **`examples/`**) — overview, traces, local run, benchmarks, dashboard theme. Benchmark semantics (criteria, predefined issues, theme): **[`../docs/05-benchmarks-and-parameters.md`](../docs/05-benchmarks-and-parameters.md)** and **[`../docs/06-dashboard-theme.md`](../docs/06-dashboard-theme.md)**.
+
 These JSON files use the **same JobSpec shape as `meta/job.json`**: deployed **Eval Hub**, **S3-backed traces** via `test_data_ref`, model **auth** secret ref, `parameters.data_dir` pointing at where traces appear **in the job pod** (here `input-trace`, same as the default sample), and a real **`callback_url`** for the sidecar.
 
 | File | `benchmark_id` | Purpose |
@@ -9,6 +11,8 @@ These JSON files use the **same JobSpec shape as `meta/job.json`**: deployed **E
 | `03-predefined-issues.json` | `agentic-evaluation-predefined-issues` | Adds **`parameters.predefined_issues`** (list of strings). |
 
 Replace **placeholders** (`your-model-api-key-secret`, S3 bucket/path/secret, `callback_url`, `model.url`, `experiment_name`, etc.) with your environment’s values before submitting to Eval Hub.
+
+These samples **omit** **`parameters.clear_dashboard_theme`** for brevity; omitting it uses the adapter’s **default** branded HTML. To force CLEAR’s stock HTML or to document the field explicitly, see **`meta/job.json`** and [dashboard theme doc](../docs/06-dashboard-theme.md).
 
 For **local-only** iteration (no sidecar / no MLflow), you can still set `EVALHUB_MODE=local` and ensure trace JSONs exist under **`parameters.data_dir`** on disk (or under `/test_data` / `/data` per adapter rules); adjust paths in a **private** copy of the JSON if needed.
 

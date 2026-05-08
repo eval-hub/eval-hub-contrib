@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en"><!-- ibm-clear-adapter red_hat_theme 2026-05-08T00:30:46Z -->
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<title>Agentic Workflow Dashboard — Red Hat</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@300;400;500;600;700;900&family=Red+Hat+Text:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Red+Hat+Mono:wght@300;400;500;600;700&display=swap');:root{--primary:#0066cc;--primary-dark:#004080;--primary-bg:#e7f1fa;--text:#151515;--text-secondary:#6a6e73;--text-light:#6a6e73;--border:#d2d2d2;--page-bg:#f0f0f0;--bg-secondary:#f5f5f5;--danger:#c9190b}*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Red Hat Text',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--page-bg);color:var(--text);line-height:1.6;font-size:14px}.container{max-width:1200px;margin:0 auto;padding:16px 24px;background:#fff;min-height:100vh}.dashboard-header{background:#fff;color:var(--text);padding:16px 0 0 0;border-radius:0;margin:0 0 16px 0;box-shadow:none;border-bottom:1px solid var(--border)}.dashboard-header h1{font-size:24px;font-weight:700;letter-spacing:-.02em;font-family:'Red Hat Display',sans-serif}.dashboard-header p{margin:8px 0 16px;color:var(--text-secondary);font-size:14px}.metrics-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin:16px 0 16px}.metric-card{background:#fff;border:1px solid var(--border);border-radius:16px;padding:16px 16px;box-shadow:none;text-align:left;transition:all .2s ease}.metric-card:hover{box-shadow:0 2px 8px rgba(21,21,21,.08);transform:none}.metric-label{font-size:14px;font-weight:500;letter-spacing:0;color:var(--text-secondary);margin-bottom:8px;text-transform:none}.metric-value{font-size:24px;font-weight:600;color:var(--text)}.section-header{margin:24px 0 12px}.section-title{font-size:16px;font-weight:700;color:var(--text);letter-spacing:0;font-family:'Red Hat Display',sans-serif}.section-subtitle{font-size:14px;color:var(--text-secondary);margin-top:4px}.divider{height:1px;background:var(--border);margin:16px 0}.graph-container{background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:none;overflow:hidden;margin-bottom:16px;position:relative}.graph-canvas{width:100%;height:560px;display:block;background:var(--bg-secondary)}.graph-tooltip{display:none;position:absolute;background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px 16px;box-shadow:0 8px 24px rgba(21,21,21,.12);pointer-events:none;font-size:13px;z-index:100;max-width:280px}.graph-tooltip.visible{display:block}.graph-tooltip b{color:var(--text)}.node-table{width:100%;border-collapse:collapse;font-size:14px;border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:none}.node-table thead tr{background:var(--bg-secondary);color:var(--text);font-size:12px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--border)}.node-table th{padding:10px 16px;font-weight:600;text-align:left}.node-table th:nth-child(2),.node-table th:nth-child(3){text-align:center}.node-table td{padding:10px 16px}.node-table td:nth-child(2),.node-table td:nth-child(3){text-align:center;font-weight:700;font-size:14px}.node-table tbody tr{border-bottom:1px solid var(--border-light,#e0e0e0)}.major-divider{margin:32px 0;padding:0;border:none;height:1px;background:var(--border);position:relative}.major-divider::after{content:'';display:none}.agent-section{background:#fff;border-radius:12px;border:1px solid var(--border);padding:16px;margin-bottom:16px}.agent-section h3{font-size:16px;font-weight:700;color:var(--text);margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border);font-family:'Red Hat Display',sans-serif}.agent-metrics-banner{background:#fff;border:1px solid var(--border);border-radius:16px;padding:16px;margin-bottom:16px;box-shadow:none}.agent-metrics-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.agent-metric{text-align:left}.agent-metric-label{font-size:14px;font-weight:500;letter-spacing:0;color:var(--text-secondary);margin-bottom:4px;text-transform:none}.agent-metric-value{font-size:24px;font-weight:600;color:var(--text)}.issues-table{width:100%;border-collapse:collapse;font-size:14px;border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:none}.issues-table thead tr{background:var(--bg-secondary);color:var(--text);font-size:12px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--border)}.issues-table th{padding:10px 16px;font-weight:600;text-align:left}.issues-table th:nth-child(2),.issues-table th:nth-child(3),.issues-table th:nth-child(4){text-align:center}.issues-table td{padding:12px 16px}.issues-table td:nth-child(2),.issues-table td:nth-child(3),.issues-table td:nth-child(4){text-align:center}.issues-table tbody tr{border-bottom:1px solid var(--border-light,#e0e0e0)}.issues-table tbody tr:nth-child(even){background:#fff}.issues-table tbody tr:nth-child(odd){background:#fff}.severity-badge{padding:2px 10px;border-radius:999px;font-weight:500;font-size:12px;display:inline-block}.no-issue-row{background:#e8f5e3!important;border-top:1px solid #b7dfb0!important}.no-issue-row td:first-child{color:#3e8635;font-weight:600}.issue-main-row{cursor:pointer}.issue-main-row:hover{background:var(--primary-bg)!important}.issue-example-row td{padding:0!important;background:var(--bg-secondary)}.issue-examples-wrap{padding:16px 16px 18px 16px}.issue-examples-title{font-size:13px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;font-family:'Red Hat Display',sans-serif}.issue-examples-list{display:grid;gap:12px}.issue-example-card{background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:none;overflow:hidden}.issue-example-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;cursor:pointer;list-style:none;background:#fff}.issue-example-summary::-webkit-details-marker{display:none}.issue-example-summary:hover{background:var(--bg-secondary)}.issue-example-summary-main{display:flex;flex-direction:column;gap:4px}.issue-example-card-title{font-size:14px;font-weight:700;color:var(--text);font-family:'Red Hat Display',sans-serif}.issue-example-meta{font-size:13px;color:var(--text-secondary);line-height:1.4}.issue-example-chevron{font-size:16px;font-weight:700;color:var(--primary);transition:transform .2s ease;flex-shrink:0}.issue-example-card[open] .issue-example-chevron{transform:rotate(90deg)}.issue-example-card-body{padding:14px;border-top:1px solid var(--border);background:var(--bg-secondary)}.issue-example-fields{display:grid;gap:14px}.issue-example-field{display:grid;gap:8px}.issue-example-label{font-size:12px;font-weight:700;color:var(--primary);text-transform:uppercase;letter-spacing:.08em}.issue-example-value{font-size:14px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word;line-height:1.6}.issue-example-value.code{font-family:'Red Hat Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:#1e1e2e;color:#cdd6f4;padding:14px 16px;border-radius:10px;overflow:auto;max-height:260px;min-height:84px}.issue-example-scrollbox{overflow:auto;max-height:260px;min-height:84px}.chat-message-list{display:grid;gap:12px}.chat-message{border:1px solid var(--border);border-radius:12px;padding:12px 14px;background:#fff}.chat-message.system{background:var(--primary-bg)}.chat-message.user{background:var(--bg-secondary)}.chat-message.assistant{background:#e8f5e3}.chat-message-header{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--primary);margin-bottom:8px}.chat-message-content{font-size:14px;color:var(--text);white-space:pre-wrap;word-break:break-word;line-height:1.6}.chat-message-tools{margin-top:10px;padding-top:10px;border-top:1px dashed var(--border)}.expand-indicator{display:block;margin-top:8px;color:var(--primary);font-weight:700;font-size:13px}@media(max-width:768px){.container{padding:16px}.agent-metrics-grid{grid-template-columns:repeat(2,1fr)}.graph-canvas{height:460px}}.info-tooltip{position:relative;display:inline-block}.info-tooltip-trigger{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:6px;border-radius:50%;background:var(--bg-secondary);color:var(--text-secondary);font-size:11px;font-weight:700;cursor:help;vertical-align:middle}.info-tooltip-bubble{visibility:hidden;opacity:0;position:absolute;left:calc(100% + 8px);top:50%;transform:translateY(-50%);width:280px;background:#151515;color:#fff;padding:10px 12px;border-radius:8px;font-size:12px;line-height:1.4;box-shadow:0 8px 24px rgba(21,21,21,.2);transition:opacity .2s ease;z-index:20;text-transform:none;letter-spacing:normal;font-weight:400}.info-tooltip:hover .info-tooltip-bubble,.info-tooltip:focus-within .info-tooltip-bubble{visibility:visible;opacity:1}
+
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="dashboard-header">
+    <h1>Agentic Workflow Dashboard</h1>
+    <p>Explore agent traces, analyze performance, and discover patterns in multi-agent systems</p>
+  </div>
+  <div class="metrics-row" id="metricsRow"></div>
+  <div class="divider"></div>
+  <div class="section-header">
+    <div class="section-title">Agent Workflow Graph</div>
+    <div class="section-subtitle">Hover over nodes for details. Node size reflects call count.</div>
+  </div>
+  <div class="graph-container">
+    <canvas class="graph-canvas" id="graphCanvas"></canvas>
+    <div class="graph-tooltip" id="graphTooltip"></div>
+  </div>
+  <div class="divider"></div>
+  <div class="section-header">
+    <div class="section-title">Node Usage Frequency</div>
+    <div class="section-subtitle">Number of times each node was called across all traces</div>
+  </div>
+  <div id="nodeTable"></div>
+  <div class="major-divider"></div>
+  <div class="section-header">
+    <div class="section-title" style="font-size:24px">Agent CLEAR Analysis</div>
+    <div class="section-subtitle">Discovered issues for each agent</div>
+  </div>
+  <div id="agentSections"></div>
+</div>
+
+<script>
+// ─── Embedded data ──────────────────────────────────────────────────────
+const DATA = {"unique_tasks": 11, "unique_agents": 5, "total_rows": 11, "node_stats": {"planner": {"count": 5, "unique_tasks": 1}, "classifier": {"count": 1, "unique_tasks": 1}, "analyst": {"count": 3, "unique_tasks": 1}, "reviewer": {"count": 1, "unique_tasks": 1}, "writer": {"count": 1, "unique_tasks": 1}}, "edges": [{"src": "planner", "tgt": "planner", "weight": 4}, {"src": "planner", "tgt": "classifier", "weight": 1}, {"src": "classifier", "tgt": "analyst", "weight": 1}, {"src": "analyst", "tgt": "analyst", "weight": 2}, {"src": "analyst", "tgt": "reviewer", "weight": 1}, {"src": "reviewer", "tgt": "writer", "weight": 1}], "agents": {"analyst": {"total_evals": 3, "avg_score": 0.43, "unique_issues": 6, "unique_tasks": 1, "issues_table": [{"issue": "No step-by-step plan or reasoning", "count": 2, "freq": 66.7, "severity": 0.82, "is_no_issue": false, "examples": []}, {"issue": "Missing intermediate calculations", "count": 2, "freq": 66.7, "severity": 0.82, "is_no_issue": false, "examples": []}, {"issue": "No final answer or conclusion", "count": 2, "freq": 66.7, "severity": 0.82, "is_no_issue": false, "examples": []}, {"issue": "Lack of explanation or transparency", "count": 2, "freq": 66.7, "severity": 0.82, "is_no_issue": false, "examples": []}, {"issue": "Incomplete response", "count": 2, "freq": 66.7, "severity": 0.82, "is_no_issue": false, "examples": []}, {"issue": "No verification of user-provided data", "count": 1, "freq": 33.3, "severity": 0.85, "is_no_issue": false, "examples": []}, {"issue": "No Issues", "count": 1, "freq": 33.3, "severity": 0.0, "is_no_issue": true}]}, "classifier": {"total_evals": 1, "avg_score": 1.0, "unique_issues": 0, "unique_tasks": 1, "issues_table": [{"issue": "No Issues", "count": 1, "freq": 100.0, "severity": 0.0, "is_no_issue": true}]}, "planner": {"total_evals": 5, "avg_score": 0.62, "unique_issues": 4, "unique_tasks": 1, "issues_table": [{"issue": "Used disallowed tool (calculator) despite instruction", "count": 2, "freq": 40.0, "severity": 0.9, "is_no_issue": false, "examples": []}, {"issue": "Did not provide a complete answer", "count": 2, "freq": 40.0, "severity": 0.9, "is_no_issue": false, "examples": []}, {"issue": "Ignored system instruction to only gather data", "count": 2, "freq": 40.0, "severity": 0.9, "is_no_issue": false, "examples": []}, {"issue": "Did not compute requested comparison", "count": 1, "freq": 20.0, "severity": 0.9, "is_no_issue": false, "examples": []}, {"issue": "No Issues", "count": 3, "freq": 60.0, "severity": 0.0, "is_no_issue": true}]}, "reviewer": {"total_evals": 1, "avg_score": 1.0, "unique_issues": 0, "unique_tasks": 1, "issues_table": [{"issue": "No Issues", "count": 1, "freq": 100.0, "severity": 0.0, "is_no_issue": true}]}, "writer": {"total_evals": 1, "avg_score": 0.9, "unique_issues": 1, "unique_tasks": 1, "issues_table": [{"issue": "Omitted requested caveat", "count": 1, "freq": 100.0, "severity": 0.1, "is_no_issue": false, "examples": []}]}}};
+
+// ─── Helpers ────────────────────────────────────────────────────────────
+function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+function isChatMessageList(v) {
+  return Array.isArray(v) && v.every(item => item && typeof item==='object' && ('role' in item || 'content' in item));
+}
+function renderChatMessageList(messages) {
+  return `<div class="chat-message-list">${messages.map(msg => {
+    const role=msg.role||'message';
+    const content=msg.content===undefined||msg.content===null?'':msg.content;
+    const toolCalls=msg.tool_calls;
+    const toolsHtml=(Array.isArray(toolCalls) && toolCalls.length)
+      ? `<div class="chat-message-tools">${renderExampleValue(toolCalls, true)}</div>`
+      : '';
+    return `<div class="chat-message ${esc(String(role).toLowerCase())}">
+      <div class="chat-message-header">${esc(String(role))}</div>
+      <div class="chat-message-content">${fmtExampleValue(content)}</div>
+      ${toolsHtml}
+    </div>`;
+  }).join('')}</div>`;
+}
+function decodeEscapedString(s) {
+  if(typeof s!=='string') return s;
+  return s
+    .replace(/\\\\/g, '\\')
+    .replace(/\\"/g, '"')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t')
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+function prettyJsonStringify(v) {
+  return JSON.stringify(v, null, 2);
+}
+function fmtExampleValue(v) {
+  if(v===null||v===undefined||v==='') return '—';
+  if(typeof v==='object') return esc(prettyJsonStringify(v));
+  return esc(decodeEscapedString(String(v)));
+}
+function isJsonLike(v) {
+  return v!==null && v!==undefined && v!=='' && typeof v==='object';
+}
+function renderStructuredJson(value, depth=0) {
+  if(Array.isArray(value)) {
+    if(!value.length) return `<span>[ ]</span>`;
+    return `<div style="padding-left:${depth ? 16 : 0}px">[
+      ${value.map(item => `<div style="margin:6px 0;padding-left:16px">${renderStructuredJson(item, depth + 1)}</div>`).join('')}
+    ]</div>`;
+  }
+  if(value && typeof value==='object') {
+    const entries=Object.entries(value);
+    if(!entries.length) return `<span>{ }</span>`;
+    return `<div style="padding-left:${depth ? 16 : 0}px">{
+      ${entries.map(([k,v]) => `<div style="margin:6px 0;padding-left:16px"><span style="color:#0066cc">"${esc(k)}"</span>: ${renderStructuredJson(v, depth + 1)}</div>`).join('')}
+    }</div>`;
+  }
+  if(typeof value==='string') {
+    return `<span style="white-space:pre-wrap;word-break:break-word;color:#e0e0e0">"${esc(decodeEscapedString(value))}"</span>`;
+  }
+  if(value===null) return '<span>null</span>';
+  return `<span>${esc(String(value))}</span>`;
+}
+function renderExampleValue(value, forceCode=false, fieldName='') {
+  const shouldRenderAsJson = forceCode || isJsonLike(value) || ((fieldName === 'response' || fieldName === 'model_input') && typeof value === 'object');
+  if(fieldName !== 'model_input' && isChatMessageList(value)) return renderChatMessageList(value);
+  const cls=shouldRenderAsJson?'issue-example-value code':'issue-example-value';
+  const rendered = shouldRenderAsJson && isJsonLike(value) ? renderStructuredJson(value) : fmtExampleValue(value);
+  return `<div class="${cls}">${rendered}</div>`;
+}
+function renderExampleField(label, value) {
+  const scrollClass = (label === 'model_input' || label === 'response') ? ' issue-example-scrollbox' : '';
+  const renderedValue = renderExampleValue(value, false, label)
+    .replace('issue-example-value code', `issue-example-value code${scrollClass}`)
+    .replace('issue-example-value"', `issue-example-value${scrollClass}"`);
+  return `<div class="issue-example-field"><div class="issue-example-label">${esc(label)}</div>${renderedValue}</div>`;
+}
+
+// ─── Metrics ────────────────────────────────────────────────────────────
+document.getElementById('metricsRow').innerHTML = [
+  ['#Agents <span class="info-tooltip"><span class="info-tooltip-trigger" tabindex="0" aria-label="Agents explanation">i</span><span class="info-tooltip-bubble">Number of evaluated subagent/nodes</span></span>', DATA.unique_agents],
+  ['#Traces <span class="info-tooltip"><span class="info-tooltip-trigger" tabindex="0" aria-label="Traces explanation">i</span><span class="info-tooltip-bubble">Number of input traces</span></span>', DATA.unique_tasks],
+  ['#Interactions <span class="info-tooltip"><span class="info-tooltip-trigger" tabindex="0" aria-label="Interactions explanation">i</span><span class="info-tooltip-bubble">Total number of evaluated llm calls</span></span>', DATA.total_rows],
+].map(([l,v]) => `<div class="metric-card"><div class="metric-label">${l}</div><div class="metric-value">${esc(String(v))}</div></div>`).join('');
+
+// ─── Graph ──────────────────────────────────────────────────────────────
+function shellLayout(nodes, W, H) {
+  const cx=W/2, cy=H/2, r=Math.min(W,H)*.32, n=nodes.length, pos={};
+  nodes.forEach((nd,i)=>{ const a=2*Math.PI*i/n - Math.PI/2; pos[nd]={x:cx+r*Math.cos(a), y:cy+r*Math.sin(a)}; });
+  return pos;
+}
+
+function renderGraph() {
+  const c=document.getElementById('graphCanvas'), ctx=c.getContext('2d');
+  const dpr=devicePixelRatio||1, rect=c.getBoundingClientRect();
+  c.width=rect.width*dpr; c.height=rect.height*dpr;
+  ctx.scale(dpr,dpr);
+  const W=rect.width, H=rect.height;
+  const ns=DATA.node_stats, edges=DATA.edges;
+  const names=Object.keys(ns);
+  const pos=shellLayout(names, W, H);
+  const counts=names.map(n=>ns[n].count);
+  const minC=Math.min(...counts), maxC=Math.max(...counts);
+  const nr = cnt => maxC===minC ? 30 : 18+((cnt-minC)/(maxC-minC))*32;
+  const nc = cnt => { if(maxC===minC) return '#e0e0e0'; const n=(cnt-minC)/(maxC-minC); return n>.7?'#151515':n>.4?'#707070':'#bdbdbd'; };
+
+  ctx.clearRect(0,0,W,H); ctx.fillStyle='#f2f2f2'; ctx.fillRect(0,0,W,H);
+
+  const edgeSet=new Set(edges.map(e=>e.src+'|||'+e.tgt));
+
+  // Edges
+  for(const e of edges) {
+    const p0=pos[e.src], p1=pos[e.tgt]; if(!p0||!p1) continue;
+    let x0=p0.x, y0=p0.y, x1=p1.x, y1=p1.y;
+    const dx=x1-x0, dy=y1-y0, len=Math.sqrt(dx*dx+dy*dy);
+    if(edgeSet.has(e.tgt+'|||'+e.src) && len>0) {
+      const px=-dy/len*14, py=dx/len*14; x0+=px; y0+=py; x1+=px; y1+=py;
+    }
+    const r0=nr(ns[e.src]?.count||0), r1=nr(ns[e.tgt]?.count||0);
+    const la=Math.sqrt((x1-x0)**2+(y1-y0)**2);
+    if(la<=r0+r1) continue;
+    const dA=(x1-x0)/la, dB=(y1-y0)/la;
+    const sx=x0+dA*(r0+4), sy=y0+dB*(r0+4), ex=x1-dA*(r1+4), ey=y1-dB*(r1+4);
+    // Line
+    const lw=Math.min(e.weight/2,6)+1;
+    ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(ex,ey);
+    ctx.strokeStyle='#c7c7c7'; ctx.lineWidth=lw; ctx.stroke();
+    // Arrowhead - larger, filled, at the end of the line
+    const al=14+lw, ag=Math.atan2(ey-sy,ex-sx);
+    ctx.beginPath(); ctx.moveTo(ex,ey);
+    ctx.lineTo(ex-al*Math.cos(ag-.4),ey-al*Math.sin(ag-.4));
+    ctx.lineTo(ex-al*.5*Math.cos(ag),ey-al*.5*Math.sin(ag));
+    ctx.lineTo(ex-al*Math.cos(ag+.4),ey-al*Math.sin(ag+.4));
+    ctx.closePath(); ctx.fillStyle='#707070'; ctx.fill();
+    // Weight label
+    const lx=(sx+ex)/2, ly=(sy+ey)/2;
+    ctx.font="600 12px 'Red Hat Text',sans-serif";
+    const tw=ctx.measureText(String(e.weight)).width;
+    ctx.fillStyle='rgba(255,255,255,.95)';
+    ctx.beginPath(); ctx.roundRect(lx-tw/2-6,ly-10,tw+12,20,4); ctx.fill();
+    ctx.strokeStyle='#e0e0e0'; ctx.lineWidth=1; ctx.stroke();
+    ctx.fillStyle='#151515'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(String(e.weight),lx,ly);
+  }
+
+  // Nodes
+  for(const name of names) {
+    const p=pos[name], r=nr(ns[name].count), col=nc(ns[name].count);
+    ctx.save(); ctx.shadowColor='rgba(0,0,0,.12)'; ctx.shadowBlur=8; ctx.shadowOffsetY=2;
+    ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2); ctx.fillStyle=col; ctx.fill(); ctx.restore();
+    ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2); ctx.strokeStyle='#151515'; ctx.lineWidth=2.5; ctx.stroke();
+    // Label above node only (black text)
+    ctx.font="600 13px 'Red Hat Text',sans-serif"; ctx.fillStyle='#151515'; ctx.textAlign='center'; ctx.textBaseline='bottom';
+    const fn=name.length>28?name.slice(0,25)+'...':name;
+    ctx.fillText(fn,p.x,p.y-r-8);
+  }
+
+  // Hover data
+  c._gd={pos,ns,nr};
+}
+
+// Tooltip
+(function(){
+  const c=document.getElementById('graphCanvas'), tt=document.getElementById('graphTooltip');
+  c.addEventListener('mousemove',e=>{
+    const r=c.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top, gd=c._gd;
+    if(!gd) return;
+    for(const[name,p] of Object.entries(gd.pos)){
+      const rad=gd.nr(gd.ns[name].count);
+      if(Math.sqrt((mx-p.x)**2+(my-p.y)**2)<=rad){
+        const s=gd.ns[name];
+        tt.innerHTML=`<b>${esc(name)}</b><br><br><b>Total Calls:</b> ${s.count}<br><b>Unique Tasks:</b> ${s.unique_tasks}`;
+        tt.style.left=(mx+16)+'px'; tt.style.top=(my+16)+'px';
+        tt.classList.add('visible'); return;
+      }
+    }
+    tt.classList.remove('visible');
+  });
+  c.addEventListener('mouseleave',()=>tt.classList.remove('visible'));
+})();
+
+renderGraph();
+window.addEventListener('resize', renderGraph);
+
+// ─── Heatmap color helper ───────────────────────────────────────────────
+function heatBg(val, min, max) {
+  // Blend #ffffff → #e7f1fa (--primary-bg) for Node Usage cells
+  if(max===min) return '#e7f1fa';
+  const t=(val-min)/(max-min);
+  const r=Math.round(255-t*24), g=Math.round(255-t*39), b=Math.round(255-t*54);
+  return `rgb(${r},${g},${b})`;
+}
+function heatFg(val, min, max) {
+  if(max===min) return '#151515';
+  const t=(val-min)/(max-min);
+  return t>0.5 ? '#0066cc' : '#151515';
+}
+
+// ─── Node usage table ───────────────────────────────────────────────────
+(function(){
+  const ns=DATA.node_stats;
+  const sorted=Object.entries(ns).sort((a,b)=>b[1].count-a[1].count);
+  const counts=sorted.map(([,s])=>s.count), tasks=sorted.map(([,s])=>s.unique_tasks);
+  const minC=Math.min(...counts), maxC=Math.max(...counts);
+  const minT=Math.min(...tasks), maxT=Math.max(...tasks);
+  let html='<table class="node-table"><thead><tr><th>Agent</th><th>Total Calls</th><th>Unique Tasks</th></tr></thead><tbody>';
+  for(const[name,s] of sorted) {
+    html+=`<tr><td style="color:#151515">${esc(name)}</td><td style="background:${heatBg(s.count,minC,maxC)};color:${heatFg(s.count,minC,maxC)}">${s.count}</td><td style="background:${heatBg(s.unique_tasks,minT,maxT)};color:${heatFg(s.unique_tasks,minT,maxT)}">${s.unique_tasks}</td></tr>`;
+  }
+  html+='</tbody></table>';
+  document.getElementById('nodeTable').innerHTML=html;
+})();
+
+// ─── Agent sections ─────────────────────────────────────────────────────
+(function(){
+  const container=document.getElementById('agentSections');
+  for(const[name,ad] of Object.entries(DATA.agents).sort((a,b)=>a[0].localeCompare(b[0]))) {
+    const issues=ad.issues_table;
+    const maxFreq = Math.max(...issues.filter(d=>!d.is_no_issue).map(d=>d.freq), 1);
+
+    let tableHtml='';
+    const regular=issues.filter(d=>!d.is_no_issue);
+    const noIssue=issues.filter(d=>d.is_no_issue);
+
+    if(regular.length||noIssue.length) {
+      tableHtml='<table class="issues-table"><thead><tr><th>Issue</th><th>Count</th><th>Frequency</th><th>Severity</th></tr></thead><tbody>';
+      for(const [idx,d] of regular.entries()) {
+        const t=maxFreq>0?d.freq/maxFreq:0;
+        let fc='#16A34A'; if(t>=.66) fc='#c9190b'; else if(t>=.33) fc='#D97706';
+        let sb,sf;
+        if(d.severity>=.7){sb='#FEE2E2';sf='#991B1B';}else if(d.severity>=.4){sb='#FEF9C3';sf='#854D0E';}else{sb='#D1FAE5';sf='#065F46';}
+        const exampleId=`examples-${esc(name).replace(/[^a-zA-Z0-9_-]/g,'_')}-${idx}`;
+        const examples=(d.examples||[]).map((ex, exampleIdx)=>`<details class="issue-example-card">
+          <summary class="issue-example-summary">
+            <div class="issue-example-summary-main">
+              <div class="issue-example-card-title">Example ${exampleIdx + 1}</div>
+              <div class="issue-example-meta">trace_id: ${fmtExampleValue(ex.trace_id)} · step: ${fmtExampleValue(ex.step_in_trace)}</div>
+            </div>
+            <div class="issue-example-chevron">›</div>
+          </summary>
+          <div class="issue-example-card-body">
+            <div class="issue-example-fields">
+              ${renderExampleField('trace_id', ex.trace_id)}
+              ${renderExampleField('step_in_trace', ex.step_in_trace)}
+              ${renderExampleField('model_input', ex.model_input)}
+              ${renderExampleField('response', ex.response)}
+              ${renderExampleField('score', ex.score)}
+              ${renderExampleField('evaluation_summary', ex.evaluation_summary)}
+            </div>
+          </div>
+        </details>`).join('');
+        tableHtml+=`<tr class="issue-main-row" onclick="toggleIssueExamples('${exampleId}', this)">
+          <td style="color:#151515">${esc(d.issue)}${(d.examples&&d.examples.length)?'<br><span class="expand-indicator">▸ Examples</span>':''}</td>
+          <td style="font-weight:600;color:#4d4d4d">${d.count}</td>
+          <td style="font-weight:700;color:${fc}">${d.freq}%</td>
+          <td><span class="severity-badge" style="background:${sb};color:${sf}">${d.severity.toFixed(2)}</span></td>
+        </tr>`;
+        if(d.examples&&d.examples.length){
+          tableHtml+=`<tr class="issue-example-row" id="${exampleId}" style="display:none"><td colspan="4">
+            <div class="issue-examples-wrap">
+              <div class="issue-examples-title">Examples</div>
+              <div class="issue-examples-list">${examples}</div>
+            </div>
+          </td></tr>`;
+        }
+      }
+      for(const d of noIssue) {
+        tableHtml+=`<tr class="no-issue-row"><td>&#x2705; No Issues</td><td style="font-weight:600;color:#4d4d4d">${d.count}</td><td style="font-weight:700;color:#065F46">${d.freq}%</td><td><span class="severity-badge" style="background:#D1FAE5;color:#065F46">0.00</span></td></tr>`;
+      }
+      tableHtml+='</tbody></table>';
+    } else {
+      tableHtml='<div style="text-align:center;padding:20px;color:#10B981;">No issues discovered in this agent\'s outputs</div>';
+    }
+
+    const sec=document.createElement('div'); sec.className='agent-section';
+    sec.innerHTML=`<h3>${esc(name)}</h3>
+      <div class="agent-metrics-banner"><div class="agent-metrics-grid">
+        <div class="agent-metric"><div class="agent-metric-label">#Evaluated Calls</div><div class="agent-metric-value">${ad.total_evals}</div></div>
+        <div class="agent-metric"><div class="agent-metric-label">Avg Score</div><div class="agent-metric-value">${ad.avg_score!==null?ad.avg_score:'N/A'}</div></div>
+        <div class="agent-metric"><div class="agent-metric-label">#Issues Discovered</div><div class="agent-metric-value">${ad.unique_issues}</div></div>
+        <div class="agent-metric"><div class="agent-metric-label">#Traces</div><div class="agent-metric-value">${ad.unique_tasks}</div></div>
+      </div></div>
+      <div class="section-header" style="margin-top:0"><div class="section-title">Discovered Issues</div><div class="section-subtitle">Recurring problems identified in this agent's outputs <span class="info-tooltip"><span class="info-tooltip-trigger" tabindex="0" aria-label="Issue matching explanation">i</span><span class="info-tooltip-bubble">Each llm call can be matched to any number of discovered issues, or to no issues.</span></span></div></div>
+      ${tableHtml}`;
+    container.appendChild(sec);
+  }
+})();
+function toggleIssueExamples(id, rowEl){
+  const el=document.getElementById(id);
+  if(!el) return;
+  const isHidden=el.style.display==='none';
+  el.style.display=isHidden?'table-row':'none';
+  const indicator=rowEl.querySelector('.expand-indicator');
+  if(indicator) indicator.textContent=isHidden?'▾ Examples':'▸ Examples';
+}
+</script>
+</body>
+</html>
