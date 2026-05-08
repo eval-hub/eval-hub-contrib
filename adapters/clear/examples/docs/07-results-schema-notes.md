@@ -20,6 +20,18 @@ CLEAR generates the **static** dashboard files (for example **`clear_results.htm
 
 The adapter may **copy** or **restyle** that HTML for artifacts (for example MLflow or OCI upload). Optional **`clear_dashboard_theme`** controls branding on the HTML **without** changing **`clear_results.json`**; see [06-dashboard-theme.md](06-dashboard-theme.md).
 
+### How to read the HTML dashboard
+
+The HTML dashboard summarizes CLEAR results for an **agentic workflow**.
+
+- **Top summary cards** — Typically include how many **workflow nodes** (agents / graph roles) were evaluated, how many **traces** were analyzed, and how many **LLM calls** were scored overall. Exact labels follow the CLEAR version that generated the report.
+- **Workflow graph** — Shows how work **moves between nodes** in the workflow. **Larger nodes** were invoked more often; **thicker edges** indicate **more frequent** transitions between nodes.
+- **Per-node sections** — After the workflow-level view, the dashboard breaks analysis down **by node**. Each section reflects CLEAR’s scoring and issue discovery for that node’s calls.
+- **Issues table** — Lists **which problems** CLEAR associated with that node, **how often** each issue appeared, and **severity**. One evaluated LLM call can match **more than one** issue, so issue **frequencies do not need to sum to 100%**.
+- **No issues** — Rows or spans labeled as having **no issues** are calls that CLEAR did **not** match to any catalogued issue for that node.
+
+Upstream CLEAR may tweak layout and labels between releases; if something looks off, compare with **`clear_results.json`** and the CLEAR version in **`requirements.txt`**.
+
 ## Try it in a notebook
 
 Use **[`clear_evalhub_example.ipynb`](../clear_evalhub_example.ipynb)** in Jupyter: **Part A** is a **local** adapter run; **Part B** is **listing providers, submitting a job, and waiting** on a **deployed** Eval Hub. Configure **`examples/.env`** from **`env.example`** first.

@@ -12,7 +12,7 @@ Use the **markdown walkthrough** below, or jump straight to **[`clear_evalhub_ex
 
 | File | Role |
 |------|------|
-| [`output/local/clear_results.html`](output/local/clear_results.html) | Static CLEAR dashboard (theme depends on job). |
+| [`output/local/clear_results.html`](output/local/clear_results.html) | Static CLEAR dashboard (theme depends on job). How to interpret cards, graph, and issue tables: [07-results-schema-notes.md § HTML dashboard](docs/07-results-schema-notes.md#how-to-read-the-html-dashboard). |
 | [`output/local/clear_results.json`](output/local/clear_results.json) | Structured results and stats for metrics mapping. |
 
 **Sample inputs:** [`input-traces/`](input-traces/) — see **Samples** in [`docs/02-agent-traces.md`](docs/02-agent-traces.md).
@@ -27,7 +27,7 @@ Use the **markdown walkthrough** below, or jump straight to **[`clear_evalhub_ex
 | [docs/04-deployed-eval-hub.md](docs/04-deployed-eval-hub.md) | Running jobs on a deployed Eval Hub (high level) |
 | [docs/05-benchmarks-and-parameters.md](docs/05-benchmarks-and-parameters.md) | Benchmarks, **`evaluation_criteria`**, **`predefined_issues`** |
 | [docs/06-dashboard-theme.md](docs/06-dashboard-theme.md) | **`clear_dashboard_theme`** (Red Hat HTML vs stock CLEAR) |
-| [docs/07-results-schema-notes.md](docs/07-results-schema-notes.md) | **`clear_results.json`**, HTML dashboard, CLEAR version notes |
+| [docs/07-results-schema-notes.md](docs/07-results-schema-notes.md) | **`clear_results.json`**, HTML dashboard, **how to read the dashboard**, CLEAR version notes |
 
 ## Other files here
 

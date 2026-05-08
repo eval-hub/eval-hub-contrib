@@ -54,6 +54,8 @@ After a successful run you should find **`clear_results.json`** and dashboard **
 
 **Committed tutorial snapshot** (same layout under **`examples/output/local/`** after you run from the notebook or point **`results_dir`** there): [clear_results.html](../output/local/clear_results.html), [clear_results.json](../output/local/clear_results.json). Open the HTML in a browser to preview the dashboard.
 
+For **what the cards, graph, and issue tables mean**, see **§ HTML dashboard → How to read the HTML dashboard** in [07-results-schema-notes.md](07-results-schema-notes.md).
+
 ## Next
 
 - Deployed cluster: [04-deployed-eval-hub.md](04-deployed-eval-hub.md)  
