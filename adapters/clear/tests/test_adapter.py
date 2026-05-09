@@ -15,7 +15,7 @@ from unittest.mock import create_autospec
 import main
 import pytest
 from evalhub.adapter import JobCallbacks, JobPhase, OCIArtifactResult
-from main import ClearAdapter
+from main import ClearAdapter, _normalize_clear_agent_entry
 
 # Canned output analogous to CLEAR's clear_results.json structure.
 # Schema: https://github.com/IBM/CLEAR (agentic pipeline output)
@@ -47,6 +47,61 @@ CANNED_CLEAR_RESULTS = {
         },
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _normalize_clear_agent_entry
+# ---------------------------------------------------------------------------
+
+def test_normalize_clear_agent_entry_2x_reasoning_eval():
+    """CLEAR 2.x: returns the reasoning_eval block when it contains agent_summary."""
+    agent = {
+        "reasoning_eval": {
+            "agent_summary": {"avg_score": 0.75},
+            "issues_catalog": {"wrong_tool": {"count": 3}},
+        }
+    }
+    result = _normalize_clear_agent_entry(agent)
+    assert result == agent["reasoning_eval"]
+    assert result["agent_summary"]["avg_score"] == 0.75
+
+
+def test_normalize_clear_agent_entry_2x_tools_eval_fallback():
+    """CLEAR 2.x: falls back to tools_eval when reasoning_eval has no relevant keys."""
+    agent = {
+        "reasoning_eval": {"some_other_key": 1},
+        "tools_eval": {
+            "agent_summary": {"avg_score": 0.60},
+            "issues": ["bad_call"],
+        },
+    }
+    result = _normalize_clear_agent_entry(agent)
+    assert result == agent["tools_eval"]
+
+
+def test_normalize_clear_agent_entry_1x_flat_shape():
+    """CLEAR 1.x: returns the agent dict itself when agent_summary is at top level."""
+    agent = {
+        "agent_summary": {"avg_score": 0.85},
+        "issues_catalog": {"incomplete_plan": {"count": 10}},
+    }
+    result = _normalize_clear_agent_entry(agent)
+    assert result is agent
+
+
+def test_normalize_clear_agent_entry_empty_dict():
+    """Returns empty dict when no recognisable keys are present."""
+    assert _normalize_clear_agent_entry({}) == {}
+
+
+def test_normalize_clear_agent_entry_non_dict():
+    """Returns empty dict for non-dict input (e.g. None, string, list)."""
+    assert _normalize_clear_agent_entry(None) == {}
+    assert _normalize_clear_agent_entry("bad") == {}
+    assert _normalize_clear_agent_entry([1, 2]) == {}
+
+
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
