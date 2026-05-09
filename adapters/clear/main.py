@@ -64,9 +64,8 @@ def _merge_agentic_config_with_clear_defaults(agentic_config: dict[str, Any]) ->
     ``clear_eval.pipeline`` (optional in some environments).
     """
     from clear_eval.agentic.pipeline.utils import load_pipeline_config
-    from clear_eval.pipeline.config_loader import merge_configs
 
-    return merge_configs(load_pipeline_config(), agentic_config)
+    return load_pipeline_config(**agentic_config)
 
 
 def _normalize_clear_agent_entry(agent_data: Any) -> dict[str, Any]:
@@ -579,34 +578,20 @@ class ClearAdapter(FrameworkAdapter):
             "data_dir": data_dir,
             "results_dir": str(output_dir.parent),
             "run_name": output_dir.name,
+            "provider": config.parameters["provider"],
+            "eval_model_name": config.parameters["eval_model_name"],
+            "overwrite": config.parameters.get("overwrite", True),
+            "max_workers": config.parameters.get("max_workers", 20),
+
+            # with current implementation, these params must keep their default values
+            "agent_framework": config.parameters.get("agent_framework", "langgraph"),
+            "observability_framework": config.parameters.get("observability_framework", "mlflow"),
             "from_raw_traces": config.parameters.get("from_raw_traces", True),
             "run_step_by_step": config.parameters.get("run_step_by_step", True),
             "run_full_trajectory": config.parameters.get("run_full_trajectory", False),
-            "provider": config.parameters["provider"],
-            "eval_model_name": config.parameters["eval_model_name"],
-            "agent_framework": config.parameters.get("agent_framework", "langgraph"),
-            "observability_framework": config.parameters.get("observability_framework", "mlflow"),
             "separate_tools": config.parameters.get("separate_tools", False),
-            "overwrite": config.parameters.get("overwrite", True),
-            "resume_enabled": False,
-            "agent_mode": True,
-            "task": config.parameters.get("task", "general"),
-            "inference_backend": config.parameters.get("inference_backend", "litellm"),
-            "perform_generation": config.parameters.get("perform_generation", False),
-            "is_reference_based": config.parameters.get("is_reference_based", False),
-            "reference_column": config.parameters.get("reference_column", "ground_truth"),
-            "model_output_column": config.parameters.get("model_output_column", "response"),
-            "model_input_column": config.parameters.get("model_input_column", "model_input"),
-            "question_column": config.parameters.get("question_column", "question"),
-            "qid_column": config.parameters.get("qid_column", "id"),
-            "max_examples_to_analyze": config.parameters.get("max_examples_to_analyze", None),
-            "use_general_prompt": config.parameters.get("use_general_prompt", True),
-            "perform_clustering": config.parameters.get("perform_clustering", True),
-            "use_full_text_for_analysis": config.parameters.get("use_full_text_for_analysis", False),
-            "max_workers": config.parameters.get("max_workers", 20),
-            "max_shortcomings": config.parameters.get("max_shortcomings", 15),
-            "min_shortcomings": config.parameters.get("min_shortcomings", 3),
-            "max_eval_text_for_synthesis": config.parameters.get("max_eval_text_for_synthesis", 1000),
+
+            # the remaining params are set internally in clear
         }
 
         if agentic_config.get("inference_backend") == "endpoint":
@@ -627,8 +612,6 @@ class ClearAdapter(FrameworkAdapter):
 
         if "eval_model_params" in config.parameters:
             agentic_config["eval_model_params"] = config.parameters["eval_model_params"]
-        else:
-            agentic_config["eval_model_params"] = {"temperature": 0.0, "max_tokens": 8096}
 
         if config.parameters and "evaluation_criteria" in config.parameters:
             agentic_config["evaluation_criteria"] = config.parameters["evaluation_criteria"]
