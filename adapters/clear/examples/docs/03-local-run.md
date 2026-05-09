@@ -50,7 +50,15 @@ Without **`MLFLOW_TRACKING_URI`** / experiment configuration, the adapter skips 
 
 ## 5. Outputs
 
-After a successful run you should find **`clear_results.json`** and dashboard **HTML** (often **`clear_results.html`**) under the run output directory (often **`output/`** beside **`main.py`**). Optional styling: **`parameters.clear_dashboard_theme`** — [06-dashboard-theme.md](06-dashboard-theme.md).
+After a successful run the **run root** (e.g. `output/` beside `main.py`, or the `results_dir/run_name` you set) contains:
+
+- **`clear_results.json`** — structured results; source of Eval Hub metrics.
+- **`clear_results.html`** — static dashboard; open in a browser.
+- **`clear_results.dashboard_data.json`** — companion data for the dashboard.
+
+Intermediate CLEAR directories (`step_by_step/`, `traces_data/`, etc.) are **removed** after a successful run once their outputs have been preserved at the run root. If you open `step_by_step/clear_results.html` directly and find it missing, that is expected—use the root-level `clear_results.html` instead.
+
+Optional styling: **`parameters.clear_dashboard_theme`** — [06-dashboard-theme.md](06-dashboard-theme.md).
 
 **Committed tutorial snapshot** (same layout under **`examples/output/local/`** after you run from the notebook or point **`results_dir`** there): [clear_results.html](../output/local/clear_results.html), [clear_results.json](../output/local/clear_results.json). Open the HTML in a browser to preview the dashboard.
 

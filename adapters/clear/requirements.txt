@@ -2,7 +2,8 @@ eval-hub-sdk[adapter]==0.1.7
 # IBM CLEAR (agentic): PyPI `clear-eval` (e.g. 1.0.8) does not ship `clear_eval.agentic`—verified
 # the wheel has no agentic tree. Install from IBM/CLEAR until agentic is on PyPI.
 # Tag tracks a released version (bump tag when you need newer upstream fixes).
-clear-eval @ git+https://github.com/IBM/CLEAR.git@v1.1.0
+# 2.x nests per-agent results under reasoning_eval / tools_eval — see main.py extraction.
+clear-eval @ git+https://github.com/IBM/CLEAR.git@2.0.0-rc.2
 
 pandas>=2.0.0
 pydantic>=2.0.0

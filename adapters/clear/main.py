@@ -55,6 +55,39 @@ except ImportError as exc:
 logger = logging.getLogger(__name__)
 
 
+def _merge_agentic_config_with_clear_defaults(agentic_config: dict[str, Any]) -> dict[str, Any]:
+    """Merge job ``parameters`` into CLEAR's packaged default agentic YAML.
+
+    Mirrors the CLEAR CLI: the job supplies overrides only; defaults such as
+    ``input_columns`` come from ``default_agentic_config.yaml``. Imports are
+    deferred to this call so importing ``main`` does not require resolving
+    ``clear_eval.pipeline`` (optional in some environments).
+    """
+    from clear_eval.agentic.pipeline.utils import load_pipeline_config
+    from clear_eval.pipeline.config_loader import merge_configs
+
+    return merge_configs(load_pipeline_config(), agentic_config)
+
+
+def _normalize_clear_agent_entry(agent_data: Any) -> dict[str, Any]:
+    """Return the block that holds ``agent_summary`` / ``issues_catalog`` for metrics.
+
+    CLEAR 2.x nests these under ``reasoning_eval`` (and optionally ``tools_eval``).
+    CLEAR 1.x keeps them at the top level of each ``agents[<name>]`` entry.
+    """
+    if not isinstance(agent_data, dict):
+        return {}
+    for key in ("reasoning_eval", "tools_eval"):
+        block = agent_data.get(key)
+        if isinstance(block, dict) and (
+            "agent_summary" in block or "issues_catalog" in block or "issues" in block
+        ):
+            return block
+    if "agent_summary" in agent_data or "issues_catalog" in agent_data:
+        return agent_data
+    return {}
+
+
 def _local_only_run() -> bool:
     """True for local Eval Hub mode (no sidecar); drives DefaultCallbacks without callback_url."""
     mode = os.getenv("EVALHUB_MODE", "").strip().lower()
@@ -81,9 +114,11 @@ def _callbacks_for_adapter(adapter: FrameworkAdapter) -> JobCallbacks:
 
 
 def _run_clear_unified_pipeline(agentic_config: dict[str, Any], output_dir: Path) -> None:
-    """Drive IBM CLEAR's agentic layout: output dirs, trace prep, step-by-step run."""
-    results_dir = agentic_config["results_dir"]
-    run_name = agentic_config["run_name"]
+    """Run CLEAR's agentic pipeline: layout, trace prep, step-by-step evaluation."""
+    merged = _merge_agentic_config_with_clear_defaults(agentic_config)
+
+    results_dir = merged["results_dir"]
+    run_name = merged["run_name"]
     resolved_out, _ = get_run_output_dir(results_dir, run_name)
     if resolved_out.resolve() != output_dir.resolve():
         logger.warning(
@@ -91,13 +126,13 @@ def _run_clear_unified_pipeline(agentic_config: dict[str, Any], output_dir: Path
         )
     base = resolved_out
     output_paths = create_output_structure(base)
-    data_dir = Path(agentic_config["data_dir"])
-    from_raw = bool(agentic_config.get("from_raw_traces", True))
-    traces_data_dir = prepare_traces_data(data_dir, from_raw, output_paths, agentic_config)
+    data_dir = Path(merged["data_dir"])
+    from_raw = bool(merged.get("from_raw_traces", True))
+    traces_data_dir = prepare_traces_data(data_dir, from_raw, output_paths, merged)
     if not traces_data_dir:
         raise RuntimeError("CLEAR failed to prepare traces_data")
     ok = run_step_by_step_pipeline(
-        traces_data_dir, output_paths["step_by_step"], agentic_config
+        traces_data_dir, output_paths["step_by_step"], merged
     )
     if not ok:
         raise RuntimeError("CLEAR step-by-step pipeline reported failure")
@@ -684,7 +719,15 @@ class ClearAdapter(FrameworkAdapter):
         agent_scores = []
 
         for agent_name, agent_data in agents.items():
-            summary = agent_data.get("agent_summary", {})
+            payload = _normalize_clear_agent_entry(agent_data)
+            if not payload:
+                logger.warning(
+                    "Skipping agent %r: no agent_summary/issues in CLEAR 1.x or 2.x shape",
+                    agent_name,
+                )
+                continue
+
+            summary = payload.get("agent_summary", {})
             avg_score = summary.get("avg_score", 0.0)
             agent_scores.append(avg_score)
 
@@ -696,7 +739,7 @@ class ClearAdapter(FrameworkAdapter):
                 )
             )
 
-            issues_catalog = agent_data.get("issues_catalog", {})
+            issues_catalog = payload.get("issues_catalog", {})
             num_issues = len(issues_catalog)
 
             evaluation_results.append(

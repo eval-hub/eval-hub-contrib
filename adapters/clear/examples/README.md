@@ -8,12 +8,13 @@ Use the **markdown walkthrough** below, or jump straight to **[`clear_evalhub_ex
 2. **[`docs/02-agent-traces.md`](docs/02-agent-traces.md)** — what goes in **`input-traces/`** and MLflow shape expectations.
 3. **[`docs/03-local-run.md`](docs/03-local-run.md)** — venv, job JSON, **`python main.py`**, outputs.
 
-**Sample outputs** (small local run; open the HTML in a browser after clone):
+**Sample outputs** (open the HTML in a browser after clone):
 
-| File | Role |
-|------|------|
-| [`output/local/clear_results.html`](output/local/clear_results.html) | Static CLEAR dashboard (theme depends on job). How to interpret cards, graph, and issue tables: [07-results-schema-notes.md § HTML dashboard](docs/07-results-schema-notes.md#how-to-read-the-html-dashboard). |
+| File | What it shows |
+|------|---------------|
+| [`output/local/clear_results.html`](output/local/clear_results.html) | Dashboard from a **small tutorial run** (2 traces, small local judge). How to interpret cards, graph, and issue tables: [07-results-schema-notes.md § HTML dashboard](docs/07-results-schema-notes.md#how-to-read-the-html-dashboard). |
 | [`output/local/clear_results.json`](output/local/clear_results.json) | Structured results and stats for metrics mapping. |
+| [`example_output/clear_results_example.html`](example_output/clear_results_example.html) | Dashboard from a **production-scale run**: 20 traces, 6-node workflow, 233 LLM calls, GPT-5 judge. Shows the depth of analysis CLEAR can surface over real data with a strong judge — see [07-results-schema-notes.md § Example report](docs/07-results-schema-notes.md#example-report-what-a-strong-judge-reveals). |
 
 **Sample inputs:** [`input-traces/`](input-traces/) — see **Samples** in [`docs/02-agent-traces.md`](docs/02-agent-traces.md).
 

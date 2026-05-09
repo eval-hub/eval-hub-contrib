@@ -1,24 +1,61 @@
 {
   "metadata": {
     "pipeline_version": "1.0",
-    "created_at": "2026-05-08T10:00:06.465277",
+    "created_at": "2026-05-08T16:57:37.511903",
     "config": {
       "data_dir": "/Users/supathak/clear-evalhub-integration/eval-hub-contrib/adapters/clear/examples/input-traces",
       "results_dir": "/Users/supathak/clear-evalhub-integration/eval-hub-contrib/adapters/clear/examples/output",
-      "run_name": "local",
       "from_raw_traces": true,
-      "run_step_by_step": true,
-      "run_full_trajectory": false,
-      "provider": "openai",
-      "eval_model_name": "gpt-oss:20b",
       "agent_framework": "langgraph",
       "observability_framework": "mlflow",
       "separate_tools": false,
       "overwrite": true,
-      "resume_enabled": false,
-      "agent_mode": true,
-      "task": "general",
+      "max_workers": 20,
+      "run_name": "local",
       "inference_backend": "litellm",
+      "endpoint_url": null,
+      "provider": "openai",
+      "eval_model_name": "gpt-oss:20b",
+      "eval_model_params": {
+        "max_tokens": 8096,
+        "temperature": 0.0
+      },
+      "memory_only": false,
+      "evaluation_criteria": null,
+      "predefined_issues": null,
+      "external_judge_path": null,
+      "external_judge_function": "evaluate",
+      "external_judge_config": {},
+      "agent_mode": true,
+      "input_columns": [
+        "agent_name",
+        "Name",
+        "intent",
+        "task_id",
+        "step_in_trace_general",
+        "step_in_trace_node",
+        "id",
+        "traj_score",
+        "tool_or_agent",
+        "llm_call_index",
+        "api_spec",
+        "meta_data"
+      ],
+      "eval_types": [
+        "full_trajectory",
+        "rubric"
+      ],
+      "generate_rubrics": true,
+      "rubric_dir": null,
+      "clear_analysis_types": [
+        "issues"
+      ],
+      "max_files": null,
+      "context_tokens": null,
+      "run_step_by_step": true,
+      "run_full_trajectory": false,
+      "resume_enabled": false,
+      "task": "general",
       "perform_generation": false,
       "is_reference_based": false,
       "reference_column": "ground_truth",
@@ -30,19 +67,14 @@
       "use_general_prompt": true,
       "perform_clustering": true,
       "use_full_text_for_analysis": false,
-      "max_workers": 20,
       "max_shortcomings": 15,
       "min_shortcomings": 3,
-      "max_eval_text_for_synthesis": 1000,
-      "eval_model_params": {
-        "temperature": 0.0,
-        "max_tokens": 8096
-      }
+      "max_eval_text_for_synthesis": 1000
     },
     "statistics": {
-      "total_traces": 6,
+      "total_traces": 2,
       "total_agents": 3,
-      "total_issues_discovered": 7,
+      "total_issues_discovered": 3,
       "total_interactions_analyzed": 6,
       "total_interactions_with_issues": 2,
       "total_interactions_no_issues": 4
@@ -78,7 +110,7 @@
             "tr-236907d3019ea2a5f8e81baeb258753b",
             "tr-e08208946684c866332b7416670bad41"
           ],
-          "tool_calls": 0,
+          "tool_calls": 2,
           "agent_calls": 2
         },
         "assess_severity": {
@@ -96,625 +128,474 @@
   },
   "agents": {
     "assess_severity": {
-      "agent_summary": {
-        "total_interactions": 2,
-        "avg_score": 0.96,
-        "interactions_with_issues": 0,
-        "interactions_no_issues": 2,
-        "issues_count": {}
-      },
-      "issues_catalog": {},
-      "issues": [],
-      "no_issues": [
-        {
-          "trace_id": "tr-e08208946684c866332b7416670bad41_3",
-          "span_reference": {
-            "span_id": "tr-e08208946684c866332b7416670bad41_3_span_0",
-            "span_name": "assess_severity",
-            "span_type": "",
-            "tool_or_agent": "agent",
-            "parent_span_id": null,
-            "step_in_trace": 0
-          },
-          "input_output_pair": {
-            "id": "tr-e08208946684c866332b7416670bad41_3_0",
-            "model_input": "[{\"role\": \"user\", \"content\": \"Assess the severity of this problem.\\n\\nLog message: ERROR: Database connection failed for user admin\\nDiagnosis: \\n\\nDetermine if this is HIGH or LOW severity:\\n- HIGH: Immediate user impact, service degradation, data loss risk, security issue\\n- LOW: Can wait for normal business hours, minor inconvenience, cosmetic issue\\n\\nIf uncertain, default to LOW severity.\", \"tool_calls\": []}]",
-            "response": "{\"severity\": \"high\", \"reasoning\": \"A database connection failure for an admin user can lead to immediate service degradation, loss of functionality, and potentially security risks if critical processes are unable to connect to the database. This type of error commonly affects overall application health and could impact multiple users or operations.\", \"confidence\": 0.9}",
-            "score": 0.97
-          },
-          "evaluation": {
-            "evaluation_text": "**Textual Evaluation**\n\nThe model\u2019s response is concise, accurate, and fully addresses the user\u2019s request.  \n- **Correctness**: The severity is correctly identified as HIGH, matching the criteria (immediate user impact, service degradation, data loss risk, security issue).  \n- **Completeness**: All required elements are present: severity label, a clear reasoning paragraph, and an additional confidence score (though not explicitly requested, it adds useful context).  \n- **Clarity & Relevance**: The JSON format is easy to parse, and the reasoning is straightforward and directly tied to the severity criteria.  \n- **Transparency**: The reasoning explains why the severity is high, referencing service degradation and security risk.  \n- **Best Practices**: The output is well\u2011structured JSON, which is a standard, maintainable format.  \n- **Actionability**: While the user didn\u2019t ask for next steps, the response provides enough information for a practitioner to decide on escalation.  \n\nNo significant errors, omissions, or off\u2011topic content are present. The only minor point is the inclusion of a confidence field, which is not required but harmless. Overall, the response demonstrates high quality across all evaluation criteria.\n\n**Evaluation Score: 0.97**",
-            "evaluation_summary": "The model\u2019s answer was concise and correct.  \nIt identified the severity as HIGH, matching all criteria.  \nAll required parts were included: the label, a clear reasoning paragraph, and an extra confidence score that is harmless.  \nThe JSON format is easy to read and the reasoning directly references the severity rules.  \nThe response is well\u2011structured, transparent, and gives enough information for escalation.  \nNo errors or off\u2011topic content were found."
-          },
-          "span_metadata": {
-            "duration_ms": null,
-            "status": null,
-            "model": null,
-            "provider": null,
-            "tokens": {},
-            "latency": null,
-            "cost": null
-          }
+      "reasoning_eval": {
+        "agent_summary": {
+          "total_interactions": 2,
+          "avg_score": 0.975,
+          "interactions_with_issues": 0,
+          "interactions_no_issues": 2,
+          "issues_count": {}
         },
-        {
-          "trace_id": "tr-236907d3019ea2a5f8e81baeb258753b_3",
-          "span_reference": {
-            "span_id": "tr-236907d3019ea2a5f8e81baeb258753b_3_span_0",
-            "span_name": "assess_severity",
-            "span_type": "",
-            "tool_or_agent": "agent",
-            "parent_span_id": null,
-            "step_in_trace": 0
+        "issues_catalog": {},
+        "issues": [],
+        "no_issues": [
+          {
+            "trace_id": "tr-e08208946684c866332b7416670bad41",
+            "span_reference": {
+              "span_id": "80a19c2824ee7a0b",
+              "span_name": "Completions",
+              "span_type": "CHAT_MODEL",
+              "tool_or_agent": "agent",
+              "parent_span_id": "5084ca592e004e05",
+              "step_in_trace": 3
+            },
+            "input_output_pair": {
+              "id": "tr-e08208946684c866332b7416670bad41_3",
+              "intent": "[REQ-log_monitor__tools_fixed] ERROR: Database connection failed for user admin",
+              "model_input": "[{\"role\": \"user\", \"content\": \"Assess the severity of this problem.\\n\\nLog message: ERROR: Database connection failed for user admin\\nDiagnosis: \\n\\nDetermine if this is HIGH or LOW severity:\\n- HIGH: Immediate user impact, service degradation, data loss risk, security issue\\n- LOW: Can wait for normal business hours, minor inconvenience, cosmetic issue\\n\\nIf uncertain, default to LOW severity.\", \"tool_calls\": []}]",
+              "response": "{\"severity\": \"high\", \"reasoning\": \"A database connection failure for an admin user can lead to immediate service degradation, loss of functionality, and potentially security risks if critical processes are unable to connect to the database. This type of error commonly affects overall application health and could impact multiple users or operations.\", \"confidence\": 0.9}",
+              "score": 1.0
+            },
+            "evaluation": {
+              "evaluation_text": "**Textual Evaluation**\n\nThe user asked for a severity assessment of the log message. The model correctly identified the severity as **HIGH** and provided a concise reasoning that aligns with the criteria (immediate user impact, service degradation, potential data loss, security risk). The response is complete (it gives the severity, reasoning, and a confidence score) and relevant to the task. The additional confidence field is not required but does not detract from the answer. Overall, the output meets all evaluation criteria.\n\n**Evaluation Score: 1.0**",
+              "evaluation_summary": "The model correctly identified the log message severity as HIGH.  \nIt gave concise reasoning that matches the criteria: immediate user impact, service degradation, potential data loss, and security risk.  \nThe answer included the severity, the reasoning, and a confidence score.  \nThe extra confidence field was not needed but did not hurt the answer.  \nOverall, the response met all evaluation criteria."
+            },
+            "span_metadata": {
+              "span_id": "80a19c2824ee7a0b",
+              "span_name": "Completions",
+              "span_type": "CHAT_MODEL",
+              "parent_span_id": "5084ca592e004e05",
+              "duration_ms": 1578.603,
+              "status": "OK",
+              "model": "Azure/gpt-4.1",
+              "provider": null,
+              "operation": null,
+              "response_format": "<class 'log_monitor_agent.schemas.SeverityAssessmentSchema'>",
+              "tokens": {
+                "prompt": 232,
+                "completion": 66,
+                "total": 298
+              }
+            }
           },
-          "input_output_pair": {
-            "id": "tr-236907d3019ea2a5f8e81baeb258753b_3_0",
-            "model_input": "[{\"role\": \"user\", \"content\": \"Assess the severity of this problem.\\n\\nLog message: WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\\nDiagnosis: \\n\\nDetermine if this is HIGH or LOW severity:\\n- HIGH: Immediate user impact, service degradation, data loss risk, security issue\\n- LOW: Can wait for normal business hours, minor inconvenience, cosmetic issue\\n\\nIf uncertain, default to LOW severity.\", \"tool_calls\": []}]",
-            "response": "{\"severity\": \"high\", \"reasoning\": \"The log message indicates memory usage at 94% with a warning that the pod is likely to be OOMKilled soon. Impending OOMKill can cause immediate service disruption, potential data loss, and degraded availability for services relying on this pod, making it a high severity issue requiring prompt attention.\", \"confidence\": 0.95}",
-            "score": 0.95
-          },
-          "evaluation": {
-            "evaluation_text": "**Textual Evaluation**\n\nThe model correctly identified the issue as *HIGH* severity. The reasoning accurately explains that a 94% memory usage warning with an imminent OOMKill can cause immediate service disruption, data loss risk, and degraded availability\u2014meeting the user\u2019s definition of high severity. The response is concise, directly addresses the user\u2019s request, and includes a confidence score. The JSON format is appropriate and easy to parse. No extraneous information is present, and the explanation is clear and well\u2011structured.\n\n**Evaluation Score: 0.95**",
-            "evaluation_summary": "The model correctly labeled the issue as HIGH severity.  \nIt explained that a 94\u202f% memory usage warning with an imminent OOMKill can cause immediate service disruption, data loss, and degraded availability, which matches the user\u2019s definition of high severity.  \nThe answer was concise, directly answered the request, and included a confidence score.  \nThe JSON format was appropriate and easy to parse.  \nNo unnecessary information was added, and the explanation was clear and well\u2011structured."
-          },
-          "span_metadata": {
-            "duration_ms": null,
-            "status": null,
-            "model": null,
-            "provider": null,
-            "tokens": {},
-            "latency": null,
-            "cost": null
+          {
+            "trace_id": "tr-236907d3019ea2a5f8e81baeb258753b",
+            "span_reference": {
+              "span_id": "825a2ae4913f5da8",
+              "span_name": "Completions",
+              "span_type": "CHAT_MODEL",
+              "tool_or_agent": "agent",
+              "parent_span_id": "f2dba62ce6746aa4",
+              "step_in_trace": 3
+            },
+            "input_output_pair": {
+              "id": "tr-236907d3019ea2a5f8e81baeb258753b_3",
+              "intent": "[REQ-log_monitor__tools_fixed] WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely",
+              "model_input": "[{\"role\": \"user\", \"content\": \"Assess the severity of this problem.\\n\\nLog message: WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\\nDiagnosis: \\n\\nDetermine if this is HIGH or LOW severity:\\n- HIGH: Immediate user impact, service degradation, data loss risk, security issue\\n- LOW: Can wait for normal business hours, minor inconvenience, cosmetic issue\\n\\nIf uncertain, default to LOW severity.\", \"tool_calls\": []}]",
+              "response": "{\"severity\": \"high\", \"reasoning\": \"The log message indicates memory usage at 94% with a warning that the pod is likely to be OOMKilled soon. Impending OOMKill can cause immediate service disruption, potential data loss, and degraded availability for services relying on this pod, making it a high severity issue requiring prompt attention.\", \"confidence\": 0.95}",
+              "score": 0.95
+            },
+            "evaluation": {
+              "evaluation_text": "**Textual Evaluation**\n\nThe user asked to assess the severity of a log message and classify it as HIGH or LOW based on the provided criteria. The model correctly identified the situation as HIGH severity, providing a clear rationale that the pod is likely to be OOMKilled soon, which would cause immediate service disruption, potential data loss, and degraded availability\u2014exactly matching the HIGH definition. The output is concise, directly addresses the instruction, and includes a confidence score. No tool invocation is required, and the response is fully relevant and complete.\n\n**Evaluation Score: 0.95**",
+              "evaluation_summary": "The user asked to rate a log message as HIGH or LOW.  \nThe model said it was HIGH and explained that the pod will likely be OOMKilled soon, causing service disruption, data loss, and degraded availability.  \nThis matches the HIGH definition.  \nThe answer was short, followed the instruction, and included a confidence score.  \nNo tool was needed and the response was complete."
+            },
+            "span_metadata": {
+              "span_id": "825a2ae4913f5da8",
+              "span_name": "Completions",
+              "span_type": "CHAT_MODEL",
+              "parent_span_id": "f2dba62ce6746aa4",
+              "duration_ms": 1453.658,
+              "status": "OK",
+              "model": "Azure/gpt-4.1",
+              "provider": null,
+              "operation": null,
+              "response_format": "<class 'log_monitor_agent.schemas.SeverityAssessmentSchema'>",
+              "tokens": {
+                "prompt": 250,
+                "completion": 75,
+                "total": 325
+              }
+            }
           }
-        }
-      ]
+        ]
+      }
     },
     "classify_log": {
-      "agent_summary": {
-        "total_interactions": 2,
-        "avg_score": 0.96,
-        "interactions_with_issues": 0,
-        "interactions_no_issues": 2,
-        "issues_count": {}
-      },
-      "issues_catalog": {},
-      "issues": [],
-      "no_issues": [
-        {
-          "trace_id": "tr-e08208946684c866332b7416670bad41_1",
-          "span_reference": {
-            "span_id": "tr-e08208946684c866332b7416670bad41_1_span_0",
-            "span_name": "classify_log",
-            "span_type": "",
-            "tool_or_agent": "agent",
-            "parent_span_id": null,
-            "step_in_trace": 0
-          },
-          "input_output_pair": {
-            "id": "tr-e08208946684c866332b7416670bad41_1_0",
-            "model_input": "[{\"role\": \"user\", \"content\": \"Analyze this server log message and classify it.\\n\\nLog message: ERROR: Database connection failed for user admin\\n\\nDetermine if this is an error, warning, or normal informational message.\\nLook for indicators like:\\n- ERROR, FAIL, Exception, stack traces \u2192 error\\n- WARNING, WARN, threshold, approaching limit \u2192 warning\\n- INFO, DEBUG, success, started, completed \u2192 normal\\n\\nProvide your classification with confidence score and the indicators you found.\", \"tool_calls\": []}]",
-            "response": "{\"classification\": \"error\", \"confidence\": 1.0, \"indicators\": [\"ERROR\", \"failed\"]}",
-            "score": 0.95
-          },
-          "evaluation": {
-            "evaluation_text": "The model\u2019s response is concise, accurate, and fully addresses the user\u2019s request. It correctly classifies the log message as an error, assigns a confidence score of 1.0, and lists the relevant indicators (\u201cERROR\u201d and \u201cfailed\u201d) that justify the classification. The JSON format is clear and easy to parse, and no extraneous information is included. Overall, the answer meets all evaluation criteria.\n\nEvaluation Score: 0.95",
-            "evaluation_summary": "The answer was concise and accurate.  \nIt correctly identified the log as an error, gave a confidence of 1.0, and listed the indicators \u201cERROR\u201d and \u201cfailed\u201d.  \nThe JSON format was clear and contained no extra information.  \nOverall, the response met all evaluation criteria."
-          },
-          "span_metadata": {
-            "duration_ms": null,
-            "status": null,
-            "model": null,
-            "provider": null,
-            "tokens": {},
-            "latency": null,
-            "cost": null
-          }
+      "reasoning_eval": {
+        "agent_summary": {
+          "total_interactions": 2,
+          "avg_score": 0.95,
+          "interactions_with_issues": 0,
+          "interactions_no_issues": 2,
+          "issues_count": {}
         },
-        {
-          "trace_id": "tr-236907d3019ea2a5f8e81baeb258753b_1",
-          "span_reference": {
-            "span_id": "tr-236907d3019ea2a5f8e81baeb258753b_1_span_0",
-            "span_name": "classify_log",
-            "span_type": "",
-            "tool_or_agent": "agent",
-            "parent_span_id": null,
-            "step_in_trace": 0
+        "issues_catalog": {},
+        "issues": [],
+        "no_issues": [
+          {
+            "trace_id": "tr-e08208946684c866332b7416670bad41",
+            "span_reference": {
+              "span_id": "6d8c87016cadbf14",
+              "span_name": "Completions",
+              "span_type": "CHAT_MODEL",
+              "tool_or_agent": "agent",
+              "parent_span_id": "fadafe3f2f9800ba",
+              "step_in_trace": 1
+            },
+            "input_output_pair": {
+              "id": "tr-e08208946684c866332b7416670bad41_1",
+              "intent": "[REQ-log_monitor__tools_fixed] ERROR: Database connection failed for user admin",
+              "model_input": "[{\"role\": \"user\", \"content\": \"Analyze this server log message and classify it.\\n\\nLog message: ERROR: Database connection failed for user admin\\n\\nDetermine if this is an error, warning, or normal informational message.\\nLook for indicators like:\\n- ERROR, FAIL, Exception, stack traces \u2192 error\\n- WARNING, WARN, threshold, approaching limit \u2192 warning\\n- INFO, DEBUG, success, started, completed \u2192 normal\\n\\nProvide your classification with confidence score and the indicators you found.\", \"tool_calls\": []}]",
+              "response": "{\"classification\": \"error\", \"confidence\": 1.0, \"indicators\": [\"ERROR\", \"failed\"]}",
+              "score": 0.95
+            },
+            "evaluation": {
+              "evaluation_text": "**Textual Evaluation**\n\nThe user asked for a classification of the log message, a confidence score, and the indicators that led to the decision.  \nThe model\u2019s output:\n\n```json\n{\n  \"classification\": \"error\",\n  \"confidence\": 1.0,\n  \"indicators\": [\"ERROR\", \"failed\"]\n}\n```\n\n- **Correctness**: The log message contains the keyword \u201cERROR\u201d and the word \u201cfailed\u201d, both of which are listed as error indicators. The classification \u201cerror\u201d is therefore factually correct.  \n- **Completeness**: The response includes all requested fields: classification, confidence, and a list of indicators.  \n- **Relevance**: The answer directly addresses the instruction without extraneous content.  \n- **Tool usage**: No tool calls were required, and none were made, which is appropriate.\n\nThe only minor point is that a confidence of 1.0 may be slightly optimistic, but it is still within acceptable bounds for a straightforward classification. Overall, the output meets the task requirements perfectly.\n\n**Evaluation Score: 0.95**",
+              "evaluation_summary": "The model correctly classified the log as an error because it contains \u201cERROR\u201d and \u201cfailed\u201d.  \nIt returned all requested fields: classification, confidence, and indicators.  \nThe answer is concise and directly addresses the prompt.  \nNo tool calls were needed and none were made.  \nThe confidence of 1.0 is slightly optimistic but acceptable."
+            },
+            "span_metadata": {
+              "span_id": "6d8c87016cadbf14",
+              "span_name": "Completions",
+              "span_type": "CHAT_MODEL",
+              "parent_span_id": "fadafe3f2f9800ba",
+              "duration_ms": 1134.637,
+              "status": "OK",
+              "model": "Azure/gpt-4.1",
+              "provider": null,
+              "operation": null,
+              "response_format": "<class 'log_monitor_agent.schemas.LogClassificationSchema'>",
+              "tokens": {
+                "prompt": 254,
+                "completion": 20,
+                "total": 274
+              }
+            }
           },
-          "input_output_pair": {
-            "id": "tr-236907d3019ea2a5f8e81baeb258753b_1_0",
-            "model_input": "[{\"role\": \"user\", \"content\": \"Analyze this server log message and classify it.\\n\\nLog message: WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\\n\\nDetermine if this is an error, warning, or normal informational message.\\nLook for indicators like:\\n- ERROR, FAIL, Exception, stack traces \u2192 error\\n- WARNING, WARN, threshold, approaching limit \u2192 warning\\n- INFO, DEBUG, success, started, completed \u2192 normal\\n\\nProvide your classification with confidence score and the indicators you found.\", \"tool_calls\": []}]",
-            "response": "{\"classification\": \"warning\", \"confidence\": 0.99, \"indicators\": [\"WARNING\", \"Memory usage at 94%\", \"OOMKilled likely imminent\"]}",
-            "score": 0.97
-          },
-          "evaluation": {
-            "evaluation_text": "The model\u2019s response correctly identifies the log message as a warning, assigns a high confidence score, and lists appropriate indicators that match the user\u2019s criteria. It fully addresses the user\u2019s request, remains concise and relevant, and presents the information in a clear JSON format. While it does not provide a detailed explanation of its reasoning, the user did not explicitly ask for one, so the response meets all specified requirements.\n\nEvaluation Score: 0.97",
-            "evaluation_summary": "The model correctly identified the log message as a warning.  \nIt gave a high confidence score and listed the right indicators.  \nThe answer was concise, relevant, and in clear JSON.  \nNo detailed reasoning was needed, so the response met all user requirements."
-          },
-          "span_metadata": {
-            "duration_ms": null,
-            "status": null,
-            "model": null,
-            "provider": null,
-            "tokens": {},
-            "latency": null,
-            "cost": null
+          {
+            "trace_id": "tr-236907d3019ea2a5f8e81baeb258753b",
+            "span_reference": {
+              "span_id": "04ef971534b08bbf",
+              "span_name": "Completions",
+              "span_type": "CHAT_MODEL",
+              "tool_or_agent": "agent",
+              "parent_span_id": "593bc1fcdd889cb5",
+              "step_in_trace": 1
+            },
+            "input_output_pair": {
+              "id": "tr-236907d3019ea2a5f8e81baeb258753b_1",
+              "intent": "[REQ-log_monitor__tools_fixed] WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely",
+              "model_input": "[{\"role\": \"user\", \"content\": \"Analyze this server log message and classify it.\\n\\nLog message: WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\\n\\nDetermine if this is an error, warning, or normal informational message.\\nLook for indicators like:\\n- ERROR, FAIL, Exception, stack traces \u2192 error\\n- WARNING, WARN, threshold, approaching limit \u2192 warning\\n- INFO, DEBUG, success, started, completed \u2192 normal\\n\\nProvide your classification with confidence score and the indicators you found.\", \"tool_calls\": []}]",
+              "response": "{\"classification\": \"warning\", \"confidence\": 0.99, \"indicators\": [\"WARNING\", \"Memory usage at 94%\", \"OOMKilled likely imminent\"]}",
+              "score": 0.95
+            },
+            "evaluation": {
+              "evaluation_text": "**Textual Evaluation**\n\nThe user asked for a classification of the log message as error, warning, or normal informational, along with a confidence score and the indicators that led to that classification. The model\u2019s response is a JSON object containing:\n\n- `classification`: \u201cwarning\u201d\n- `confidence`: 0.99\n- `indicators`: a list of three strings\n\n**Correctness**  \n- The log message contains the keyword \u201cWARNING\u201d and mentions \u201cMemory usage at 94%\u201d (a threshold approaching a limit) and \u201cOOMKilled likely imminent\u201d (an impending failure). These are all valid warning indicators.  \n- No error\u2011specific indicators (e.g., \u201cERROR\u201d, \u201cException\u201d) are present, so classifying it as a warning is factually correct.  \n- The confidence score of 0.99 is reasonable given the clear warning signals.\n\n**Completeness**  \n- The response includes all requested elements: classification, confidence, and indicators.  \n- The indicators list captures the key phrases that justify the classification.\n\n**Relevance**  \n- The output directly addresses the user\u2019s request without extraneous information.  \n- The JSON format is concise and appropriate for the task.\n\n**Score**  \nThe answer is accurate, complete, and relevant.  \n**Evaluation Score: 0.95**",
+              "evaluation_summary": "The user asked for a log classification, confidence, and indicators.  \nThe model returned a JSON with classification \u201cwarning\u201d, confidence 0.99, and three indicator strings.  \nThe log contains the word \u201cWARNING\u201d, high memory usage, and an imminent OOM kill, all valid warning signs.  \nNo error terms appear, so the warning label is correct.  \nThe confidence is justified by the clear signals.  \nAll requested fields are present and the output is concise and relevant."
+            },
+            "span_metadata": {
+              "span_id": "04ef971534b08bbf",
+              "span_name": "Completions",
+              "span_type": "CHAT_MODEL",
+              "parent_span_id": "593bc1fcdd889cb5",
+              "duration_ms": 1489.271,
+              "status": "OK",
+              "model": "Azure/gpt-4.1",
+              "provider": null,
+              "operation": null,
+              "response_format": "<class 'log_monitor_agent.schemas.LogClassificationSchema'>",
+              "tokens": {
+                "prompt": 272,
+                "completion": 30,
+                "total": 302
+              }
+            }
           }
-        }
-      ]
+        ]
+      }
     },
     "diagnose_problem": {
-      "agent_summary": {
-        "total_interactions": 2,
-        "avg_score": 0.1,
-        "interactions_with_issues": 2,
-        "interactions_no_issues": 0,
-        "issues_count": {
-          "issue_1": 2,
-          "issue_2": 1,
-          "issue_3": 2,
-          "issue_4": 2,
-          "issue_7": 2,
-          "issue_5": 1,
-          "issue_6": 1
-        }
-      },
-      "issues_catalog": {
-        "issue_1": "Missing reasoning sentence",
-        "issue_2": "Empty content field",
-        "issue_3": "Incorrect tool selection",
-        "issue_4": "Incomplete answer",
-        "issue_5": "Unclear or vague response",
-        "issue_6": "Irrelevant or incorrect content",
-        "issue_7": "Did not follow instruction"
-      },
-      "issues": [
-        {
-          "issue_id": "issue_1",
-          "issue_text": "Missing reasoning sentence",
-          "occurrence_count": 2,
-          "frequency": 1.0,
-          "severity": 0.9,
-          "occurrences": [
-            {
-              "trace_id": "tr-e08208946684c866332b7416670bad41_2",
-              "span_reference": {
-                "span_id": "tr-e08208946684c866332b7416670bad41_2_span_0",
-                "span_name": "diagnose_problem",
-                "span_type": "",
-                "tool_or_agent": "agent",
-                "parent_span_id": null,
-                "step_in_trace": 0
-              },
-              "input_output_pair": {
-                "id": "tr-e08208946684c866332b7416670bad41_2_0",
-                "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: ERROR: Database connection failed for user admin\", \"tool_calls\": []}]",
-                "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_MUaJctpOaxzPYnICozpY01Mb\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"ERROR: Database connection failed for user admin\\\"}\"}}]}",
-                "score": 0.1
-              },
-              "evaluation": {
-                "evaluation_text": "**Textual Evaluation**\n\nThe user\u2019s request was to diagnose a log message. The system instruction required the model to first give a short sentence of reasoning and then propose exactly one tool call, returning both together. The model\u2019s response contains:\n\n1. **Missing Reasoning** \u2013 The `content` field is an empty string, so no short sentence of reasoning is provided, violating the instruction.\n2. **Incorrect Tool Choice** \u2013 The tool called is `summarize_log`, which merely summarizes the log message. The user explicitly asked for a diagnosis, not a summary. A more appropriate tool would be something like `diagnose_log` or a custom function that analyzes error causes.\n3. **Format Compliance** \u2013 The JSON structure itself is syntactically correct and includes exactly one tool call, satisfying that part of the instruction. However, the content requirement is not met.\n\nGiven these issues, the response is largely non\u2011compliant with the user\u2019s request and the system instruction.\n\n**Evaluation Score: 0.1**",
-                "evaluation_summary": "The user asked for a log diagnosis.  \nThe model gave no reasoning sentence \u2013 the content field was empty.  \nIt called the wrong tool, `summarize_log`, instead of a diagnostic tool.  \nThe JSON format was correct, but the required content was missing.  \nThus the response did not follow the instruction."
-              },
-              "span_metadata": {
-                "duration_ms": null,
-                "status": null,
-                "model": null,
-                "provider": null,
-                "tokens": {},
-                "latency": null,
-                "cost": null
-              }
-            },
-            {
-              "trace_id": "tr-236907d3019ea2a5f8e81baeb258753b_2",
-              "span_reference": {
-                "span_id": "tr-236907d3019ea2a5f8e81baeb258753b_2_span_0",
-                "span_name": "diagnose_problem",
-                "span_type": "",
-                "tool_or_agent": "agent",
-                "parent_span_id": null,
-                "step_in_trace": 0
-              },
-              "input_output_pair": {
-                "id": "tr-236907d3019ea2a5f8e81baeb258753b_2_0",
-                "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\", \"tool_calls\": []}]",
-                "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_BjHswKMaIWfEqIvGkucwcsmu\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\\\"}\"}}]}",
-                "score": 0.1
-              },
-              "evaluation": {
-                "evaluation_text": "The response fails to meet the system\u2019s instruction. It omits the required short sentence of reasoning and instead provides only a tool call. Moreover, the chosen tool \u201csummarize_log\u201d is not appropriate for diagnosing a memory\u2011usage warning; a diagnostic tool or direct explanation would be more suitable. Consequently, the answer is incomplete, lacks clarity, relevance, and correctness.\n\nEvaluation Score: 0.1",
-                "evaluation_summary": "The answer did not follow the instruction.  \nIt gave only a tool call and no short reasoning sentence.  \nThe tool chosen, \u201csummarize_log,\u201d is not suitable for diagnosing a memory\u2011usage warning.  \nThus the response is incomplete, unclear, irrelevant, and incorrect."
-              },
-              "span_metadata": {
-                "duration_ms": null,
-                "status": null,
-                "model": null,
-                "provider": null,
-                "tokens": {},
-                "latency": null,
-                "cost": null
-              }
-            }
-          ]
+      "reasoning_eval": {
+        "agent_summary": {
+          "total_interactions": 2,
+          "avg_score": 0.30000000000000004,
+          "interactions_with_issues": 2,
+          "interactions_no_issues": 0,
+          "issues_count": {
+            "issue_1": 2,
+            "issue_3": 2,
+            "issue_2": 1
+          }
         },
-        {
-          "issue_id": "issue_2",
-          "issue_text": "Empty content field",
-          "occurrence_count": 1,
-          "frequency": 0.5,
-          "severity": 0.9,
-          "occurrences": [
-            {
-              "trace_id": "tr-e08208946684c866332b7416670bad41_2",
-              "span_reference": {
-                "span_id": "tr-e08208946684c866332b7416670bad41_2_span_0",
-                "span_name": "diagnose_problem",
-                "span_type": "",
-                "tool_or_agent": "agent",
-                "parent_span_id": null,
-                "step_in_trace": 0
-              },
-              "input_output_pair": {
-                "id": "tr-e08208946684c866332b7416670bad41_2_0",
-                "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: ERROR: Database connection failed for user admin\", \"tool_calls\": []}]",
-                "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_MUaJctpOaxzPYnICozpY01Mb\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"ERROR: Database connection failed for user admin\\\"}\"}}]}",
-                "score": 0.1
-              },
-              "evaluation": {
-                "evaluation_text": "**Textual Evaluation**\n\nThe user\u2019s request was to diagnose a log message. The system instruction required the model to first give a short sentence of reasoning and then propose exactly one tool call, returning both together. The model\u2019s response contains:\n\n1. **Missing Reasoning** \u2013 The `content` field is an empty string, so no short sentence of reasoning is provided, violating the instruction.\n2. **Incorrect Tool Choice** \u2013 The tool called is `summarize_log`, which merely summarizes the log message. The user explicitly asked for a diagnosis, not a summary. A more appropriate tool would be something like `diagnose_log` or a custom function that analyzes error causes.\n3. **Format Compliance** \u2013 The JSON structure itself is syntactically correct and includes exactly one tool call, satisfying that part of the instruction. However, the content requirement is not met.\n\nGiven these issues, the response is largely non\u2011compliant with the user\u2019s request and the system instruction.\n\n**Evaluation Score: 0.1**",
-                "evaluation_summary": "The user asked for a log diagnosis.  \nThe model gave no reasoning sentence \u2013 the content field was empty.  \nIt called the wrong tool, `summarize_log`, instead of a diagnostic tool.  \nThe JSON format was correct, but the required content was missing.  \nThus the response did not follow the instruction."
-              },
-              "span_metadata": {
-                "duration_ms": null,
-                "status": null,
-                "model": null,
-                "provider": null,
-                "tokens": {},
-                "latency": null,
-                "cost": null
-              }
-            }
-          ]
+        "issues_catalog": {
+          "issue_1": "Missing short reasoning sentence before tool call",
+          "issue_2": "Incorrect tool usage (wrong tool called)",
+          "issue_3": "Incorrect output format (not short sentence + tool call)"
         },
-        {
-          "issue_id": "issue_3",
-          "issue_text": "Incorrect tool selection",
-          "occurrence_count": 2,
-          "frequency": 1.0,
-          "severity": 0.9,
-          "occurrences": [
-            {
-              "trace_id": "tr-e08208946684c866332b7416670bad41_2",
-              "span_reference": {
-                "span_id": "tr-e08208946684c866332b7416670bad41_2_span_0",
-                "span_name": "diagnose_problem",
-                "span_type": "",
-                "tool_or_agent": "agent",
-                "parent_span_id": null,
-                "step_in_trace": 0
+        "issues": [
+          {
+            "issue_id": "issue_1",
+            "issue_text": "Missing short reasoning sentence before tool call",
+            "occurrence_count": 2,
+            "frequency": 1.0,
+            "severity": 0.7,
+            "occurrences": [
+              {
+                "trace_id": "tr-e08208946684c866332b7416670bad41",
+                "span_reference": {
+                  "span_id": "615451afb8e093bb",
+                  "span_name": "Completions",
+                  "span_type": "CHAT_MODEL",
+                  "tool_or_agent": "agent",
+                  "parent_span_id": "933a01b8c8f10121",
+                  "step_in_trace": 2
+                },
+                "input_output_pair": {
+                  "id": "tr-e08208946684c866332b7416670bad41_2",
+                  "intent": "[REQ-log_monitor__tools_fixed] ERROR: Database connection failed for user admin",
+                  "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: ERROR: Database connection failed for user admin\", \"tool_calls\": []}]",
+                  "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_MUaJctpOaxzPYnICozpY01Mb\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"ERROR: Database connection failed for user admin\\\"}\"}}]}",
+                  "score": 0.4
+                },
+                "evaluation": {
+                  "evaluation_text": "The response fails to meet the instruction\u2019s requirement to include a short sentence of reasoning before the tool call. While the tool invocation itself is syntactically correct and uses the only available tool, the absence of the reasoning sentence renders the step incomplete. The tool chosen is appropriate given the limited options, but the output does not fully satisfy the specified format.\n\nEvaluation Score: 0.4",
+                  "evaluation_summary": "The answer did not include the required short reasoning sentence before the tool call.  \nThe tool call itself was correct and used the only available tool.  \nBecause the reasoning sentence is missing, the response does not fully meet the format."
+                },
+                "span_metadata": {
+                  "span_id": "615451afb8e093bb",
+                  "span_name": "Completions",
+                  "span_type": "CHAT_MODEL",
+                  "parent_span_id": "933a01b8c8f10121",
+                  "duration_ms": 1118.831,
+                  "status": "OK",
+                  "model": "Azure/gpt-4.1",
+                  "provider": null,
+                  "operation": null,
+                  "response_format": null,
+                  "tokens": {
+                    "prompt": 90,
+                    "completion": 25,
+                    "total": 115
+                  }
+                }
               },
-              "input_output_pair": {
-                "id": "tr-e08208946684c866332b7416670bad41_2_0",
-                "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: ERROR: Database connection failed for user admin\", \"tool_calls\": []}]",
-                "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_MUaJctpOaxzPYnICozpY01Mb\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"ERROR: Database connection failed for user admin\\\"}\"}}]}",
-                "score": 0.1
-              },
-              "evaluation": {
-                "evaluation_text": "**Textual Evaluation**\n\nThe user\u2019s request was to diagnose a log message. The system instruction required the model to first give a short sentence of reasoning and then propose exactly one tool call, returning both together. The model\u2019s response contains:\n\n1. **Missing Reasoning** \u2013 The `content` field is an empty string, so no short sentence of reasoning is provided, violating the instruction.\n2. **Incorrect Tool Choice** \u2013 The tool called is `summarize_log`, which merely summarizes the log message. The user explicitly asked for a diagnosis, not a summary. A more appropriate tool would be something like `diagnose_log` or a custom function that analyzes error causes.\n3. **Format Compliance** \u2013 The JSON structure itself is syntactically correct and includes exactly one tool call, satisfying that part of the instruction. However, the content requirement is not met.\n\nGiven these issues, the response is largely non\u2011compliant with the user\u2019s request and the system instruction.\n\n**Evaluation Score: 0.1**",
-                "evaluation_summary": "The user asked for a log diagnosis.  \nThe model gave no reasoning sentence \u2013 the content field was empty.  \nIt called the wrong tool, `summarize_log`, instead of a diagnostic tool.  \nThe JSON format was correct, but the required content was missing.  \nThus the response did not follow the instruction."
-              },
-              "span_metadata": {
-                "duration_ms": null,
-                "status": null,
-                "model": null,
-                "provider": null,
-                "tokens": {},
-                "latency": null,
-                "cost": null
+              {
+                "trace_id": "tr-236907d3019ea2a5f8e81baeb258753b",
+                "span_reference": {
+                  "span_id": "797488b6567ff67e",
+                  "span_name": "Completions",
+                  "span_type": "CHAT_MODEL",
+                  "tool_or_agent": "agent",
+                  "parent_span_id": "de8b9a3142cddf78",
+                  "step_in_trace": 2
+                },
+                "input_output_pair": {
+                  "id": "tr-236907d3019ea2a5f8e81baeb258753b_2",
+                  "intent": "[REQ-log_monitor__tools_fixed] WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely",
+                  "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\", \"tool_calls\": []}]",
+                  "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_BjHswKMaIWfEqIvGkucwcsmu\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\\\"}\"}}]}",
+                  "score": 0.2
+                },
+                "evaluation": {
+                  "evaluation_text": "The model\u2019s response fails to meet the instruction.  \n* It omits the required short sentence of reasoning.  \n* It calls a tool that merely summarizes the log, which does not provide a diagnosis.  \n* The output format is also not aligned with the \u201cshort sentence + tool call\u201d structure requested.  \n\nThus the step is incomplete and not relevant to diagnosing the issue.\n\nEvaluation Score: 0.2",
+                  "evaluation_summary": "The model\u2019s reply does not follow the instruction.  \nIt leaves out the required short reasoning sentence.  \nIt calls a tool that only summarizes the log, not a diagnosis.  \nThe output format is wrong, not the \u201cshort sentence + tool call\u201d structure.  \nTherefore the step is incomplete and irrelevant to diagnosing the issue."
+                },
+                "span_metadata": {
+                  "span_id": "797488b6567ff67e",
+                  "span_name": "Completions",
+                  "span_type": "CHAT_MODEL",
+                  "parent_span_id": "de8b9a3142cddf78",
+                  "duration_ms": 1552.596,
+                  "status": "OK",
+                  "model": "Azure/gpt-4.1",
+                  "provider": null,
+                  "operation": null,
+                  "response_format": null,
+                  "tokens": {
+                    "prompt": 108,
+                    "completion": 43,
+                    "total": 151
+                  }
+                }
               }
-            },
-            {
-              "trace_id": "tr-236907d3019ea2a5f8e81baeb258753b_2",
-              "span_reference": {
-                "span_id": "tr-236907d3019ea2a5f8e81baeb258753b_2_span_0",
-                "span_name": "diagnose_problem",
-                "span_type": "",
-                "tool_or_agent": "agent",
-                "parent_span_id": null,
-                "step_in_trace": 0
+            ]
+          },
+          {
+            "issue_id": "issue_3",
+            "issue_text": "Incorrect output format (not short sentence + tool call)",
+            "occurrence_count": 2,
+            "frequency": 1.0,
+            "severity": 0.7,
+            "occurrences": [
+              {
+                "trace_id": "tr-e08208946684c866332b7416670bad41",
+                "span_reference": {
+                  "span_id": "615451afb8e093bb",
+                  "span_name": "Completions",
+                  "span_type": "CHAT_MODEL",
+                  "tool_or_agent": "agent",
+                  "parent_span_id": "933a01b8c8f10121",
+                  "step_in_trace": 2
+                },
+                "input_output_pair": {
+                  "id": "tr-e08208946684c866332b7416670bad41_2",
+                  "intent": "[REQ-log_monitor__tools_fixed] ERROR: Database connection failed for user admin",
+                  "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: ERROR: Database connection failed for user admin\", \"tool_calls\": []}]",
+                  "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_MUaJctpOaxzPYnICozpY01Mb\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"ERROR: Database connection failed for user admin\\\"}\"}}]}",
+                  "score": 0.4
+                },
+                "evaluation": {
+                  "evaluation_text": "The response fails to meet the instruction\u2019s requirement to include a short sentence of reasoning before the tool call. While the tool invocation itself is syntactically correct and uses the only available tool, the absence of the reasoning sentence renders the step incomplete. The tool chosen is appropriate given the limited options, but the output does not fully satisfy the specified format.\n\nEvaluation Score: 0.4",
+                  "evaluation_summary": "The answer did not include the required short reasoning sentence before the tool call.  \nThe tool call itself was correct and used the only available tool.  \nBecause the reasoning sentence is missing, the response does not fully meet the format."
+                },
+                "span_metadata": {
+                  "span_id": "615451afb8e093bb",
+                  "span_name": "Completions",
+                  "span_type": "CHAT_MODEL",
+                  "parent_span_id": "933a01b8c8f10121",
+                  "duration_ms": 1118.831,
+                  "status": "OK",
+                  "model": "Azure/gpt-4.1",
+                  "provider": null,
+                  "operation": null,
+                  "response_format": null,
+                  "tokens": {
+                    "prompt": 90,
+                    "completion": 25,
+                    "total": 115
+                  }
+                }
               },
-              "input_output_pair": {
-                "id": "tr-236907d3019ea2a5f8e81baeb258753b_2_0",
-                "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\", \"tool_calls\": []}]",
-                "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_BjHswKMaIWfEqIvGkucwcsmu\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\\\"}\"}}]}",
-                "score": 0.1
-              },
-              "evaluation": {
-                "evaluation_text": "The response fails to meet the system\u2019s instruction. It omits the required short sentence of reasoning and instead provides only a tool call. Moreover, the chosen tool \u201csummarize_log\u201d is not appropriate for diagnosing a memory\u2011usage warning; a diagnostic tool or direct explanation would be more suitable. Consequently, the answer is incomplete, lacks clarity, relevance, and correctness.\n\nEvaluation Score: 0.1",
-                "evaluation_summary": "The answer did not follow the instruction.  \nIt gave only a tool call and no short reasoning sentence.  \nThe tool chosen, \u201csummarize_log,\u201d is not suitable for diagnosing a memory\u2011usage warning.  \nThus the response is incomplete, unclear, irrelevant, and incorrect."
-              },
-              "span_metadata": {
-                "duration_ms": null,
-                "status": null,
-                "model": null,
-                "provider": null,
-                "tokens": {},
-                "latency": null,
-                "cost": null
+              {
+                "trace_id": "tr-236907d3019ea2a5f8e81baeb258753b",
+                "span_reference": {
+                  "span_id": "797488b6567ff67e",
+                  "span_name": "Completions",
+                  "span_type": "CHAT_MODEL",
+                  "tool_or_agent": "agent",
+                  "parent_span_id": "de8b9a3142cddf78",
+                  "step_in_trace": 2
+                },
+                "input_output_pair": {
+                  "id": "tr-236907d3019ea2a5f8e81baeb258753b_2",
+                  "intent": "[REQ-log_monitor__tools_fixed] WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely",
+                  "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\", \"tool_calls\": []}]",
+                  "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_BjHswKMaIWfEqIvGkucwcsmu\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\\\"}\"}}]}",
+                  "score": 0.2
+                },
+                "evaluation": {
+                  "evaluation_text": "The model\u2019s response fails to meet the instruction.  \n* It omits the required short sentence of reasoning.  \n* It calls a tool that merely summarizes the log, which does not provide a diagnosis.  \n* The output format is also not aligned with the \u201cshort sentence + tool call\u201d structure requested.  \n\nThus the step is incomplete and not relevant to diagnosing the issue.\n\nEvaluation Score: 0.2",
+                  "evaluation_summary": "The model\u2019s reply does not follow the instruction.  \nIt leaves out the required short reasoning sentence.  \nIt calls a tool that only summarizes the log, not a diagnosis.  \nThe output format is wrong, not the \u201cshort sentence + tool call\u201d structure.  \nTherefore the step is incomplete and irrelevant to diagnosing the issue."
+                },
+                "span_metadata": {
+                  "span_id": "797488b6567ff67e",
+                  "span_name": "Completions",
+                  "span_type": "CHAT_MODEL",
+                  "parent_span_id": "de8b9a3142cddf78",
+                  "duration_ms": 1552.596,
+                  "status": "OK",
+                  "model": "Azure/gpt-4.1",
+                  "provider": null,
+                  "operation": null,
+                  "response_format": null,
+                  "tokens": {
+                    "prompt": 108,
+                    "completion": 43,
+                    "total": 151
+                  }
+                }
               }
-            }
-          ]
-        },
-        {
-          "issue_id": "issue_4",
-          "issue_text": "Incomplete answer",
-          "occurrence_count": 2,
-          "frequency": 1.0,
-          "severity": 0.9,
-          "occurrences": [
-            {
-              "trace_id": "tr-e08208946684c866332b7416670bad41_2",
-              "span_reference": {
-                "span_id": "tr-e08208946684c866332b7416670bad41_2_span_0",
-                "span_name": "diagnose_problem",
-                "span_type": "",
-                "tool_or_agent": "agent",
-                "parent_span_id": null,
-                "step_in_trace": 0
-              },
-              "input_output_pair": {
-                "id": "tr-e08208946684c866332b7416670bad41_2_0",
-                "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: ERROR: Database connection failed for user admin\", \"tool_calls\": []}]",
-                "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_MUaJctpOaxzPYnICozpY01Mb\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"ERROR: Database connection failed for user admin\\\"}\"}}]}",
-                "score": 0.1
-              },
-              "evaluation": {
-                "evaluation_text": "**Textual Evaluation**\n\nThe user\u2019s request was to diagnose a log message. The system instruction required the model to first give a short sentence of reasoning and then propose exactly one tool call, returning both together. The model\u2019s response contains:\n\n1. **Missing Reasoning** \u2013 The `content` field is an empty string, so no short sentence of reasoning is provided, violating the instruction.\n2. **Incorrect Tool Choice** \u2013 The tool called is `summarize_log`, which merely summarizes the log message. The user explicitly asked for a diagnosis, not a summary. A more appropriate tool would be something like `diagnose_log` or a custom function that analyzes error causes.\n3. **Format Compliance** \u2013 The JSON structure itself is syntactically correct and includes exactly one tool call, satisfying that part of the instruction. However, the content requirement is not met.\n\nGiven these issues, the response is largely non\u2011compliant with the user\u2019s request and the system instruction.\n\n**Evaluation Score: 0.1**",
-                "evaluation_summary": "The user asked for a log diagnosis.  \nThe model gave no reasoning sentence \u2013 the content field was empty.  \nIt called the wrong tool, `summarize_log`, instead of a diagnostic tool.  \nThe JSON format was correct, but the required content was missing.  \nThus the response did not follow the instruction."
-              },
-              "span_metadata": {
-                "duration_ms": null,
-                "status": null,
-                "model": null,
-                "provider": null,
-                "tokens": {},
-                "latency": null,
-                "cost": null
+            ]
+          },
+          {
+            "issue_id": "issue_2",
+            "issue_text": "Incorrect tool usage (wrong tool called)",
+            "occurrence_count": 1,
+            "frequency": 0.5,
+            "severity": 0.8,
+            "occurrences": [
+              {
+                "trace_id": "tr-236907d3019ea2a5f8e81baeb258753b",
+                "span_reference": {
+                  "span_id": "797488b6567ff67e",
+                  "span_name": "Completions",
+                  "span_type": "CHAT_MODEL",
+                  "tool_or_agent": "agent",
+                  "parent_span_id": "de8b9a3142cddf78",
+                  "step_in_trace": 2
+                },
+                "input_output_pair": {
+                  "id": "tr-236907d3019ea2a5f8e81baeb258753b_2",
+                  "intent": "[REQ-log_monitor__tools_fixed] WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely",
+                  "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\", \"tool_calls\": []}]",
+                  "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_BjHswKMaIWfEqIvGkucwcsmu\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\\\"}\"}}]}",
+                  "score": 0.2
+                },
+                "evaluation": {
+                  "evaluation_text": "The model\u2019s response fails to meet the instruction.  \n* It omits the required short sentence of reasoning.  \n* It calls a tool that merely summarizes the log, which does not provide a diagnosis.  \n* The output format is also not aligned with the \u201cshort sentence + tool call\u201d structure requested.  \n\nThus the step is incomplete and not relevant to diagnosing the issue.\n\nEvaluation Score: 0.2",
+                  "evaluation_summary": "The model\u2019s reply does not follow the instruction.  \nIt leaves out the required short reasoning sentence.  \nIt calls a tool that only summarizes the log, not a diagnosis.  \nThe output format is wrong, not the \u201cshort sentence + tool call\u201d structure.  \nTherefore the step is incomplete and irrelevant to diagnosing the issue."
+                },
+                "span_metadata": {
+                  "span_id": "797488b6567ff67e",
+                  "span_name": "Completions",
+                  "span_type": "CHAT_MODEL",
+                  "parent_span_id": "de8b9a3142cddf78",
+                  "duration_ms": 1552.596,
+                  "status": "OK",
+                  "model": "Azure/gpt-4.1",
+                  "provider": null,
+                  "operation": null,
+                  "response_format": null,
+                  "tokens": {
+                    "prompt": 108,
+                    "completion": 43,
+                    "total": 151
+                  }
+                }
               }
-            },
-            {
-              "trace_id": "tr-236907d3019ea2a5f8e81baeb258753b_2",
-              "span_reference": {
-                "span_id": "tr-236907d3019ea2a5f8e81baeb258753b_2_span_0",
-                "span_name": "diagnose_problem",
-                "span_type": "",
-                "tool_or_agent": "agent",
-                "parent_span_id": null,
-                "step_in_trace": 0
-              },
-              "input_output_pair": {
-                "id": "tr-236907d3019ea2a5f8e81baeb258753b_2_0",
-                "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\", \"tool_calls\": []}]",
-                "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_BjHswKMaIWfEqIvGkucwcsmu\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\\\"}\"}}]}",
-                "score": 0.1
-              },
-              "evaluation": {
-                "evaluation_text": "The response fails to meet the system\u2019s instruction. It omits the required short sentence of reasoning and instead provides only a tool call. Moreover, the chosen tool \u201csummarize_log\u201d is not appropriate for diagnosing a memory\u2011usage warning; a diagnostic tool or direct explanation would be more suitable. Consequently, the answer is incomplete, lacks clarity, relevance, and correctness.\n\nEvaluation Score: 0.1",
-                "evaluation_summary": "The answer did not follow the instruction.  \nIt gave only a tool call and no short reasoning sentence.  \nThe tool chosen, \u201csummarize_log,\u201d is not suitable for diagnosing a memory\u2011usage warning.  \nThus the response is incomplete, unclear, irrelevant, and incorrect."
-              },
-              "span_metadata": {
-                "duration_ms": null,
-                "status": null,
-                "model": null,
-                "provider": null,
-                "tokens": {},
-                "latency": null,
-                "cost": null
-              }
-            }
-          ]
-        },
-        {
-          "issue_id": "issue_7",
-          "issue_text": "Did not follow instruction",
-          "occurrence_count": 2,
-          "frequency": 1.0,
-          "severity": 0.9,
-          "occurrences": [
-            {
-              "trace_id": "tr-e08208946684c866332b7416670bad41_2",
-              "span_reference": {
-                "span_id": "tr-e08208946684c866332b7416670bad41_2_span_0",
-                "span_name": "diagnose_problem",
-                "span_type": "",
-                "tool_or_agent": "agent",
-                "parent_span_id": null,
-                "step_in_trace": 0
-              },
-              "input_output_pair": {
-                "id": "tr-e08208946684c866332b7416670bad41_2_0",
-                "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: ERROR: Database connection failed for user admin\", \"tool_calls\": []}]",
-                "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_MUaJctpOaxzPYnICozpY01Mb\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"ERROR: Database connection failed for user admin\\\"}\"}}]}",
-                "score": 0.1
-              },
-              "evaluation": {
-                "evaluation_text": "**Textual Evaluation**\n\nThe user\u2019s request was to diagnose a log message. The system instruction required the model to first give a short sentence of reasoning and then propose exactly one tool call, returning both together. The model\u2019s response contains:\n\n1. **Missing Reasoning** \u2013 The `content` field is an empty string, so no short sentence of reasoning is provided, violating the instruction.\n2. **Incorrect Tool Choice** \u2013 The tool called is `summarize_log`, which merely summarizes the log message. The user explicitly asked for a diagnosis, not a summary. A more appropriate tool would be something like `diagnose_log` or a custom function that analyzes error causes.\n3. **Format Compliance** \u2013 The JSON structure itself is syntactically correct and includes exactly one tool call, satisfying that part of the instruction. However, the content requirement is not met.\n\nGiven these issues, the response is largely non\u2011compliant with the user\u2019s request and the system instruction.\n\n**Evaluation Score: 0.1**",
-                "evaluation_summary": "The user asked for a log diagnosis.  \nThe model gave no reasoning sentence \u2013 the content field was empty.  \nIt called the wrong tool, `summarize_log`, instead of a diagnostic tool.  \nThe JSON format was correct, but the required content was missing.  \nThus the response did not follow the instruction."
-              },
-              "span_metadata": {
-                "duration_ms": null,
-                "status": null,
-                "model": null,
-                "provider": null,
-                "tokens": {},
-                "latency": null,
-                "cost": null
-              }
-            },
-            {
-              "trace_id": "tr-236907d3019ea2a5f8e81baeb258753b_2",
-              "span_reference": {
-                "span_id": "tr-236907d3019ea2a5f8e81baeb258753b_2_span_0",
-                "span_name": "diagnose_problem",
-                "span_type": "",
-                "tool_or_agent": "agent",
-                "parent_span_id": null,
-                "step_in_trace": 0
-              },
-              "input_output_pair": {
-                "id": "tr-236907d3019ea2a5f8e81baeb258753b_2_0",
-                "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\", \"tool_calls\": []}]",
-                "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_BjHswKMaIWfEqIvGkucwcsmu\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\\\"}\"}}]}",
-                "score": 0.1
-              },
-              "evaluation": {
-                "evaluation_text": "The response fails to meet the system\u2019s instruction. It omits the required short sentence of reasoning and instead provides only a tool call. Moreover, the chosen tool \u201csummarize_log\u201d is not appropriate for diagnosing a memory\u2011usage warning; a diagnostic tool or direct explanation would be more suitable. Consequently, the answer is incomplete, lacks clarity, relevance, and correctness.\n\nEvaluation Score: 0.1",
-                "evaluation_summary": "The answer did not follow the instruction.  \nIt gave only a tool call and no short reasoning sentence.  \nThe tool chosen, \u201csummarize_log,\u201d is not suitable for diagnosing a memory\u2011usage warning.  \nThus the response is incomplete, unclear, irrelevant, and incorrect."
-              },
-              "span_metadata": {
-                "duration_ms": null,
-                "status": null,
-                "model": null,
-                "provider": null,
-                "tokens": {},
-                "latency": null,
-                "cost": null
-              }
-            }
-          ]
-        },
-        {
-          "issue_id": "issue_5",
-          "issue_text": "Unclear or vague response",
-          "occurrence_count": 1,
-          "frequency": 0.5,
-          "severity": 0.9,
-          "occurrences": [
-            {
-              "trace_id": "tr-236907d3019ea2a5f8e81baeb258753b_2",
-              "span_reference": {
-                "span_id": "tr-236907d3019ea2a5f8e81baeb258753b_2_span_0",
-                "span_name": "diagnose_problem",
-                "span_type": "",
-                "tool_or_agent": "agent",
-                "parent_span_id": null,
-                "step_in_trace": 0
-              },
-              "input_output_pair": {
-                "id": "tr-236907d3019ea2a5f8e81baeb258753b_2_0",
-                "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\", \"tool_calls\": []}]",
-                "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_BjHswKMaIWfEqIvGkucwcsmu\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\\\"}\"}}]}",
-                "score": 0.1
-              },
-              "evaluation": {
-                "evaluation_text": "The response fails to meet the system\u2019s instruction. It omits the required short sentence of reasoning and instead provides only a tool call. Moreover, the chosen tool \u201csummarize_log\u201d is not appropriate for diagnosing a memory\u2011usage warning; a diagnostic tool or direct explanation would be more suitable. Consequently, the answer is incomplete, lacks clarity, relevance, and correctness.\n\nEvaluation Score: 0.1",
-                "evaluation_summary": "The answer did not follow the instruction.  \nIt gave only a tool call and no short reasoning sentence.  \nThe tool chosen, \u201csummarize_log,\u201d is not suitable for diagnosing a memory\u2011usage warning.  \nThus the response is incomplete, unclear, irrelevant, and incorrect."
-              },
-              "span_metadata": {
-                "duration_ms": null,
-                "status": null,
-                "model": null,
-                "provider": null,
-                "tokens": {},
-                "latency": null,
-                "cost": null
-              }
-            }
-          ]
-        },
-        {
-          "issue_id": "issue_6",
-          "issue_text": "Irrelevant or incorrect content",
-          "occurrence_count": 1,
-          "frequency": 0.5,
-          "severity": 0.9,
-          "occurrences": [
-            {
-              "trace_id": "tr-236907d3019ea2a5f8e81baeb258753b_2",
-              "span_reference": {
-                "span_id": "tr-236907d3019ea2a5f8e81baeb258753b_2_span_0",
-                "span_name": "diagnose_problem",
-                "span_type": "",
-                "tool_or_agent": "agent",
-                "parent_span_id": null,
-                "step_in_trace": 0
-              },
-              "input_output_pair": {
-                "id": "tr-236907d3019ea2a5f8e81baeb258753b_2_0",
-                "model_input": "[{\"role\": \"system\", \"content\": \"In ONE response: first give a short sentence of reasoning, THEN propose EXACTLY ONE tool call. Return BOTH together.\", \"tool_calls\": []}, {\"role\": \"user\", \"content\": \"Diagnose the following log: WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\", \"tool_calls\": []}]",
-                "response": "{\"content\": \"\", \"tool_calls\": [{\"id\": \"call_BjHswKMaIWfEqIvGkucwcsmu\", \"type\": \"function\", \"function\": {\"name\": \"summarize_log\", \"arguments\": \"{\\\"log_message\\\":\\\"WARNING: Memory usage at 94% on pod ml-inference-worker-7b9c4 - OOMKilled likely imminent\\\"}\"}}]}",
-                "score": 0.1
-              },
-              "evaluation": {
-                "evaluation_text": "The response fails to meet the system\u2019s instruction. It omits the required short sentence of reasoning and instead provides only a tool call. Moreover, the chosen tool \u201csummarize_log\u201d is not appropriate for diagnosing a memory\u2011usage warning; a diagnostic tool or direct explanation would be more suitable. Consequently, the answer is incomplete, lacks clarity, relevance, and correctness.\n\nEvaluation Score: 0.1",
-                "evaluation_summary": "The answer did not follow the instruction.  \nIt gave only a tool call and no short reasoning sentence.  \nThe tool chosen, \u201csummarize_log,\u201d is not suitable for diagnosing a memory\u2011usage warning.  \nThus the response is incomplete, unclear, irrelevant, and incorrect."
-              },
-              "span_metadata": {
-                "duration_ms": null,
-                "status": null,
-                "model": null,
-                "provider": null,
-                "tokens": {},
-                "latency": null,
-                "cost": null
-              }
-            }
-          ]
-        }
-      ],
-      "no_issues": []
+            ]
+          }
+        ],
+        "no_issues": []
+      }
     }
   },
   "fail_summary": {
     "traces": {
-      "tr-e08208946684c866332b7416670bad41_3": {
-        "avg_score": 0.97,
-        "min_score": 0.97,
-        "issue_free_ratio": 1.0
+      "tr-e08208946684c866332b7416670bad41": {
+        "avg_score": 0.7833,
+        "min_score": 0.4,
+        "issue_free_ratio": 0.6667
       },
-      "tr-236907d3019ea2a5f8e81baeb258753b_3": {
-        "avg_score": 0.95,
-        "min_score": 0.95,
-        "issue_free_ratio": 1.0
-      },
-      "tr-e08208946684c866332b7416670bad41_1": {
-        "avg_score": 0.95,
-        "min_score": 0.95,
-        "issue_free_ratio": 1.0
-      },
-      "tr-236907d3019ea2a5f8e81baeb258753b_1": {
-        "avg_score": 0.97,
-        "min_score": 0.97,
-        "issue_free_ratio": 1.0
-      },
-      "tr-e08208946684c866332b7416670bad41_2": {
-        "avg_score": 0.1,
-        "min_score": 0.1,
-        "issue_free_ratio": 0.0
-      },
-      "tr-236907d3019ea2a5f8e81baeb258753b_2": {
-        "avg_score": 0.1,
-        "min_score": 0.1,
-        "issue_free_ratio": 0.0
+      "tr-236907d3019ea2a5f8e81baeb258753b": {
+        "avg_score": 0.7,
+        "min_score": 0.2,
+        "issue_free_ratio": 0.6667
       }
     },
     "agents": {
       "assess_severity": {
-        "avg_score": 0.96,
-        "min_score": 0.95,
-        "issue_free_ratio": 1.0,
-        "consistency": 0.99
+        "reasoning_eval": {
+          "avg_score": 0.975,
+          "min_score": 0.95,
+          "issue_free_ratio": 1.0,
+          "consistency": 0.975
+        }
       },
       "classify_log": {
-        "avg_score": 0.96,
-        "min_score": 0.95,
-        "issue_free_ratio": 1.0,
-        "consistency": 0.99
+        "reasoning_eval": {
+          "avg_score": 0.95,
+          "min_score": 0.95,
+          "issue_free_ratio": 1.0,
+          "consistency": 1.0
+        }
       },
       "diagnose_problem": {
-        "avg_score": 0.1,
-        "min_score": 0.1,
-        "issue_free_ratio": 0.0,
-        "consistency": 1.0
+        "reasoning_eval": {
+          "avg_score": 0.3,
+          "min_score": 0.2,
+          "issue_free_ratio": 0.0,
+          "consistency": 0.9
+        }
       }
     }
   }

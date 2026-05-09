@@ -22,6 +22,16 @@ This directory is the **eval-hub community adapter** for **[IBM CLEAR](https://g
 
 **Hands-on tutorials** (local run, benchmarks, deployed Hub, MLflow env, theme) live under **`examples/`** — start at [`examples/README.md`](examples/README.md) (includes **first-time path**, sample **`input-traces/`**, and links to **`output/local/`** HTML/JSON snapshots). The sections below are **reference**; detail there avoids duplicating long step-by-step prose here.
 
+## Prerequisites
+
+| Requirement | Notes |
+|-------------|-------|
+| **Python 3.13+** | Create a virtualenv from `adapters/clear`: `python3 -m venv .venv && pip install -r requirements.txt` |
+| **IBM CLEAR** | Installed from Git by `requirements.txt` (currently **`2.0.0-rc.2`**); PyPI wheels omit the agentic pipeline |
+| **OpenAI-compatible inference endpoint** | Used as the **judge model** (`model.url`, e.g. an Ollama, vLLM, or OpenAI-API-compatible server). Supply `OPENAI_API_KEY` only when your endpoint requires it |
+| **Agent traces** | One or more `*.json` trace files from a **LangGraph + MLflow-autologged** agent run — see [`examples/docs/02-agent-traces.md`](examples/docs/02-agent-traces.md) |
+| **Eval Hub** *(deployed only)* | A running Eval Hub instance with the `ibm-clear` provider registered and traces staged from S3 — see [`examples/docs/04-deployed-eval-hub.md`](examples/docs/04-deployed-eval-hub.md) |
+
 **How to read this README**
 
 | If you want to… | Start here |
