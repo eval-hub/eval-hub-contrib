@@ -10,6 +10,7 @@ VERSION ?= latest
 IMAGE_LIGHTEVAL = $(REGISTRY)/community-lighteval:$(VERSION)
 IMAGE_GUIDELLM = $(REGISTRY)/community-guidellm:$(VERSION)
 IMAGE_MTEB = $(REGISTRY)/community-mteb:$(VERSION)
+IMAGE_INSPECT = $(REGISTRY)/community-inspect:$(VERSION)
 
 # Default target
 .PHONY: help
@@ -21,18 +22,21 @@ help:
 	@echo "  make image-lighteval    - Build LightEval adapter image"
 	@echo "  make image-guidellm     - Build GuideLLM adapter image"
 	@echo "  make image-mteb         - Build MTEB adapter image"
+	@echo "  make image-inspect      - Build Inspect AI adapter image"
 	@echo "  make images             - Build all adapter images"
 	@echo ""
 	@echo "Image Push:"
 	@echo "  make push-lighteval     - Push LightEval adapter image"
 	@echo "  make push-guidellm      - Push GuideLLM adapter image"
 	@echo "  make push-mteb          - Push MTEB adapter image"
+	@echo "  make push-inspect       - Push Inspect AI adapter image"
 	@echo "  make push-images        - Push all adapter images"
 	@echo ""
 	@echo "Clean:"
 	@echo "  make clean-lighteval    - Remove LightEval adapter image"
 	@echo "  make clean-guidellm     - Remove GuideLLM adapter image"
 	@echo "  make clean-mteb         - Remove MTEB adapter image"
+	@echo "  make clean-inspect      - Remove Inspect AI adapter image"
 	@echo "  make clean-images       - Remove all adapter images"
 	@echo ""
 	@echo "Test:"
@@ -40,6 +44,7 @@ help:
 	@echo "  make test-lighteval    - Run LightEval adapter tests"
 	@echo "  make test-mteb         - Run MTEB adapter tests"
 	@echo "  make test-clear        - Run CLEAR adapter tests"
+	@echo "  make test-inspect      - Run Inspect AI adapter tests"
 	@echo "  make tests             - Run all adapter tests"
 	@echo ""
 	@echo "Variables:"
@@ -72,8 +77,15 @@ image-mteb:
 	$(BUILD_TOOL) build -t $(IMAGE_MTEB) -f Containerfile .
 	@echo "✅ Built: $(IMAGE_MTEB)"
 
+.PHONY: image-inspect
+image-inspect:
+	@echo "Building Inspect AI adapter image..."
+	cd adapters/inspect && \
+	$(BUILD_TOOL) build -t $(IMAGE_INSPECT) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_INSPECT)"
+
 .PHONY: images
-images: image-lighteval image-guidellm image-mteb
+images: image-lighteval image-guidellm image-mteb image-inspect
 	@echo "✅ All adapter images built"
 
 # Push targets
@@ -95,8 +107,14 @@ push-mteb:
 	$(BUILD_TOOL) push $(IMAGE_MTEB)
 	@echo "✅ Pushed: $(IMAGE_MTEB)"
 
+.PHONY: push-inspect
+push-inspect:
+	@echo "Pushing Inspect AI adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_INSPECT)
+	@echo "✅ Pushed: $(IMAGE_INSPECT)"
+
 .PHONY: push-images
-push-images: push-lighteval push-guidellm push-mteb
+push-images: push-lighteval push-guidellm push-mteb push-inspect
 	@echo "✅ All adapter images pushed"
 
 # Clean targets
@@ -118,8 +136,14 @@ clean-mteb:
 	$(BUILD_TOOL) rmi $(IMAGE_MTEB) 2>/dev/null || true
 	@echo "✅ Removed: $(IMAGE_MTEB)"
 
+.PHONY: clean-inspect
+clean-inspect:
+	@echo "Removing Inspect AI adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_INSPECT) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_INSPECT)"
+
 .PHONY: clean-images
-clean-images: clean-lighteval clean-guidellm clean-mteb
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-inspect
 	@echo "✅ All adapter images removed"
 
 # Development targets
@@ -176,6 +200,15 @@ test-clear:
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ CLEAR tests passed"
 
+.PHONY: test-inspect
+test-inspect:
+	@echo "Running Inspect AI adapter tests..."
+	cd adapters/inspect && \
+	test -d .venv || python3 -m venv .venv && \
+	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ Inspect AI tests passed"
+
 .PHONY: tests
-tests: test-guidellm test-lighteval test-mteb test-clear
+tests: test-guidellm test-lighteval test-mteb test-clear test-inspect
 	@echo "✅ All adapter tests passed"
