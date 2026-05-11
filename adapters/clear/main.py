@@ -580,6 +580,7 @@ class ClearAdapter(FrameworkAdapter):
             "run_name": output_dir.name,
             "provider": config.parameters["provider"],
             "eval_model_name": config.parameters["eval_model_name"],
+            "inference_backend": config.parameters.get("inference_backend", "litellm"),
             "overwrite": config.parameters.get("overwrite", True),
             "max_workers": config.parameters.get("max_workers", 20),
 
