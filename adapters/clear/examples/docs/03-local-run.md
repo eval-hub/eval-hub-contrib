@@ -33,8 +33,8 @@ Copy or start from **`meta/job.json`**. Minimum expectations include:
 
 | `inference_backend` | How `model.url` is used |
 |---|---|
-| `"litellm"` (default) | The adapter sets `OPENAI_BASE_URL` to `model.url` before invoking CLEAR. LiteLLM routes all calls through that base URL automatically. |
-| `"endpoint"` | The adapter passes `model.url` as `endpoint_url` directly in the CLEAR config. |
+| `"litellm"` (default) | The adapter sets `OPENAI_BASE_URL` to `model.url` before invoking CLEAR. LiteLLM picks up `OPENAI_BASE_URL` automatically and routes all calls through it. If `model.url` is not set, LiteLLM falls back to the OpenAI SDK default. |
+| `"endpoint"` | The adapter passes `model.url` as `endpoint_url` directly in the CLEAR config. `parameters.provider` is required (no default). |
 
 For **local** runs with **`litellm`**, you often **delete `model.auth`** from the JSON when no Kubernetes Secret exists, and set **`OPENAI_API_KEY`** in the shell **only if** your endpoint requires it. Many **local** servers (for example some **Ollama** setups) do not require a key.
 
