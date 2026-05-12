@@ -30,9 +30,15 @@ CANNED_STS12 = {
 
 
 @pytest.mark.integration
-def test_mteb_happy_path(monkeypatch):
+def test_mteb_happy_path(tmp_path, monkeypatch):
     """Full run_benchmark_job with mocked subprocess and canned task results."""
-    adapter = MTEBAdapter(job_spec_path="meta/job.json")
+    import shutil
+
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    shutil.copy(Path("meta/job.json"), meta_dir / "job.json")
+
+    adapter = MTEBAdapter(job_spec_path=str(meta_dir / "job.json"))
 
     callbacks = create_autospec(JobCallbacks)
     callbacks.create_oci_artifact.return_value = OCIArtifactResult(
@@ -80,3 +86,35 @@ def test_mteb_happy_path(monkeypatch):
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
     assert JobPhase.PERSISTING_ARTIFACTS in phases
+
+
+@pytest.mark.integration
+def test_results_use_local_jobs_base_path(tmp_path):
+    """Results are saved under local_jobs_base_path/results, not hardcoded /tmp paths."""
+    import shutil
+
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    shutil.copy(Path("meta/job.json"), meta_dir / "job.json")
+
+    adapter = MTEBAdapter(job_spec_path=str(meta_dir / "job.json"))
+
+    expected_base = adapter.local_jobs_base_path
+    assert expected_base is not None, "local mode should provide local_jobs_base_path"
+    assert expected_base == tmp_path
+    expected_results_dir = expected_base / "results"
+
+    saved_files = adapter._save_detailed_results(
+        job_id=adapter.job_spec.id,
+        benchmark_id=adapter.job_spec.benchmark_id,
+        model_name=adapter.job_spec.model.name,
+        mteb_results=CANNED_STS12,
+        evaluation_results=[],
+    )
+
+    assert len(saved_files) > 0
+    for f in saved_files:
+        assert str(f).startswith(str(expected_results_dir)), (
+            f"Result file {f} should be under {expected_results_dir}"
+        )
+        assert "/tmp/mteb_results" not in str(f)
