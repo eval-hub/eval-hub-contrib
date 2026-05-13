@@ -756,6 +756,12 @@ def main() -> None:
         logger.info(f"Overall score: {results.overall_score}")
         logger.info(f"Evaluated {results.num_examples_evaluated} examples")
 
+        # Save metrics/params to MLflow
+        run_id = callbacks.mlflow.save(results, adapter.job_spec)
+        if run_id:
+            results.mlflow_run_id = run_id
+            logger.info(f"MLflow run created: {run_id}")
+
         # Report final results
         callbacks.report_results(results)
 
