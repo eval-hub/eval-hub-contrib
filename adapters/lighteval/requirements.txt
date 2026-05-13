@@ -7,7 +7,7 @@ lighteval==0.13.0
 litellm[caching]==1.80.17
 
 # Required dependencies
-requests==2.32.5
+requests==2.33.1
 pydantic==2.12.5
 
 # EvalHub SDK (framework adapter with adapter extra only)

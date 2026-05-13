@@ -7,5 +7,5 @@ eval-hub-sdk[adapter]==0.1.7
 guidellm[recommended]==0.5.3
 
 # Required dependencies
-requests==2.32.5
+requests==2.33.1
 pydantic==2.12.5
