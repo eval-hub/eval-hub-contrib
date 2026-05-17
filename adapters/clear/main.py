@@ -796,7 +796,10 @@ class ClearAdapter(FrameworkAdapter):
             )
         )
 
-        results_dir = Path("/tmp/clear_results") / config.id
+        if self.local_jobs_base_path is not None:
+            results_dir = self.local_jobs_base_path / "results"
+        else:
+            results_dir = Path(__file__).parent / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(results_path, results_dir / "clear_results.json")
