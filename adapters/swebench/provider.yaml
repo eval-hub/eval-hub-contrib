@@ -11,9 +11,9 @@ runtime:
     image: quay.io/michaelclifford/evalhub-swebench:latest
     entrypoint: ["python", "main.py"]
     cpu_request: 100m
-    memory_request: 256Mi
-    cpu_limit: 500m
-    memory_limit: 1Gi
+    memory_request: 128Mi
+    cpu_limit: 1000m
+    memory_limit: 2Gi
 benchmarks:
   - id: swebench_verified
     name: SWE-bench Verified
