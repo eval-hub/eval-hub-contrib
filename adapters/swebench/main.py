@@ -44,6 +44,7 @@ from evalhub.adapter import (
     OCIArtifactResult,
 )
 from evalhub.models.api import OCICoordinates
+from evalhub.adapter.mlflow import MlflowArtifact
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -201,7 +202,7 @@ class SWEBenchAdapter(FrameworkAdapter):
 
             duration = time.time() - start_time
 
-            return JobResults(
+            job_results =  JobResults(
                 id=config.id,
                 benchmark_id=config.benchmark_id,
                 benchmark_index=config.benchmark_index,
@@ -211,6 +212,20 @@ class SWEBenchAdapter(FrameworkAdapter):
                 num_examples_evaluated=len(results),
                 duration_seconds=duration,
             )
+        
+            summary_bytes = json.dumps(summary, indent=2).encode()            
+            result_bytes =  json.dumps(results, indent=2).encode()
+
+            callbacks.mlflow.save(
+               job_results,
+                config,
+                artifacts= [
+                    MlflowArtifact("summary.json", summary_bytes, "application/json"),
+                    MlflowArtifact("results.json", result_bytes, "application/json")
+                ]
+            )
+
+            return job_results
 
         except Exception as e:
             logger.error("SWE-bench evaluation failed: %s", e, exc_info=True)
