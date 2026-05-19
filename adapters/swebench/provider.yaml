@@ -70,9 +70,10 @@ parameters:
     required: false
     default: "gold"
     description: >-
-      Predictions source. Supported values: "gold" (ground-truth patches
-      from the dataset), "s3://bucket/key" (download from S3), or a
-      local file path.
+      Predictions source. Use "gold" for ground-truth patches from the
+      dataset (useful for validation). For model predictions, use
+      test_data_ref.s3 on the benchmark config to have the eval-hub
+      platform stage the file to /test_data automatically.
   - name: k8s_registry
     type: string
     default: "docker.io/swebench"

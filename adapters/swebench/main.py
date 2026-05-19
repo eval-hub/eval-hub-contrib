@@ -266,13 +266,20 @@ class SWEBenchAdapter(FrameworkAdapter):
     def _load_predictions(
         self, predictions_path: str, dataset_name: str, split: str
     ) -> dict[str, dict]:
-        """Load predictions from a JSON file.
+        """Load predictions from a file path or gold patches.
 
-        Supports both dict format (``{instance_id: {...}}``) and list
-        format (``[{instance_id: ..., model_patch: ...}, ...]``).
+        Supported values for ``predictions_path``:
 
-        If ``predictions_path`` is ``"gold"``, loads gold patches from
-        the dataset.
+        * ``"gold"`` -- loads ground-truth patches from the HuggingFace
+          dataset.  Useful for validating the infrastructure.
+        * A file path (e.g. ``/test_data/predictions.jsonl``) -- reads
+          predictions from the container filesystem.  When a job is
+          submitted with ``test_data_ref.s3``, the eval-hub init
+          container downloads the S3 object to ``/test_data/`` before
+          the adapter starts.
+
+        Supports both dict format (``{instance_id: {...}}``) and list /
+        JSONL format.
         """
         if predictions_path == "gold":
             from swebench.harness.utils import load_swebench_dataset
@@ -288,6 +295,12 @@ class SWEBenchAdapter(FrameworkAdapter):
             }
 
         path = Path(predictions_path)
+        if path.is_dir():
+            raise ValueError(
+                f"predictions_path is a directory: {predictions_path} "
+                '- pass a file path or "gold"'
+            )
+
         if not path.exists():
             msg = f"Predictions file not found: {predictions_path}"
             raise FileNotFoundError(msg)
