@@ -67,11 +67,12 @@ benchmarks:
 parameters:
   - name: predictions_path
     type: string
-    required: true
+    required: false
+    default: "gold"
     description: >-
-      Path to predictions JSON file in SWE-bench format
-      (instance_id -> model_patch mappings).  Use "gold" to evaluate
-      the ground-truth patches.
+      Predictions source. Supported values: "gold" (ground-truth patches
+      from the dataset), "s3://bucket/key" (download from S3), or a
+      local file path.
   - name: k8s_registry
     type: string
     default: "docker.io/swebench"
