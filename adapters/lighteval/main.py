@@ -421,6 +421,17 @@ class LightEvalAdapter(FrameworkAdapter):
 
         logger.info(f"Executing LightEval CLI: {' '.join(cmd)}")
 
+        env = None
+        model_auth_dir = Path("/var/run/secrets/model")
+        if model_auth_dir.is_dir() and "HF_TOKEN" not in os.environ:
+            for token_file in model_auth_dir.iterdir():
+                if token_file.is_file():
+                    token = token_file.read_text().strip()
+                    if token:
+                        env = {**os.environ, "HF_TOKEN": token}
+                        logger.info(f"Injected HF_TOKEN from {token_file}")
+                        break
+
         try:
             # Run LightEval CLI
             result = subprocess.run(
@@ -429,6 +440,7 @@ class LightEvalAdapter(FrameworkAdapter):
                 text=True,
                 timeout=3600,  # 1 hour timeout
                 check=False,
+                env=env,
             )
 
             # Log output
