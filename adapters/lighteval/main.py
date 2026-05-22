@@ -543,8 +543,17 @@ class LightEvalAdapter(FrameworkAdapter):
                 elif isinstance(metric_value, bool):
                     metric_type = "bool"
 
+                # Strip numeric :N suffix LightEval appends to some metrics
+                # (e.g. pass@1:3 → pass@1, codegen_pass@1:16 → codegen_pass@1)
+                # so names match the primary_score.metric field in collection YAMLs.
+                clean_metric = metric_name
+                if ":" in metric_name:
+                    base, _, suffix = metric_name.rpartition(":")
+                    if suffix.isdigit():
+                        clean_metric = base
+
                 # Create hierarchical metric name: task.metric
-                full_metric_name = f"{task_name}.{metric_name}"
+                full_metric_name = f"{task_name}.{clean_metric}"
 
                 evaluation_results.append(
                     EvaluationResult(
@@ -555,7 +564,7 @@ class LightEvalAdapter(FrameworkAdapter):
                         num_samples=None,  # LightEval doesn't always provide this
                         metadata={
                             "task": task_name,
-                            "metric": metric_name,
+                            "metric": clean_metric,
                             "stderr": stderr,
                         },
                     )
@@ -569,35 +578,23 @@ class LightEvalAdapter(FrameworkAdapter):
     def _compute_overall_score(self, results: list[EvaluationResult]) -> float | None:
         """Compute overall score from evaluation results.
 
+        Returns the first numeric metric value. The EvalHub service selects
+        the primary metric from the full results list using primary_score.metric
+        from the collection YAML; the adapter's job is simply to report a
+        representative score for logging.
+
         Args:
             results: List of evaluation results
 
         Returns:
-            Overall score (average of primary metrics), or None if not applicable
+            First numeric metric value, normalised to [0, 1], or None.
         """
-        # Primary metrics to consider for overall score
-        primary_metric_names = ["accuracy", "acc", "exact_match", "extractive_match", "f1", "bleu"]
-
-        primary_values = []
         for result in results:
-            # Extract base metric name (after the task prefix)
-            metric_parts = result.metric_name.split(".")
-            if len(metric_parts) >= 2:
-                base_metric = metric_parts[-1]
-            else:
-                base_metric = result.metric_name
-
-            # Check if it's a primary metric
-            if base_metric in primary_metric_names:
-                if isinstance(result.metric_value, (int, float)):
-                    value = float(result.metric_value)
-                    # Assume metrics are already normalized to 0-1 or 0-100
-                    if value > 1.0:
-                        value = value / 100.0
-                    primary_values.append(value)
-
-        if primary_values:
-            return sum(primary_values) / len(primary_values)
+            if isinstance(result.metric_value, (int, float)):
+                value = float(result.metric_value)
+                if value > 1.0:
+                    value = value / 100.0
+                return value
         return None
 
     def _extract_num_evaluated(self, lighteval_results: dict[str, Any]) -> int:
@@ -609,12 +606,10 @@ class LightEvalAdapter(FrameworkAdapter):
         Returns:
             Number of examples evaluated, or 0 if not available
         """
-        # LightEval doesn't always provide this directly
-        # Try to extract from config or metadata
-        if "config_general" in lighteval_results and "max_samples" in lighteval_results["config_general"]:
-            return lighteval_results["config_general"]["max_samples"]
-
-        # Otherwise return 0 (unknown)
+        config_general = lighteval_results.get("config_general", {})
+        max_samples = config_general.get("max_samples") or config_general.get("num_samples")
+        if max_samples is not None:
+            return int(max_samples)
         return 0
 
     def _save_detailed_results(
