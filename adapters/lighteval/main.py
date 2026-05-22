@@ -547,12 +547,9 @@ class LightEvalAdapter(FrameworkAdapter):
                 clean_metric = self._normalise_metric_name(metric_name)
                 clean_task = self._normalise_task_name(task_name)
 
-                # Create hierarchical metric name: task.metric
-                full_metric_name = f"{clean_task}.{clean_metric}"
-
                 evaluation_results.append(
                     EvaluationResult(
-                        metric_name=full_metric_name,
+                        metric_name=clean_metric,
                         metric_value=metric_value,
                         metric_type=metric_type,
                         confidence_interval=confidence_interval,
