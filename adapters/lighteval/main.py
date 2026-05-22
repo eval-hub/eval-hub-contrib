@@ -14,6 +14,7 @@ The adapter:
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -543,17 +544,11 @@ class LightEvalAdapter(FrameworkAdapter):
                 elif isinstance(metric_value, bool):
                     metric_type = "bool"
 
-                # Strip numeric :N suffix LightEval appends to some metrics
-                # (e.g. pass@1:3 → pass@1, codegen_pass@1:16 → codegen_pass@1)
-                # so names match the primary_score.metric field in collection YAMLs.
-                clean_metric = metric_name
-                if ":" in metric_name:
-                    base, _, suffix = metric_name.rpartition(":")
-                    if suffix.isdigit():
-                        clean_metric = base
+                clean_metric = self._normalise_metric_name(metric_name)
+                clean_task = self._normalise_task_name(task_name)
 
                 # Create hierarchical metric name: task.metric
-                full_metric_name = f"{task_name}.{clean_metric}"
+                full_metric_name = f"{clean_task}.{clean_metric}"
 
                 evaluation_results.append(
                     EvaluationResult(
@@ -563,7 +558,7 @@ class LightEvalAdapter(FrameworkAdapter):
                         confidence_interval=confidence_interval,
                         num_samples=None,  # LightEval doesn't always provide this
                         metadata={
-                            "task": task_name,
+                            "task": clean_task,
                             "metric": clean_metric,
                             "stderr": stderr,
                         },
@@ -574,6 +569,30 @@ class LightEvalAdapter(FrameworkAdapter):
 
         logger.info(f"Extracted {len(evaluation_results)} metrics from LightEval results")
         return evaluation_results
+
+    @staticmethod
+    def _normalise_task_name(task_name: str) -> str:
+        # Strip |N fewshot suffix LightEval appends to task names in results JSON
+        # (e.g. math_500|0 → math_500)
+        if "|" in task_name:
+            return task_name.rsplit("|", 1)[0]
+        return task_name
+
+    @staticmethod
+    def _normalise_metric_name(metric_name: str) -> str:
+        # Normalise LightEval metric names to match collection primary_score.metric.
+        # pass@k:k=1&n=3 → pass@1  (query-string: extract k value)
+        # codegen_pass@1:16 → codegen_pass@1  (plain numeric suffix)
+        if ":" not in metric_name:
+            return metric_name
+        base, _, suffix = metric_name.rpartition(":")
+        if "@k" in base:
+            m = re.search(r"\bk=(\d+)\b", suffix)
+            if m:
+                return base.replace("@k", f"@{m.group(1)}")
+        if suffix.isdigit():
+            return base
+        return metric_name
 
     def _compute_overall_score(self, results: list[EvaluationResult]) -> float | None:
         """Compute overall score from evaluation results.
