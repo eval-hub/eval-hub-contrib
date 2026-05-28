@@ -1,0 +1,46 @@
+{
+  "id": "ruler-longcontext-eval-001",
+  "provider_id": "ruler",
+  "benchmark_id": "niah-single-essay",
+  "benchmark_index": 0,
+  "model": {
+    "url": "http://evalhub.hermes.svc.cluster.local:8443/v1",
+    "name": "meta-llama/Llama-2-7b-chat-hf"
+  },
+  "num_examples": 10,
+  "parameters": {
+    "benchmarks": [
+      "niah-single-essay",
+      "variable-tracking",
+      "common-words-extraction",
+      "qa-squad"
+    ],
+    "context_lengths": [
+      4096,
+      8192,
+      16384
+    ],
+    "num_samples": 10,
+    "tokenizer_path": "meta-llama/Llama-2-7b-chat-hf",
+    "tokenizer_type": "hf",
+    "model_template": "meta-llama3",
+    "tokens_to_generate": 128,
+    "batch_size": 1,
+    "random_seed": 42
+  },
+  "callback_url": "https://evalhub-hermes.apps.wbos.podzone.org",
+  "tags": [
+    {
+      "key": "framework",
+      "value": "ruler"
+    },
+    {
+      "key": "evaluation_type",
+      "value": "long-context"
+    },
+    {
+      "key": "model_size",
+      "value": "small"
+    }
+  ]
+}

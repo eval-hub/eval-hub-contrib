@@ -1,0 +1,8 @@
+# Exclude from container builds
+# meta/ is now allowed to allow local testing via dummy job.json
+tests/
+__pycache__/
+.venv/
+*.pyo
+*.pyd
+.Python

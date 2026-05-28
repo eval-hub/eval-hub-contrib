@@ -1,0 +1,41 @@
+# Copyright [yyyy] eval-hub contributors
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# RULER long-context benchmark adapter requirements
+
+# OpenAI-compatible client for API inference
+openai>=1.10.0
+
+# Data generation: synthetic dataset tools
+wonderwords>=2.2
+nltk>=3.8
+numpy>=1.24.0
+
+# YAML config parsing
+pyyaml>=6.0
+
+# Retry logic (used by scripts/data/tokenizer.py; also a transitive dep of openai)
+tenacity>=8.0
+
+# Progress bars
+tqdm>=4.65.0
+
+# HuggingFace tokenizer (for data generation)
+transformers>=4.40.0
+tiktoken>=0.5.0
+
+# Pandas for evaluation output
+pandas>=2.0.0
+
+# EvalHub SDK (framework adapter with adapter extra only)
+eval-hub-sdk[adapter]==0.1.7
