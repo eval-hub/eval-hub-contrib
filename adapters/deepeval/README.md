@@ -12,7 +12,7 @@ This directory is the **eval-hub community adapter** for **[DeepEval](https://gi
 | `deepeval-relevancy` | rag-evaluation | Tests if output is relevant to the input query | `relevancy_score` |
 | `deepeval-hallucination` | safety | Detects hallucinated content not grounded in context | `hallucination_score`, `hallucination_detected` |
 | `deepeval-correctness` | accuracy | Tests factual correctness against expected output | `correctness_score` |
-| `deepeval-summarization` | nlp | Tests summarization quality (alignment + coverage) | `summarization_score`, `alignment_score`, `coverage_score` |
+| `deepeval-summarization` | nlp | Tests summarization quality | `summarization_score` |
 
 ## Prerequisites
 

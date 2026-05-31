@@ -6,7 +6,7 @@
 
 id: deepeval
 name: DeepEval
-description: LLM evaluation framework with metrics for faithfulness, relevancy, hallucination, bias, toxicity, and agentic workflows
+description: LLM-as-judge evaluation framework with metrics for faithfulness, relevancy, hallucination, correctness, and summarization
 type: builtin
 
 runtime:
@@ -86,8 +86,6 @@ benchmarks:
     category: nlp
     metrics:
       - summarization_score
-      - alignment_score
-      - coverage_score
     tags:
       - deepeval
       - nlp

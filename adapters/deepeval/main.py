@@ -423,21 +423,6 @@ class DeepEvalAdapter(FrameworkAdapter):
                     metric_type="float",
                 )
             )
-            # Alignment and coverage are approximated from per-case scores
-            results.append(
-                EvaluationResult(
-                    metric_name="alignment_score",
-                    metric_value=round(mean_score, 6),
-                    metric_type="float",
-                )
-            )
-            results.append(
-                EvaluationResult(
-                    metric_name="coverage_score",
-                    metric_value=round(mean_score, 6),
-                    metric_type="float",
-                )
-            )
 
         logger.info("Extracted %d metrics from DeepEval results", len(results))
         return results
