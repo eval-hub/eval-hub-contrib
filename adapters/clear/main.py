@@ -36,7 +36,7 @@ from evalhub.adapter import (
     OCIArtifactSpec,
 )
 from evalhub.adapter.auth import resolve_model_credentials
-from evalhub.adapter.mlflow import MlflowArtifact
+from evalhub.adapter.mlflow import MlflowArtifact, TracesNamespace
 
 from themes import RED_HAT_CLEAR_DASHBOARD_CSS, RED_HAT_DASHBOARD_JS_PATCHES
 
@@ -49,7 +49,7 @@ try:
     from clear_eval.agentic.pipeline.utils import get_run_output_dir
 except ImportError as exc:
     raise ImportError(
-        "Install IBM CLEAR from source (see requirements.txt; PyPI wheels omit agentic)."
+        "Install IBM CLEAR: pip install clear-eval==2.0.2 (see requirements.txt)."
     ) from exc
 
 logger = logging.getLogger(__name__)
@@ -281,6 +281,94 @@ def _apply_clear_dashboard_theme(html_paths: list[Path], theme: str | None) -> N
             logger.warning("Could not apply dashboard theme to %s: %s", path, exc)
 
 
+def _fetch_mlflow_traces_to_dir(parameters: dict[str, Any], output_dir: str) -> None:
+    """Fetch full traces (with spans) from MLflow and write CLEAR-compatible JSON files.
+
+    Uses the native mlflow Python client to get full span data, then converts each
+    trace to the flat format CLEAR's preprocessor expects:
+    {trace_id, experiment_id, state, timestamp_ms, execution_time_ms, tags, spans[]}
+    """
+    try:
+        import mlflow as _mlflow
+    except ImportError as exc:
+        raise ImportError(
+            "mlflow-skinny is required to fetch traces from MLflow. "
+            "Install it with: pip install mlflow-skinny"
+        ) from exc
+
+    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
+    native_client = _mlflow.MlflowClient(tracking_uri=tracking_uri)
+    experiment_name = parameters.get("mlflow_traces_experiment_name")
+    experiment_id = parameters.get("mlflow_traces_experiment_id")
+    max_results = int(parameters.get("mlflow_traces_max_results", 100))
+    run_id = parameters.get("mlflow_traces_run_id")
+
+    if not experiment_name and not experiment_id:
+        raise ValueError(
+            "Set parameters.mlflow_traces_experiment_name or mlflow_traces_experiment_id"
+        )
+
+    if not experiment_id and experiment_name:
+        exp = native_client.get_experiment_by_name(experiment_name)
+        if exp is None:
+            raise ValueError(f"MLflow experiment not found: {experiment_name!r}")
+        experiment_id = exp.experiment_id
+
+    filter_string = f"run_id = '{run_id}'" if run_id else None
+    traces = _mlflow.search_traces(
+        experiment_ids=[experiment_id],
+        max_results=max_results,
+        filter_string=filter_string,
+        return_type="list",
+    )
+
+    if not traces:
+        raise ValueError(
+            f"No traces found in MLflow experiment {experiment_name or experiment_id!r}"
+        )
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    for trace in traces:
+        info = trace.info
+        rid = info.request_id
+
+        spans = []
+        for s in (trace.data.spans or []):
+            attrs = dict(s.attributes or {})
+            if "mlflow.spanInputs" not in attrs and s.inputs:
+                attrs["mlflow.spanInputs"] = s.inputs
+            if "mlflow.spanOutputs" not in attrs and s.outputs:
+                attrs["mlflow.spanOutputs"] = s.outputs
+            spans.append({
+                "span_id": s.span_id,
+                "parent_span_id": s.parent_id,
+                "name": s.name,
+                "status": {"status_code": info.status, "description": ""},
+                "start_time_unix_nano": s.start_time_ns,
+                "end_time_unix_nano": s.end_time_ns,
+                "duration_ms": None,
+                "attributes": attrs,
+            })
+
+        trace_doc = {
+            "trace_id": rid,
+            "experiment_id": experiment_id,
+            "state": info.status,
+            "timestamp_ms": info.timestamp_ms,
+            "execution_time_ms": info.execution_time_ms,
+            "tags": dict(info.tags or {}),
+            "spans": spans,
+        }
+
+        safe_rid = rid.replace("/", "_").replace("\\", "_")
+        out_path = Path(output_dir) / f"{safe_rid}.json"
+        with open(out_path, "w") as fh:
+            json.dump(trace_doc, fh, indent=2, default=str)
+
+    logger.info("Fetched %d trace(s) from MLflow experiment %s -> %s",
+                len(traces), experiment_name or experiment_id, output_dir)
+
+
 class ClearAdapter(FrameworkAdapter):
     """eval-hub FrameworkAdapter that runs IBM CLEAR on trace JSON and returns JobResults."""
 
@@ -343,6 +431,30 @@ class ClearAdapter(FrameworkAdapter):
                             [c.name for c in data_path.iterdir()],
                         )
 
+            if not data_dir and TracesNamespace.is_source_configured(config.parameters):
+                if os.environ.get("MLFLOW_TRACKING_URI"):
+                    logger.info("Fetching traces from MLflow experiment via SDK")
+                    callbacks.report_status(
+                        JobStatusUpdate(
+                            status=JobStatus.RUNNING,
+                            phase=JobPhase.LOADING_DATA,
+                            progress=0.1,
+                            message=MessageInfo(
+                                message="Fetching traces from MLflow",
+                                message_code="fetching_mlflow_traces",
+                            ),
+                        )
+                    )
+                    mlflow_traces_dir = tempfile.mkdtemp(prefix="clear_mlflow_traces_")
+                    _fetch_mlflow_traces_to_dir(config.parameters, mlflow_traces_dir)
+                    data_dir = mlflow_traces_dir
+                    logger.info("MLflow traces fetched to %s", data_dir)
+                else:
+                    logger.warning(
+                        "MLflow trace source is configured in parameters but "
+                        "MLFLOW_TRACKING_URI is not set — skipping MLflow fetch"
+                    )
+
             if not data_dir:
                 data_dir = config.parameters.get("data_dir") or config.parameters.get(
                     "traces_input_dir"
@@ -350,6 +462,7 @@ class ClearAdapter(FrameworkAdapter):
                 if not data_dir:
                     raise ValueError(
                         "No input traces: mount data under /test_data or /data, "
+                        "fetch from MLflow (set parameters.mlflow_traces_experiment_name), "
                         "or set parameters.data_dir (preferred) or parameters.traces_input_dir"
                     )
                 logger.info("Using data_dir from parameters: %s", data_dir)
@@ -524,11 +637,13 @@ class ClearAdapter(FrameworkAdapter):
         has_traces_param = (
             "data_dir" in config.parameters or "traces_input_dir" in config.parameters
         )
+        has_mlflow_traces = TracesNamespace.is_source_configured(config.parameters)
 
-        if not has_test_data and not has_data and not has_traces_param:
+        if not has_test_data and not has_data and not has_traces_param and not has_mlflow_traces:
             raise ValueError(
-                "Provide parameters.data_dir (or traces_input_dir) or mount test data under "
-                "/test_data or /data"
+                "Provide parameters.data_dir (or traces_input_dir), set "
+                "parameters.mlflow_traces_experiment_name to fetch from MLflow, "
+                "or mount test data under /test_data or /data"
             )
 
         if "eval_model_name" not in config.parameters:
@@ -595,21 +710,24 @@ class ClearAdapter(FrameworkAdapter):
             # the remaining params are set internally in clear
         }
 
-        if agentic_config.get("inference_backend") == "endpoint":
-            if "endpoint_url" in config.parameters:
-                ep = config.parameters["endpoint_url"]
-            elif "inference_url" in config.parameters:
-                ep = config.parameters["inference_url"]
-            elif config.model.url:
-                ep = config.model.url
-            else:
+        if config.model.url:
+            ep = (
+                config.parameters.get("endpoint_url")
+                or config.parameters.get("inference_url")
+                or config.model.url
+            )
+            if agentic_config.get("inference_backend") == "endpoint" and not ep:
                 raise ValueError(
                     "model.url or parameters.endpoint_url (or inference_url) is required "
                     "when inference_backend is 'endpoint'"
                 )
-            # CLEAR's eval pipeline expects endpoint_url; keep inference_url for compatibility.
             agentic_config["endpoint_url"] = ep
             agentic_config["inference_url"] = ep
+        elif agentic_config.get("inference_backend") == "endpoint":
+            raise ValueError(
+                "model.url or parameters.endpoint_url (or inference_url) is required "
+                "when inference_backend is 'endpoint'"
+            )
 
         if "eval_model_params" in config.parameters:
             agentic_config["eval_model_params"] = config.parameters["eval_model_params"]
