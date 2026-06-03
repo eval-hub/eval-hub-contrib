@@ -1,5 +1,4 @@
 eval-hub-sdk[adapter]==0.1.7
-# swebench is installed from source in the Containerfile (editable install
-# required for fixture data files). Do NOT add swebench here.
+swebench==4.1.0
 kubernetes>=28.0
 requests>=2.31.0

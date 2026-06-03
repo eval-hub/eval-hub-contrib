@@ -8,7 +8,7 @@ self-contained K8s Job using a pre-built SWE-bench container image.
 
 The adapter is a thin orchestration layer:
   1. Loads a predictions JSON file (standard SWE-bench format)
-  2. Calls swebench.harness.k8s_evaluation.run_instances_k8s()
+   2. Calls k8s_runner.run_instances_k8s()
   3. Maps the graded results to eval-hub EvaluationResult objects
   4. Reports resolve_rate as the overall_score
 
@@ -110,7 +110,14 @@ class SWEBenchAdapter(FrameworkAdapter):
             timeout = int(params.get("timeout_per_instance", 1800))
             split = params.get("split", "test")
             instance_ids = params.get("instance_ids")
+            instance_image_tag = params.get("instance_image_tag", "latest")
+            service_account = params.get("service_account")
             run_id = config.id
+
+            logger.info(
+                "Using pre-built images from registry: %s (tag: %s)",
+                k8s_registry, instance_image_tag,
+            )
 
             # Load predictions
             predictions = self._load_predictions(predictions_path, dataset_name, split)
@@ -154,7 +161,7 @@ class SWEBenchAdapter(FrameworkAdapter):
                 )
             )
 
-            from swebench.harness.k8s_eval import run_instances_k8s
+            from k8s_runner import run_instances_k8s
 
             results = run_instances_k8s(
                 predictions=predictions,
@@ -165,6 +172,8 @@ class SWEBenchAdapter(FrameworkAdapter):
                 max_workers=max_workers,
                 timeout=timeout,
                 cleanup=True,
+                instance_image_tag=instance_image_tag,
+                service_account=service_account,
             )
 
             # -- Phase 4: POST_PROCESSING --

@@ -5,15 +5,10 @@ WORKDIR /app
 
 RUN dnf install -y git && dnf clean all
 
-# Install swebench from source using editable install (as per docs).
-# This ensures fixture data files are available at runtime.
-RUN git clone --depth 1 -b k8s https://github.com/MichaelClifford/SWE-bench.git /opt/swebench && \
-    pip install --no-cache-dir -e /opt/swebench
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py .
+COPY main.py k8s_runner.py ./
 
 RUN mkdir -p /tmp/swebench_results && chmod -R 777 /tmp && \
     chown -R 1001:0 /app && chmod -R g+rwX /app

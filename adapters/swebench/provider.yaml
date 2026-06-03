@@ -78,12 +78,29 @@ parameters:
     type: string
     default: "docker.io/swebench"
     description: >-
-      Container registry prefix for pre-built SWE-bench evaluation images.
+      Container registry where SWE-bench evaluation images are located.
+      The adapter pulls images from this registry when creating eval Jobs.
+      For Docker Hub use "docker.io/swebench".
   - name: k8s_namespace
     type: string
     default: "swe-bench"
     description: >-
       Kubernetes namespace where evaluation Jobs are created.
+  - name: instance_image_tag
+    type: string
+    default: "latest"
+    description: >-
+      Image tag for SWE-bench instance images. Use versioned tags
+      (e.g. "v1") to avoid caching issues with some registries.
+  - name: service_account
+    type: string
+    required: false
+    default: null
+    description: >-
+      Kubernetes service account for evaluation Job pods.  Must be
+      bound to the swebench-eval-scc SecurityContextConstraints
+      (see rbac.yaml) so that the init container can run as root
+      to fix file permissions.
   - name: max_workers
     type: integer
     default: 10
