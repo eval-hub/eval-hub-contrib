@@ -36,6 +36,11 @@ benchmarks:
       - ragas
       - rag
       - default
+    primary_score:
+      metric: faithfulness
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
 
   - id: ragas_rag_full
     name: RAG Full Suite
@@ -57,6 +62,11 @@ benchmarks:
       - ragas
       - rag
       - comprehensive
+    primary_score:
+      metric: faithfulness
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
 
 parameters:
   - name: metrics
