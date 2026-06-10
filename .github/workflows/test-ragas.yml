@@ -1,0 +1,28 @@
+name: Test RAGAS
+
+on:
+  push:
+    branches: [main]
+    paths: ['adapters/ragas/**']
+  pull_request:
+    branches: [main]
+    paths: ['adapters/ragas/**']
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        working-directory: adapters/ragas
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+      - name: Run tests
+        working-directory: adapters/ragas
+        run: pytest tests/ -v

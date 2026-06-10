@@ -10,6 +10,7 @@ VERSION ?= latest
 IMAGE_LIGHTEVAL = $(REGISTRY)/community-lighteval:$(VERSION)
 IMAGE_GUIDELLM = $(REGISTRY)/community-guidellm:$(VERSION)
 IMAGE_MTEB = $(REGISTRY)/community-mteb:$(VERSION)
+IMAGE_RAGAS = $(REGISTRY)/community-ragas:$(VERSION)
 
 # Default target
 .PHONY: help
@@ -21,18 +22,21 @@ help:
 	@echo "  make image-lighteval    - Build LightEval adapter image"
 	@echo "  make image-guidellm     - Build GuideLLM adapter image"
 	@echo "  make image-mteb         - Build MTEB adapter image"
+	@echo "  make image-ragas        - Build RAGAS adapter image"
 	@echo "  make images             - Build all adapter images"
 	@echo ""
 	@echo "Image Push:"
 	@echo "  make push-lighteval     - Push LightEval adapter image"
 	@echo "  make push-guidellm      - Push GuideLLM adapter image"
 	@echo "  make push-mteb          - Push MTEB adapter image"
+	@echo "  make push-ragas         - Push RAGAS adapter image"
 	@echo "  make push-images        - Push all adapter images"
 	@echo ""
 	@echo "Clean:"
 	@echo "  make clean-lighteval    - Remove LightEval adapter image"
 	@echo "  make clean-guidellm     - Remove GuideLLM adapter image"
 	@echo "  make clean-mteb         - Remove MTEB adapter image"
+	@echo "  make clean-ragas        - Remove RAGAS adapter image"
 	@echo "  make clean-images       - Remove all adapter images"
 	@echo ""
 	@echo "Test:"
@@ -40,6 +44,7 @@ help:
 	@echo "  make test-lighteval    - Run LightEval adapter tests"
 	@echo "  make test-mteb         - Run MTEB adapter tests"
 	@echo "  make test-clear        - Run CLEAR adapter tests"
+	@echo "  make test-ragas        - Run RAGAS adapter tests"
 	@echo "  make tests             - Run all adapter tests"
 	@echo ""
 	@echo "Variables:"
@@ -72,8 +77,15 @@ image-mteb:
 	$(BUILD_TOOL) build -t $(IMAGE_MTEB) -f Containerfile .
 	@echo "✅ Built: $(IMAGE_MTEB)"
 
+.PHONY: image-ragas
+image-ragas:
+	@echo "Building RAGAS adapter image..."
+	cd adapters/ragas && \
+	$(BUILD_TOOL) build -t $(IMAGE_RAGAS) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_RAGAS)"
+
 .PHONY: images
-images: image-lighteval image-guidellm image-mteb
+images: image-lighteval image-guidellm image-mteb image-ragas
 	@echo "✅ All adapter images built"
 
 # Push targets
@@ -95,8 +107,14 @@ push-mteb:
 	$(BUILD_TOOL) push $(IMAGE_MTEB)
 	@echo "✅ Pushed: $(IMAGE_MTEB)"
 
+.PHONY: push-ragas
+push-ragas:
+	@echo "Pushing RAGAS adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_RAGAS)
+	@echo "✅ Pushed: $(IMAGE_RAGAS)"
+
 .PHONY: push-images
-push-images: push-lighteval push-guidellm push-mteb
+push-images: push-lighteval push-guidellm push-mteb push-ragas
 	@echo "✅ All adapter images pushed"
 
 # Clean targets
@@ -118,8 +136,14 @@ clean-mteb:
 	$(BUILD_TOOL) rmi $(IMAGE_MTEB) 2>/dev/null || true
 	@echo "✅ Removed: $(IMAGE_MTEB)"
 
+.PHONY: clean-ragas
+clean-ragas:
+	@echo "Removing RAGAS adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_RAGAS) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_RAGAS)"
+
 .PHONY: clean-images
-clean-images: clean-lighteval clean-guidellm clean-mteb
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas
 	@echo "✅ All adapter images removed"
 
 # Development targets
@@ -176,6 +200,15 @@ test-clear:
 	.venv/bin/pytest tests/ -v
 	@echo "✅ CLEAR tests passed"
 
+.PHONY: test-ragas
+test-ragas:
+	@echo "Running RAGAS adapter tests..."
+	cd adapters/ragas && \
+	test -d .venv || python3 -m venv .venv && \
+	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ RAGAS tests passed"
+
 .PHONY: tests
-tests: test-guidellm test-lighteval test-mteb test-clear
+tests: test-guidellm test-lighteval test-mteb test-clear test-ragas
 	@echo "✅ All adapter tests passed"
