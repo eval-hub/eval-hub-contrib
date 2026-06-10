@@ -467,6 +467,11 @@ class RagasAdapter(FrameworkAdapter):
 
             result_df = ragas_result.to_pandas()
             n_evaluated = len(result_df)
+            # Keep per-row results for main() to attach to the MLflow run.
+            self.mlflow_artifacts = [
+                ("results.jsonl", result_df.to_json(orient="records", lines=True).encode(), "application/json"),
+                ("results.csv", result_df.to_csv(index=False).encode(), "text/csv"),
+            ]
             evaluation_results: list[EvaluationResult] = []
             scores_for_overall: list[float] = []
 
@@ -612,7 +617,13 @@ def main() -> None:
 
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
 
-        run_id = callbacks.mlflow.save(results, adapter.job_spec)
+        from evalhub.adapter.mlflow import MlflowArtifact
+
+        artifacts = [
+            MlflowArtifact(path, content, content_type)
+            for path, content, content_type in getattr(adapter, "mlflow_artifacts", [])
+        ]
+        run_id = callbacks.mlflow.save(results, adapter.job_spec, artifacts=artifacts)
         if run_id:
             results.mlflow_run_id = run_id
             logger.info("MLflow run created: %s", run_id)
