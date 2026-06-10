@@ -67,3 +67,35 @@ def test_ragas_happy_path(monkeypatch, tmp_path):
     assert JobPhase.LOADING_DATA in phases
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
+
+
+@pytest.mark.integration
+def test_mode_suffixed_metric_columns(monkeypatch, tmp_path):
+    """Metrics whose result column carries a mode suffix (e.g.
+    factual_correctness(mode=f1)) are still extracted and reported under the
+    requested metric name."""
+    adapter = RagasAdapter(job_spec_path="meta/job.json")
+    adapter.job_spec.parameters["metrics"] = ["faithfulness", "factual_correctness"]
+
+    callbacks = create_autospec(JobCallbacks)
+    callbacks.create_oci_artifact.return_value = OCIArtifactResult(
+        digest="sha256:fake",
+        reference="fake:latest",
+    )
+
+    mock_result = _make_mock_ragas_result(
+        ["faithfulness", "factual_correctness(mode=f1)"]
+    )
+    monkeypatch.setattr(adapter, "_run_ragas", lambda **kwargs: mock_result)
+
+    dataset_file = tmp_path / "dataset.jsonl"
+    dataset_file.write_text(
+        '{"user_input": "What is AI?", "response": "Artificial Intelligence", "retrieved_contexts": ["AI is..."], "reference": "AI stands for..."}\n'
+    )
+    monkeypatch.setattr("main._resolve_data_path", lambda config: dataset_file)
+
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    reported = {r.metric_name for r in results.results}
+    assert reported == {"faithfulness", "factual_correctness"}
+    assert results.overall_score is not None

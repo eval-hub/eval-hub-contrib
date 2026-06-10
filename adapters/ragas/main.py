@@ -40,6 +40,7 @@ from evalhub.adapter import (
     MessageInfo,
     OCIArtifactSpec,
 )
+from evalhub.adapter.auth import resolve_model_credentials
 from langchain_core.language_models.llms import Generation, LLMResult
 from langchain_core.prompt_values import PromptValue
 from ragas import EvaluationDataset
@@ -110,19 +111,6 @@ DEFAULT_METRICS = [
 # ---------------------------------------------------------------------------
 # OpenAI-compatible LLM wrapper
 # ---------------------------------------------------------------------------
-_SECRET_DIR = Path("/var/run/secrets/model")
-
-
-def _get_api_key() -> str:
-    for name in ("OPENAICOMPATIBLE_API_KEY", "OPENAI_API_KEY"):
-        if val := os.environ.get(name):
-            return val
-        secret_file = _SECRET_DIR / name
-        if secret_file.exists():
-            return secret_file.read_text().strip()
-    return "DUMMY"
-
-
 def _openai_client(base_url: str) -> Any:
     if not _HAS_OPENAI:
         raise RuntimeError(
@@ -131,11 +119,23 @@ def _openai_client(base_url: str) -> Any:
     url = base_url.rstrip("/")
     if not url.endswith("/v1"):
         url = f"{url}/v1"
-    return OpenAI(base_url=url, api_key=_get_api_key())
+    creds = resolve_model_credentials()
+    api_key = creds.api_key
+    if not api_key:
+        auth_value = creds.auth_headers.get("Authorization", "")
+        if auth_value.startswith("Bearer "):
+            api_key = auth_value.removeprefix("Bearer ").strip()
+    return OpenAI(base_url=url, api_key=api_key or "DUMMY")
 
 
 class EvalHubOpenAILLM(BaseRagasLLM):
-    """RAGAS LLM that calls an OpenAI-compatible completions endpoint."""
+    """RAGAS LLM that calls an OpenAI-compatible chat completions endpoint.
+
+    Uses chat completions rather than the legacy /v1/completions endpoint:
+    the legacy endpoint defaults max_tokens to 16 on most servers (truncating
+    RAGAS's structured judge prompts into unparseable JSON), and instruct
+    models follow the format instructions more reliably via chat.
+    """
 
     def __init__(
         self,
@@ -165,7 +165,7 @@ class EvalHubOpenAILLM(BaseRagasLLM):
         client = _openai_client(self._base_url)
         kwargs: dict[str, Any] = {
             "model": self._model_id,
-            "prompt": prompt.to_string(),
+            "messages": [{"role": "user", "content": prompt.to_string()}],
             "n": n,
         }
         if self._max_tokens is not None:
@@ -177,14 +177,15 @@ class EvalHubOpenAILLM(BaseRagasLLM):
             kwargs["stop"] = stop
 
         try:
-            response = client.completions.create(**kwargs)
+            response = client.chat.completions.create(**kwargs)
         except Exception as e:
-            logger.error("Completion request failed: %s", e)
+            logger.error("Chat completion request failed: %s", e)
             raise
 
         generations = []
         for choice in getattr(response, "choices", []) or []:
-            text = getattr(choice, "text", "") or ""
+            message = getattr(choice, "message", None)
+            text = getattr(message, "content", "") or ""
             generations.append(Generation(text=text))
 
         if not generations:
@@ -470,9 +471,26 @@ class RagasAdapter(FrameworkAdapter):
             scores_for_overall: list[float] = []
 
             for metric_name in [m.name for m in metrics]:
-                if metric_name not in result_df.columns:
+                # Some metrics (e.g. FactualCorrectness, NoiseSensitivity) report
+                # their score column with a mode suffix: "factual_correctness(mode=f1)".
+                column = metric_name
+                if column not in result_df.columns:
+                    column = next(
+                        (
+                            c
+                            for c in result_df.columns
+                            if c.startswith(f"{metric_name}(")
+                        ),
+                        None,
+                    )
+                if column is None:
+                    logger.warning(
+                        "Metric %s missing from RAGAS results (columns: %s)",
+                        metric_name,
+                        list(result_df.columns),
+                    )
                     continue
-                series = result_df[metric_name].dropna()
+                series = result_df[column].dropna()
                 values = series.tolist()
                 if not values:
                     continue
@@ -508,7 +526,10 @@ class RagasAdapter(FrameworkAdapter):
                         ),
                     )
                 )
-                results_dir = Path("/tmp/ragas_evalhub_results") / config.id
+                if self.local_jobs_base_path is not None:
+                    results_dir = self.local_jobs_base_path / "results"
+                else:
+                    results_dir = Path(__file__).parent / "results"
                 results_dir.mkdir(parents=True, exist_ok=True)
                 results_file = results_dir / "results.jsonl"
                 result_df.to_json(results_file, orient="records", lines=True)
@@ -590,6 +611,11 @@ def main() -> None:
         callbacks = DefaultCallbacks.from_adapter(adapter)
 
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+        run_id = callbacks.mlflow.save(results, adapter.job_spec)
+        if run_id:
+            results.mlflow_run_id = run_id
+            logger.info("MLflow run created: %s", run_id)
 
         callbacks.report_results(results)
 
