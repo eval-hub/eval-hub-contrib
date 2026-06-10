@@ -6,6 +6,7 @@ ragas>=0.4.0
 # LLM/embeddings wrappers
 openai>=1.0.0
 langchain-core>=0.3.0
+langchain-community>=0.3.0,<0.4
 
 # EvalHub SDK (framework adapter with adapter extra only)
-eval-hub-sdk[adapter]==0.1.5
+eval-hub-sdk[adapter]==0.4.0
