@@ -1,0 +1,29 @@
+{
+  "id": "inspect-petri-sycophancy-001",
+  "provider_id": "inspect",
+  "benchmark_id": "inspect/petri-sycophancy",
+  "benchmark_index": 0,
+  "model": {
+    "url": "http://vllm:8080/v1",
+    "name": "ibm-granite/granite-3.3-8b-instruct"
+  },
+  "num_examples": 5,
+  "parameters": {
+    "auditor_model": "claude-sonnet-4-6",
+    "judge_model": "claude-opus-4-7",
+    "max_turns": 20,
+    "enable_rollback": true,
+    "realism_filter": false,
+    "max_samples": 5,
+    "log_level": "info",
+    "languages": ["en"],
+    "languages_count": 1
+  },
+  "callback_url": "http://localhost:8081",
+  "tags": [
+    {"key": "framework", "value": "inspect-ai"},
+    {"key": "tool", "value": "petri"},
+    {"key": "evaluation_type", "value": "alignment"},
+    {"key": "behavior", "value": "sycophancy"}
+  ]
+}

@@ -1,0 +1,6 @@
+eval-hub-sdk[adapter]>=0.1.7
+inspect-ai>=0.3.40
+openai>=2.0.0
+inspect-evals>=0.1.0
+inspect-petri>=3.0.0
+petri-bloom>=0.1.0
