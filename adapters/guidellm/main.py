@@ -199,6 +199,7 @@ class GuideLLMAdapter(FrameworkAdapter):
 
             # Compute duration
             duration = time.time() - start_time
+            cli_args = self._resolve_cli_args(config)
 
             # Create job results
             results = JobResults(
@@ -213,8 +214,8 @@ class GuideLLMAdapter(FrameworkAdapter):
                 completed_at=datetime.now(UTC),
                 evaluation_metadata={
                     "framework": "guidellm",
-                    "profile": config.parameters.get("profile", "sweep"),
-                    "request_type": config.parameters.get("request_type", "chat_completions"),
+                    "profile": cli_args["--profile"],
+                    "request_type": cli_args["--request-type"],
                 },
             )
 
@@ -249,9 +250,42 @@ class GuideLLMAdapter(FrameworkAdapter):
             )
             raise
 
+    def _resolve_cli_args(self, job_spec: JobSpec) -> Dict[str, Any]:
+        """Merge adapter defaults with job parameters into GuideLLM CLI arguments."""
+        if not self.results_dir:
+            raise RuntimeError("Results directory not initialized")
+
+        model = job_spec.model
+        adapter_defaults: Dict[str, Any] = {
+            "--target": model.url,
+            "--output-path": str(self.results_dir),
+            "--outputs": "json,csv,html,yaml",
+            "--profile": "sweep",
+            "--data": "prompt_tokens=256,output_tokens=128",
+            "--request-type": "chat_completions",
+        }
+        if model.name:
+            adapter_defaults["--model"] = model.name
+
+        cli_args = {**adapter_defaults, **job_spec.parameters}
+
+        if "--processor" not in cli_args:
+            data = cli_args.get("--data", "")
+            if isinstance(data, str) and "prompt_tokens=" in data and "output_tokens=" in data:
+                cli_args["--processor"] = "gpt2"
+                logger.info(
+                    "No --processor specified for synthetic data; using default 'gpt2'. "
+                    "Pass --processor in parameters for custom tokenization."
+                )
+
+        return cli_args
+
     def _build_guidellm_command(self, job_spec: JobSpec) -> List[str]:
         """
         Build the GuideLLM CLI command from job specification.
+
+        Parameter keys must be exact GuideLLM CLI flag names (e.g. ``--max-seconds``).
+        Adapter defaults apply when omitted; caller-supplied values take precedence.
 
         Args:
             job_spec: The benchmark job specification
@@ -259,107 +293,16 @@ class GuideLLMAdapter(FrameworkAdapter):
         Returns:
             List of command arguments for subprocess execution
         """
-        config = job_spec.parameters
-        model = job_spec.model
-
-        # Base command
-        cmd = [
-            "guidellm",
-            "benchmark",
-            "--target", model.url,
-            "--output-path", str(self.results_dir),
-        ]
-
-        # Execution profile
-        profile = config.get("profile", "sweep")
-        cmd.extend(["--profile", profile])
-
-        # Rate parameter (meaning varies by profile)
-        if "rate" in config:
-            cmd.extend(["--rate", str(config["rate"])])
-
-        # Duration limits
-        if "max_seconds" in config:
-            cmd.extend(["--max-seconds", str(config["max_seconds"])])
-
-        # Max requests: prefer benchmark_config, fallback to job_spec.num_examples
-        max_requests = config.get("max_requests")
-        if max_requests is None and job_spec.num_examples is not None:
-            max_requests = job_spec.num_examples
-            logger.info(f"Using num_examples={max_requests} as max_requests")
-
-        if max_requests is not None:
-            cmd.extend(["--max-requests", str(max_requests)])
-
-        # Error handling
-        if "max_errors" in config:
-            cmd.extend(["--max-errors", str(config["max_errors"])])
-
-        # Warmup/cooldown periods
-        # Note: GuideLLM expects integer values, not percentages
-        if "warmup" in config:
-            warmup = config["warmup"]
-            # Convert percentage strings to integers (e.g., "10%" -> 10)
-            if isinstance(warmup, str) and warmup.endswith("%"):
-                warmup = warmup.rstrip("%")
-            cmd.extend(["--warmup", str(warmup)])
-
-        if "cooldown" in config:
-            cooldown = config["cooldown"]
-            # Convert percentage strings to integers (e.g., "10%" -> 10)
-            if isinstance(cooldown, str) and cooldown.endswith("%"):
-                cooldown = cooldown.rstrip("%")
-            cmd.extend(["--cooldown", str(cooldown)])
-
-        # Saturation detection
-        if config.get("detect_saturation", False):
-            cmd.append("--detect-saturation")
-
-        # Data source
-        data = config.get("data", "prompt_tokens=256,output_tokens=128")
-        cmd.extend(["--data", data])
-
-        # Data configuration
-        if "data_args" in config:
-            cmd.extend(["--data-args", json.dumps(config["data_args"])])
-
-        if "data_column_mapper" in config:
-            cmd.extend(["--data-column-mapper", json.dumps(config["data_column_mapper"])])
-
-        if "data_samples" in config:
-            cmd.extend(["--data-samples", str(config["data_samples"])])
-
-        # Request type
-        request_type = config.get("request_type", "chat_completions")
-        cmd.extend(["--request-type", request_type])
-
-        # Model name (optional, for identification)
-        if model.name:
-            cmd.extend(["--model", model.name])
-
-        # Processor for synthetic data
-        # For synthetic data (prompt_tokens=X,output_tokens=Y), GuideLLM needs a HuggingFace tokenizer.
-        # The processor can be specified in benchmark_config, otherwise use a safe default.
-        processor = config.get("processor")
-        if processor is None and "prompt_tokens=" in data and "output_tokens=" in data:
-            # Default to gpt2 tokenizer for synthetic data generation (widely available, small)
-            processor = "gpt2"
-            logger.info(
-                f"No processor specified for synthetic data. Using default '{processor}'. "
-                f"Specify a HuggingFace model in benchmark_config.processor for custom tokenization "
-                f"(e.g., 'google/flan-t5-small' or 'meta-llama/Llama-3.1-8B-Instruct')"
-            )
-
-        if processor:
-            cmd.extend(["--processor", processor])
-
-        # Backend kwargs (e.g., validate_backend: false for Ollama, which does not expose a /health endpoint)
-        if "backend_kwargs" in config:
-            cmd.extend(["--backend-kwargs", json.dumps(config["backend_kwargs"])])
-
-        # Output formats (always generate all for comprehensive reporting)
-        # Note: GuideLLM uses --outputs, not --output-format
-        cmd.extend(["--outputs", "json,csv,html,yaml"])
+        cmd = ["guidellm", "benchmark"]
+        for key, value in self._resolve_cli_args(job_spec).items():
+            if value is None or value is False:
+                continue
+            if value is True:
+                cmd.append(key)
+            elif isinstance(value, dict):
+                cmd.extend([key, json.dumps(value)])
+            else:
+                cmd.extend([key, str(value)])
 
         logger.debug(f"Built GuideLLM command: {' '.join(cmd)}")
         return cmd

@@ -87,16 +87,16 @@ def test_guidellm_local_openai(tmp_path, mock_sidecar):
     model_name = _server_model()
 
     params = {
-        "profile": "synchronous",
-        "max_requests": 2,
-        "data": "prompt_tokens=30,output_tokens=10",
-        "request_type": "chat_completions",
-        "warmup": "0",
-        "detect_saturation": False,
+        "--profile": "synchronous",
+        "--max-requests": 2,
+        "--data": "prompt_tokens=30,output_tokens=10",
+        "--request-type": "chat_completions",
+        "--warmup": "0",
+        "--detect-saturation": False,
     }
     # Ollama doesn't expose /health, so skip GuideLLM's backend validation
     if not _server_has_health():
-        params["backend_kwargs"] = {"validate_backend": False}
+        params["--backend-kwargs"] = {"validate_backend": False}
 
     job_spec = {
         "id": "guidellm-test-local",

@@ -29,6 +29,22 @@ CANNED_BENCHMARKS = {
 }
 
 
+def test_build_guidellm_command_uses_cli_flag_parameters(tmp_path):
+    """Parameters are passed through as exact GuideLLM CLI flags."""
+    adapter = GuideLLMAdapter(job_spec_path="meta/job.json")
+    adapter.results_dir = tmp_path / "results"
+    adapter.results_dir.mkdir()
+
+    cmd = adapter._build_guidellm_command(adapter.job_spec)
+
+    assert cmd[:2] == ["guidellm", "benchmark"]
+    assert "--profile" in cmd and cmd[cmd.index("--profile") + 1] == "constant"
+    assert "--max-seconds" in cmd and cmd[cmd.index("--max-seconds") + 1] == "10"
+    assert "--processor" in cmd and cmd[cmd.index("--processor") + 1] == "gpt2"
+    assert "--detect-saturation" not in cmd
+    assert "--outputs" in cmd
+
+
 @pytest.mark.integration
 def test_guidellm_happy_path(monkeypatch):
     """Full run_benchmark_job with mocked subprocess and canned results."""

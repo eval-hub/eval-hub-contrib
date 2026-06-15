@@ -23,6 +23,7 @@ The adapter follows the eval-hub framework adapter pattern with automatic config
 4. **Synchronous execution**: The entire job lifetime is defined by the `run_benchmark_job()` method
 5. **OCI artifact persistence**: Results persisted as OCI artifacts via the sidecar
 6. **Structured results**: Returns `JobResults` with standardised performance metrics
+7. **CLI passthrough**: Benchmark `parameters` map directly to GuideLLM CLI flags (see [Command-line parameters](#command-line-parameters))
 
 ## Execution Profiles
 
@@ -75,6 +76,8 @@ python main.py
 
 ### Benchmark Configuration
 
+GuideLLM jobs are configured through the `parameters` object on each benchmark in an eval-hub evaluation request. See [Command-line parameters](#command-line-parameters) for how those keys map to the GuideLLM CLI.
+
 #### Performance Sweep
 
 ```json
@@ -85,11 +88,11 @@ python main.py
     "name": "Qwen/Qwen2.5-1.5B-Instruct",
     "url": "http://localhost:8000/v1"
   },
-  "benchmark_config": {
-    "profile": "sweep",
-    "max_seconds": 30,
-    "data": "prompt_tokens=256,output_tokens=128",
-    "detect_saturation": true
+  "parameters": {
+    "--profile": "sweep",
+    "--max-seconds": 30,
+    "--data": "prompt_tokens=256,output_tokens=128",
+    "--detect-saturation": true
   },
   "callback_url": "http://localhost:8080"
 }
@@ -105,13 +108,13 @@ python main.py
     "name": "gpt-3.5-turbo",
     "url": "http://localhost:8000/v1"
   },
-  "benchmark_config": {
-    "profile": "throughput",
-    "max_seconds": 60,
-    "data": "hf:abisee/cnn_dailymail",
-    "data_args": {"name": "3.0.0"},
-    "data_column_mapper": {"text_column": "article"},
-    "data_samples": 100
+  "parameters": {
+    "--profile": "throughput",
+    "--max-seconds": 60,
+    "--data": "hf:abisee/cnn_dailymail",
+    "--data-args": {"name": "3.0.0"},
+    "--data-column-mapper": {"text_column": "article"},
+    "--data-samples": 100
   },
   "callback_url": "http://localhost:8080"
 }
@@ -127,62 +130,137 @@ python main.py
     "name": "llama-2-7b",
     "url": "http://localhost:8000/v1"
   },
-  "benchmark_config": {
-    "profile": "concurrent",
-    "rate": 10,
-    "max_requests": 100,
-    "data": "prompt_tokens=512,output_tokens=256",
-    "warmup": "10%"
+  "parameters": {
+    "--profile": "concurrent",
+    "--rate": 10,
+    "--max-requests": 100,
+    "--data": "prompt_tokens=512,output_tokens=256",
+    "--warmup": "10"
   },
   "callback_url": "http://localhost:8080"
 }
 ```
 
+## Command-line parameters
+
+The adapter builds the GuideLLM subprocess command from the eval-hub job `parameters` object. **Keys must be exact GuideLLM CLI flag names**, including the leading `--` (for example `"--max-seconds"`, not `max_seconds`).
+
+When you submit an evaluation through the eval-hub API, each benchmark entry includes a `parameters` map. The adapter reads that map and passes each entry through to `guidellm benchmark` with minimal transformation:
+
+| Value type in `parameters` | How it becomes a CLI argument |
+|----------------------------|-------------------------------|
+| string, number | `--flag value` |
+| `true` | `--flag` (boolean flag, no value) |
+| `false` or `null` | omitted |
+| object (dict) | `--flag '{"key": "value"}'` (JSON-serialized) |
+
+Example API payload fragment:
+
+```json
+{
+  "model": {
+    "url": "http://vllm-server:8000/v1",
+    "name": "meta-llama/Llama-3.1-8B-Instruct"
+  },
+  "benchmarks": [
+    {
+      "id": "quick",
+      "provider_id": "guidellm",
+      "parameters": {
+        "--profile": "constant",
+        "--rate": 5,
+        "--max-requests": 20,
+        "--max-seconds": 60,
+        "--data": "prompt_tokens=256,output_tokens=128",
+        "--request-type": "chat_completions",
+        "--detect-saturation": false
+      }
+    }
+  ]
+}
+```
+
+This produces a command equivalent to:
+
+```bash
+guidellm benchmark \
+  --target http://vllm-server:8000/v1 \
+  --output-path /tmp/guidellm_results_... \
+  --outputs json,csv,html,yaml \
+  --model meta-llama/Llama-3.1-8B-Instruct \
+  --profile constant \
+  --rate 5 \
+  --max-requests 20 \
+  --max-seconds 60 \
+  --data prompt_tokens=256,output_tokens=128 \
+  --request-type chat_completions \
+  --processor gpt2
+```
+
+(`--detect-saturation` is omitted because the value is `false`.)
+
+### Adapter defaults and precedence
+
+The adapter supplies a small set of defaults when you do not include the corresponding flag in `parameters`. If you **do** include the flag, your value wins.
+
+| Flag | Source when omitted | Overridable via `parameters` |
+|------|---------------------|------------------------------|
+| `--target` | `model.url` | Yes |
+| `--model` | `model.name` (if set) | Yes |
+| `--output-path` | Adapter-managed temp directory | Yes |
+| `--outputs` | `json,csv,html,yaml` | Yes |
+| `--profile` | `sweep` | Yes |
+| `--data` | `prompt_tokens=256,output_tokens=128` | Yes |
+| `--request-type` | `chat_completions` | Yes |
+| `--processor` | `gpt2` when `--data` uses synthetic `prompt_tokens=…,output_tokens=…` format | Yes |
+
+Merge order is: **adapter defaults, then `parameters`**. Any key present in `parameters` replaces the adapter default for that flag.
+
+All other GuideLLM flags are caller-supplied only. Use the exact flag names from `guidellm benchmark --help` — there is no snake_case conversion or eval-hub alias layer (for example, pass `"--max-requests"` directly; `num_examples` is not mapped automatically).
+
+### Authentication
+
+If the job mounts model credentials, the adapter may merge an API key into `--backend-kwargs` at runtime. If you already pass `--backend-kwargs` in `parameters`, the adapter merges `api_key` into your object rather than replacing it.
+
 ## Supported Request Payload Parameters
 
-The following parameters can be specified in the `benchmark_config` section or as top-level job parameters when submitting evaluation jobs.
+The following are commonly used GuideLLM flags passed through `parameters`. For the full set, refer to [GuideLLM documentation](https://github.com/vllm-project/guidellm) and `guidellm benchmark --help`.
 
 ### Core Parameters
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `profile` | Execution profile (sweep, throughput, concurrent, constant, poisson, synchronous) | `sweep` |
-| `num_examples` | Limit evaluation to N requests (used as fallback for `max_requests`) | None |
-| `max_requests` | Maximum number of requests to send (overrides `num_examples` if specified) | None |
-| `max_seconds` | Maximum duration in seconds | None |
-| `max_errors` | Error threshold before stopping | None |
-| `rate` | Rate value (meaning varies by profile) | Profile-dependent |
-| `warmup` | Warmup period to exclude (percentage or absolute, e.g., "10%" or "10") | None |
-| `cooldown` | Cooldown period to exclude (percentage or absolute, e.g., "10%" or "10") | None |
-| `detect_saturation` | Enable over-saturation detection | `false` |
-
-**Note on `num_examples` vs `max_requests`:**
-- `num_examples` is a common parameter across all EvalHub providers for limiting evaluations
-- For GuideLLM, if `max_requests` is not specified in `benchmark_config`, the adapter automatically uses `num_examples` as the limit
-- If both are specified, `max_requests` takes precedence
-- This provides a consistent interface while supporting provider-specific parameters
+| Parameter | Description | Adapter default |
+|-----------|-------------|-----------------|
+| `--profile` | Execution profile (sweep, throughput, concurrent, constant, poisson, synchronous) | `sweep` |
+| `--max-requests` | Maximum number of requests to send | None |
+| `--max-seconds` | Maximum duration in seconds | None |
+| `--max-errors` | Error threshold before stopping | None |
+| `--rate` | Rate value (meaning varies by profile) | None |
+| `--warmup` | Warmup period to exclude | None |
+| `--cooldown` | Cooldown period to exclude | None |
+| `--detect-saturation` | Enable over-saturation detection (`true` / `false`) | omitted (`false`) |
 
 ### Data Sources
 
 | Parameter | Description | Example |
 |-----------|-------------|---------|
-| `data` | Data source specification | `"prompt_tokens=256,output_tokens=128"` |
-| `data_args` | Arguments for dataset loading | `{"name": "3.0.0"}` |
-| `data_column_mapper` | Column mapping for datasets | `{"text_column": "article"}` |
-| `data_samples` | Maximum number of samples to use | `100` |
-| `processor` | HuggingFace tokenizer for synthetic data generation (required for `prompt_tokens=X,output_tokens=Y` format) | `"google/flan-t5-small"`, `"gpt2"` |
+| `--data` | Data source specification | `"prompt_tokens=256,output_tokens=128"` |
+| `--data-args` | Arguments for dataset loading (object) | `{"name": "3.0.0"}` |
+| `--data-column-mapper` | Column mapping for datasets (object) | `{"text_column": "article"}` |
+| `--data-samples` | Maximum number of samples to use | `100` |
+| `--processor` | HuggingFace tokenizer for synthetic data | `"google/flan-t5-small"`, `"gpt2"` |
 
-**Note on `processor`:**
-- Required when using synthetic data format (`data: "prompt_tokens=X,output_tokens=Y"`)
-- Must be a valid HuggingFace model ID (e.g., `"google/flan-t5-small"`, `"meta-llama/Llama-3.1-8B-Instruct"`)
-- Defaults to `"gpt2"` if not specified (widely available, small)
-- Not needed when using actual datasets (HuggingFace datasets, files, etc.)
+**Note on `--processor`:**
+- Required by GuideLLM when using synthetic data (`--data: "prompt_tokens=X,output_tokens=Y"`)
+- Must be a valid HuggingFace model ID
+- Defaults to `"gpt2"` when omitted and synthetic data is in use
+- Not needed for HuggingFace datasets, files, and other non-synthetic sources
 
 ### Request Configuration
 
 | Parameter | Description | Options |
 |-----------|-------------|---------|
-| `request_type` | API endpoint type | `chat_completions`, `completions`, `audio_transcription`, `audio_translation` |
+| `--request-type` | API endpoint type | `chat_completions`, `completions`, `audio_transcription`, `audio_translation` |
+| `--backend-kwargs` | Backend-specific options (object) | `{"validate_backend": false}` for servers without `/health` |
 
 ## Example Payloads
 
@@ -199,13 +277,13 @@ The following parameters can be specified in the `benchmark_config` section or a
       "id": "sweep",
       "provider_id": "guidellm",
       "parameters": {
-        "profile": "sweep",
-        "num_examples": 100,
-        "max_seconds": 300,
-        "data": "prompt_tokens=256,output_tokens=128",
-        "request_type": "chat_completions",
-        "detect_saturation": true,
-        "processor": "google/flan-t5-small"
+        "--profile": "sweep",
+        "--max-requests": 100,
+        "--max-seconds": 300,
+        "--data": "prompt_tokens=256,output_tokens=128",
+        "--request-type": "chat_completions",
+        "--detect-saturation": true,
+        "--processor": "google/flan-t5-small"
       }
     }
   ],
@@ -227,15 +305,15 @@ The following parameters can be specified in the `benchmark_config` section or a
       "id": "throughput",
       "provider_id": "guidellm",
       "parameters": {
-        "profile": "throughput",
-        "num_examples": 500,
-        "max_seconds": 600,
-        "data": "prompt_tokens=512,output_tokens=256",
-        "request_type": "chat_completions",
-        "detect_saturation": true,
-        "warmup": "10%",
-        "cooldown": "10%",
-        "processor": "google/flan-t5-small"
+        "--profile": "throughput",
+        "--max-requests": 500,
+        "--max-seconds": 600,
+        "--data": "prompt_tokens=512,output_tokens=256",
+        "--request-type": "chat_completions",
+        "--detect-saturation": true,
+        "--warmup": "10",
+        "--cooldown": "10",
+        "--processor": "google/flan-t5-small"
       }
     }
   ],
@@ -244,7 +322,7 @@ The following parameters can be specified in the `benchmark_config` section or a
 }
 ```
 
-### Using max_requests (Provider-Specific)
+### Concurrent Load Test
 
 ```json
 {
@@ -257,17 +335,41 @@ The following parameters can be specified in the `benchmark_config` section or a
       "id": "concurrent",
       "provider_id": "guidellm",
       "parameters": {
-        "profile": "concurrent",
-        "rate": 10,
-        "max_requests": 200,
-        "data": "prompt_tokens=512,output_tokens=256",
-        "warmup": 20,
-        "processor": "google/flan-t5-small"
+        "--profile": "concurrent",
+        "--rate": 10,
+        "--max-requests": 200,
+        "--data": "prompt_tokens=512,output_tokens=256",
+        "--warmup": 20,
+        "--processor": "google/flan-t5-small"
       }
     }
   ],
   "timeout_minutes": 45,
   "retry_attempts": 1
+}
+```
+
+### Ollama / servers without `/health`
+
+```json
+{
+  "model": {
+    "url": "http://localhost:11434/v1",
+    "name": "llama3"
+  },
+  "benchmarks": [
+    {
+      "id": "local",
+      "provider_id": "guidellm",
+      "parameters": {
+        "--profile": "synchronous",
+        "--max-requests": 2,
+        "--data": "prompt_tokens=30,output_tokens=10",
+        "--request-type": "chat_completions",
+        "--backend-kwargs": {"validate_backend": false}
+      }
+    }
+  ]
 }
 ```
 
@@ -284,14 +386,14 @@ The following parameters can be specified in the `benchmark_config` section or a
       "id": "throughput",
       "provider_id": "guidellm",
       "parameters": {
-        "profile": "throughput",
-        "num_examples": 100,
-        "max_seconds": 300,
-        "data": "hf:abisee/cnn_dailymail",
-        "data_args": {"name": "3.0.0"},
-        "data_column_mapper": {"text_column": "article"},
-        "data_samples": 100,
-        "request_type": "chat_completions"
+        "--profile": "throughput",
+        "--max-requests": 100,
+        "--max-seconds": 300,
+        "--data": "hf:abisee/cnn_dailymail",
+        "--data-args": {"name": "3.0.0"},
+        "--data-column-mapper": {"text_column": "article"},
+        "--data-samples": 100,
+        "--request-type": "chat_completions"
       }
     }
   ],

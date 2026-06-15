@@ -8,14 +8,14 @@
     "name": "Qwen/Qwen2.5-1.5B-Instruct"
   },
   "parameters": {
-    "profile": "constant",
-    "rate": "5",
-    "max_seconds": 10,
-    "max_requests": 20,
-    "data": "prompt_tokens=50,output_tokens=20",
-    "request_type": "chat_completions",
-    "warmup": "0",
-    "detect_saturation": false
+    "--profile": "constant",
+    "--rate": "5",
+    "--max-seconds": 10,
+    "--max-requests": 20,
+    "--data": "prompt_tokens=50,output_tokens=20",
+    "--request-type": "chat_completions",
+    "--warmup": "0",
+    "--detect-saturation": false
   },
   "callback_url": "http://localhost:8080",
   "tags": [
