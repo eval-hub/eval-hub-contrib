@@ -1,0 +1,24 @@
+{
+  "id": "swebench-eval-001",
+  "provider_id": "swebench",
+  "benchmark_id": "swebench_verified",
+  "benchmark_index": 0,
+  "model": {
+    "name": "gold-patches",
+    "url": "http://not-applicable"
+  },
+  "parameters": {
+    "predictions_path": "gold",
+    "k8s_registry": "docker.io/swebench",
+    "k8s_namespace": "swe-bench",
+    "max_workers": 4,
+    "timeout_per_instance": 1800,
+    "split": "test",
+    "instance_ids": ["astropy__astropy-7336"]
+  },
+  "callback_url": "http://localhost:8080",
+  "tags": [
+    {"key": "framework", "value": "swebench"},
+    {"key": "evaluation_type", "value": "code_generation"}
+  ]
+}

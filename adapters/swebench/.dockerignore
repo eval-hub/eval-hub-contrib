@@ -1,0 +1,12 @@
+.git/
+.github/
+tests/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+.coverage
+htmlcov/
+.tox/
+meta/
+*.md
