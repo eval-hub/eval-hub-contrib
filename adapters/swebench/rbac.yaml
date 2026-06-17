@@ -7,9 +7,11 @@
 # Job service account needs the anyuid SCC for the init container.
 #
 # Usage:
-#   sed 's/NAMESPACE/my-namespace/g' rbac.yaml | oc apply -f -
+#   sed 's/NAMESPACE/my-tenant-namespace/g' rbac.yaml | oc apply -f -
 #
 # Replace NAMESPACE below with your eval-hub tenant namespace.
+# The adapter creates eval Jobs in the same namespace it runs in,
+# so no cross-namespace RBAC is required.
 
 apiVersion: v1
 kind: ServiceAccount

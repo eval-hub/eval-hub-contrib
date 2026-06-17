@@ -105,7 +105,7 @@ class SWEBenchAdapter(FrameworkAdapter):
 
             predictions_path = params.get("predictions_path", "")
             k8s_registry = params.get("k8s_registry", "docker.io/swebench")
-            k8s_namespace = params.get("k8s_namespace") or self._current_namespace()
+            k8s_namespace = self._current_namespace()
             max_workers = int(params.get("max_workers", 10))
             timeout = int(params.get("timeout_per_instance", 1800))
             split = params.get("split", "test")
