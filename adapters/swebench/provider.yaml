@@ -8,7 +8,7 @@ description: >-
 type: builtin
 runtime:
   k8s:
-    image: quay.io/michaelclifford/evalhub-swebench:latest
+    image: quay.io/evalhub/community-swebench:latest
     entrypoint: ["python", "main.py"]
     cpu_request: 100m
     memory_request: 128Mi
