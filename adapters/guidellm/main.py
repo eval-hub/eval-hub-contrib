@@ -357,9 +357,10 @@ class GuideLLMAdapter(FrameworkAdapter):
         if "backend_kwargs" in config:
             cmd.extend(["--backend-kwargs", json.dumps(config["backend_kwargs"])])
 
-        # Output formats (always generate all for comprehensive reporting)
+        # Output formats (default: all formats for comprehensive reporting)
         # Note: GuideLLM uses --outputs, not --output-format
-        cmd.extend(["--outputs", "json,csv,html,yaml"])
+        outputs = config.get("outputs", "json,csv,html,yaml")
+        cmd.extend(["--outputs", outputs])
 
         logger.debug(f"Built GuideLLM command: {' '.join(cmd)}")
         return cmd
