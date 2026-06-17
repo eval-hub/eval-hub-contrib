@@ -1,0 +1,68 @@
+name: Build and push adapter images
+
+on:
+  push:
+    branches: [main]
+    paths: ['adapters/**']
+  workflow_dispatch:
+    inputs:
+      adapter:
+        description: 'Adapter to build (leave empty for change-detection)'
+        required: false
+        type: string
+
+env:
+  REGISTRY: quay.io/eval-hub
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      adapters: ${{ steps.find.outputs.adapters }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - id: find
+        run: |
+          if [[ -n "${{ inputs.adapter }}" ]]; then
+            adapters='["${{ inputs.adapter }}"]'
+          else
+            adapters=$(git diff --name-only HEAD~1 HEAD \
+              | grep '^adapters/' \
+              | cut -d/ -f2 \
+              | sort -u \
+              | while read -r dir; do
+                  [ -f "adapters/${dir}/Containerfile" ] && echo "$dir"
+                done \
+              | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          fi
+          echo "adapters=${adapters}" >> "$GITHUB_OUTPUT"
+          echo "Will build: ${adapters}"
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.adapters != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        adapter: ${{ fromJson(needs.detect.outputs.adapters) }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: |
+          docker build \
+            -f adapters/${{ matrix.adapter }}/Containerfile \
+            -t ${REGISTRY}/community-${{ matrix.adapter }}:${{ github.sha }} \
+            -t ${REGISTRY}/community-${{ matrix.adapter }}:latest \
+            adapters/${{ matrix.adapter }}
+
+      - name: Push image
+        run: |
+          echo "${{ secrets.QUAY_TOKEN }}" | docker login quay.io -u "${{ secrets.QUAY_USER }}" --password-stdin
+          docker push ${REGISTRY}/community-${{ matrix.adapter }}:${{ github.sha }}
+          docker push ${REGISTRY}/community-${{ matrix.adapter }}:latest
