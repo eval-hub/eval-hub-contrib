@@ -12,7 +12,7 @@ on:
         type: string
 
 env:
-  REGISTRY: quay.io/eval-hub
+  REGISTRY: quay.io/evalhub
 
 jobs:
   detect:
