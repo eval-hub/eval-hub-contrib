@@ -20,6 +20,7 @@ Architecture:
         -> JobResults with resolve_rate
 """
 
+import base64
 import json
 import logging
 import os
@@ -111,7 +112,6 @@ class SWEBenchAdapter(FrameworkAdapter):
             split = params.get("split", "test")
             instance_ids = params.get("instance_ids")
             instance_image_tag = params.get("instance_image_tag", "latest")
-            service_account = params.get("service_account")
             run_id = config.id
 
             logger.info(
@@ -173,7 +173,7 @@ class SWEBenchAdapter(FrameworkAdapter):
                 timeout=timeout,
                 cleanup=True,
                 instance_image_tag=instance_image_tag,
-                service_account=service_account,
+                service_account=self._current_service_account(),
             )
 
             # -- Phase 4: POST_PROCESSING --
@@ -271,6 +271,24 @@ class SWEBenchAdapter(FrameworkAdapter):
                 return f.read().strip()
         except OSError:
             return "default"
+
+    @staticmethod
+    def _current_service_account() -> str | None:
+        """Read the pod's own SA name from the mounted service account token."""
+        try:
+            with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
+                token = f.read().strip()
+            payload = token.split(".")[1]
+            # JWT base64 padding
+            payload += "=" * (-len(payload) % 4)
+            claims = json.loads(base64.b64decode(payload))
+            # sub is "system:serviceaccount:<ns>:<sa-name>"
+            parts = claims.get("sub", "").split(":")
+            if len(parts) == 4 and parts[0] == "system" and parts[1] == "serviceaccount":
+                return parts[3]
+        except (OSError, json.JSONDecodeError, IndexError, KeyError):
+            logger.warning("Could not determine service account from token, child Jobs will use namespace default")
+        return None
 
     def _load_predictions(
         self, predictions_path: str, dataset_name: str, split: str
