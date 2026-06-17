@@ -36,3 +36,21 @@ def test_outputs_from_job_spec_parameters(adapter: GuideLLMAdapter, outputs: str
     cmd = adapter._build_guidellm_command(job_spec)
 
     assert _flag_value(cmd, "--outputs") == outputs
+
+
+def test_outputs_normalizes_case(adapter: GuideLLMAdapter):
+    job_spec = adapter.job_spec.model_copy(deep=True)
+    job_spec.parameters["outputs"] = "JSON,HTML"
+
+    cmd = adapter._build_guidellm_command(job_spec)
+
+    assert _flag_value(cmd, "--outputs") == "json,html"
+
+
+@pytest.mark.parametrize("outputs", ["josn", "json,foo", ""])
+def test_outputs_rejects_invalid_formats(adapter: GuideLLMAdapter, outputs: str):
+    job_spec = adapter.job_spec.model_copy(deep=True)
+    job_spec.parameters["outputs"] = outputs
+
+    with pytest.raises(ValueError, match="Invalid output format|at least one format"):
+        adapter._build_guidellm_command(job_spec)

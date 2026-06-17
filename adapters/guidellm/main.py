@@ -61,6 +61,9 @@ class GuideLLMAdapter(FrameworkAdapter):
     - Multiple output formats (JSON, CSV, HTML, YAML)
     """
 
+    ALLOWED_OUTPUT_FORMATS = frozenset({"json", "csv", "html", "yaml"})
+    DEFAULT_OUTPUTS = "json,csv,html,yaml"
+
     def __init__(self, job_spec_path: Optional[str] = None):
         """Initialize the GuideLLM adapter.
 
@@ -249,6 +252,25 @@ class GuideLLMAdapter(FrameworkAdapter):
             )
             raise
 
+    @staticmethod
+    def _validate_outputs(outputs: str) -> str:
+        """Validate and normalize comma-separated GuideLLM output format aliases."""
+        formats = [part.strip() for part in outputs.split(",") if part.strip()]
+        if not formats:
+            raise ValueError("outputs must include at least one format")
+
+        normalized: List[str] = []
+        for fmt in formats:
+            lower = fmt.lower()
+            if lower not in GuideLLMAdapter.ALLOWED_OUTPUT_FORMATS:
+                allowed = ", ".join(sorted(GuideLLMAdapter.ALLOWED_OUTPUT_FORMATS))
+                raise ValueError(
+                    f"Invalid output format '{fmt}'. Allowed formats: {allowed}"
+                )
+            normalized.append(lower)
+
+        return ",".join(normalized)
+
     def _build_guidellm_command(self, job_spec: JobSpec) -> List[str]:
         """
         Build the GuideLLM CLI command from job specification.
@@ -359,7 +381,9 @@ class GuideLLMAdapter(FrameworkAdapter):
 
         # Output formats (default: all formats for comprehensive reporting)
         # Note: GuideLLM uses --outputs, not --output-format
-        outputs = config.get("outputs", "json,csv,html,yaml")
+        outputs = self._validate_outputs(
+            config.get("outputs", self.DEFAULT_OUTPUTS)
+        )
         cmd.extend(["--outputs", outputs])
 
         logger.debug(f"Built GuideLLM command: {' '.join(cmd)}")
