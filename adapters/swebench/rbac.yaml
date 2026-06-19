@@ -1,0 +1,54 @@
+---
+# RBAC for the SWE-bench eval-hub adapter.
+#
+# The adapter pod runs as the EvalHub job service account
+# (evalhub-evalhub-opendatahub-job) and creates child K8s Jobs for
+# each evaluation instance.  This RBAC grants the necessary
+# permissions to that service account.
+#
+# Usage:
+#   sed 's/NAMESPACE/my-tenant-namespace/g' rbac.yaml | oc apply -f -
+#
+# Replace NAMESPACE below with your eval-hub tenant namespace.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: swebench-eval
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: swebench-eval
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: swebench-eval
+subjects:
+  - kind: ServiceAccount
+    name: evalhub-evalhub-opendatahub-job
+
+---
+# Grant anyuid SCC so the init container in child Jobs can run as
+# root to fix file permissions in SWE-bench images.
+# This is a cluster-scoped resource — requires cluster-admin to apply.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: swebench-eval-anyuid-NAMESPACE
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:anyuid
+subjects:
+  - kind: ServiceAccount
+    name: evalhub-evalhub-opendatahub-job
+    namespace: NAMESPACE

@@ -1,0 +1,124 @@
+id: swebench
+name: SWE-bench
+description: >-
+  Software engineering benchmark that evaluates LLM-generated code patches
+  against real-world GitHub issues.  Each instance provides a codebase, an
+  issue description, and a gold patch; the model's patch is applied and
+  tested inside a per-instance container image.
+type: builtin
+runtime:
+  k8s:
+    image: quay.io/evalhub/community-swebench:latest
+    entrypoint: ["python", "main.py"]
+    cpu_request: 100m
+    memory_request: 128Mi
+    cpu_limit: 1000m
+    memory_limit: 2Gi
+benchmarks:
+  - id: swebench_verified
+    name: SWE-bench Verified
+    description: >-
+      500 human-verified solvable instances from SWE-bench.
+      The primary benchmark for comparing coding agents.
+    category: code_generation
+    metrics:
+      - resolve_rate
+      - resolved_count
+      - total_instances
+      - error_count
+    tags:
+      - code
+      - software-engineering
+      - github
+      - patches
+      - verified
+  - id: swebench_lite
+    name: SWE-bench Lite
+    description: >-
+      300 curated instances from SWE-bench, designed for faster evaluation.
+    category: code_generation
+    metrics:
+      - resolve_rate
+      - resolved_count
+      - total_instances
+      - error_count
+    tags:
+      - code
+      - software-engineering
+      - github
+      - patches
+      - lite
+  - id: swebench_full
+    name: SWE-bench Full
+    description: >-
+      Full SWE-bench dataset with 2294 instances across 12 Python repositories.
+    category: code_generation
+    metrics:
+      - resolve_rate
+      - resolved_count
+      - total_instances
+      - error_count
+    tags:
+      - code
+      - software-engineering
+      - github
+      - patches
+      - full
+parameters:
+  - name: predictions_path
+    type: string
+    required: false
+    default: "gold"
+    description: >-
+      Predictions source. Use "gold" for ground-truth patches from the
+      dataset (useful for validation). For model predictions, use
+      test_data_ref.s3 on the benchmark config to have the eval-hub
+      platform stage the file to /test_data automatically.
+  - name: k8s_registry
+    type: string
+    default: "docker.io/swebench"
+    description: >-
+      Container registry where SWE-bench evaluation images are located.
+      The adapter pulls images from this registry when creating eval Jobs.
+      For Docker Hub use "docker.io/swebench".
+  - name: k8s_namespace
+    type: string
+    default: "swe-bench"
+    description: >-
+      Kubernetes namespace where evaluation Jobs are created.
+  - name: instance_image_tag
+    type: string
+    default: "latest"
+    description: >-
+      Image tag for SWE-bench instance images. Use versioned tags
+      (e.g. "v1") to avoid caching issues with some registries.
+  - name: service_account
+    type: string
+    required: false
+    default: null
+    description: >-
+      Kubernetes service account for evaluation Job pods.  Must be
+      bound to the swebench-eval-scc SecurityContextConstraints
+      (see rbac.yaml) so that the init container can run as root
+      to fix file permissions.
+  - name: max_workers
+    type: integer
+    default: 10
+    description: >-
+      Maximum number of concurrent evaluation K8s Jobs.
+  - name: timeout_per_instance
+    type: integer
+    default: 1800
+    description: >-
+      Per-instance evaluation timeout in seconds.
+  - name: split
+    type: string
+    default: "test"
+    description: >-
+      Dataset split to evaluate (test or dev).
+  - name: instance_ids
+    type: array
+    default: null
+    description: >-
+      Optional list of specific instance IDs to evaluate.
+      If null, evaluates all instances with predictions.
