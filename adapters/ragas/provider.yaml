@@ -106,6 +106,13 @@ parameters:
       Mapping from dataset column names to RAGAS expected names
       (user_input, response, retrieved_contexts, reference)
 
+  - name: max_workers
+    type: integer
+    default: 1
+    description: >
+      Maximum parallel workers for RAGAS evaluation (1–10). Increase to speed
+      up evaluation at the cost of higher concurrency on the judge endpoint.
+
   - name: data_path
     type: string
     default: null

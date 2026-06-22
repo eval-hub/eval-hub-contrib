@@ -4,12 +4,40 @@ Verifies adapter plumbing with a single monkeypatch point — _run_ragas
 returns a mock result object, so no model endpoint is needed.
 """
 
+import yaml
 import pandas as pd
 import pytest
+from pathlib import Path
 from unittest.mock import MagicMock, create_autospec
 
 from evalhub.adapter import JobCallbacks, JobPhase, OCIArtifactResult
-from main import RagasAdapter
+from main import METRIC_MAPPING, RagasAdapter
+
+_PROVIDER_YAML = Path(__file__).resolve().parent.parent / "provider.yaml"
+
+
+def _provider_metric_names() -> set[str]:
+    """Return every metric name declared across all benchmarks in provider.yaml."""
+    data = yaml.safe_load(_PROVIDER_YAML.read_text())
+    names = set()
+    for benchmark in data.get("benchmarks", []):
+        names.update(benchmark.get("metrics", []))
+    return names
+
+
+def test_metric_mapping_covers_provider_yaml():
+    """Every metric declared in provider.yaml must be resolvable via METRIC_MAPPING,
+    and each mapping entry's .name attribute must match its key."""
+    provider_metrics = _provider_metric_names()
+    assert provider_metrics, "provider.yaml has no metrics — test is vacuous"
+
+    missing = provider_metrics - METRIC_MAPPING.keys()
+    assert not missing, f"Metrics in provider.yaml missing from METRIC_MAPPING: {missing}"
+
+    for name in provider_metrics:
+        assert METRIC_MAPPING[name].name == name, (
+            f"METRIC_MAPPING[{name!r}].name == {METRIC_MAPPING[name].name!r}; key and .name have drifted"
+        )
 
 
 def _make_mock_ragas_result(metric_names, n_rows=5):

@@ -50,7 +50,7 @@ from ragas.llms.base import BaseRagasLLM
 from ragas.run_config import RunConfig
 
 try:
-    from openai import OpenAI
+    from openai import AsyncOpenAI, OpenAI
 
     _HAS_OPENAI = True
 except ImportError:
@@ -111,11 +111,7 @@ DEFAULT_METRICS = [
 # ---------------------------------------------------------------------------
 # OpenAI-compatible LLM wrapper
 # ---------------------------------------------------------------------------
-def _openai_client(base_url: str) -> Any:
-    if not _HAS_OPENAI:
-        raise RuntimeError(
-            "openai package is required — install with: pip install openai>=1.0.0"
-        )
+def _openai_credentials(base_url: str) -> tuple[str, str]:
     url = base_url.rstrip("/")
     if not url.endswith("/v1"):
         url = f"{url}/v1"
@@ -125,7 +121,25 @@ def _openai_client(base_url: str) -> Any:
         auth_value = creds.auth_headers.get("Authorization", "")
         if auth_value.startswith("Bearer "):
             api_key = auth_value.removeprefix("Bearer ").strip()
-    return OpenAI(base_url=url, api_key=api_key or "DUMMY")
+    return url, api_key or "DUMMY"
+
+
+def _openai_client(base_url: str) -> Any:
+    if not _HAS_OPENAI:
+        raise RuntimeError(
+            "openai package is required — install with: pip install openai>=1.0.0"
+        )
+    url, api_key = _openai_credentials(base_url)
+    return OpenAI(base_url=url, api_key=api_key)
+
+
+def _async_openai_client(base_url: str) -> Any:
+    if not _HAS_OPENAI:
+        raise RuntimeError(
+            "openai package is required — install with: pip install openai>=1.0.0"
+        )
+    url, api_key = _openai_credentials(base_url)
+    return AsyncOpenAI(base_url=url, api_key=api_key)
 
 
 class EvalHubOpenAILLM(BaseRagasLLM):
@@ -149,20 +163,19 @@ class EvalHubOpenAILLM(BaseRagasLLM):
         if run_config is None:
             run_config = RunConfig()
         super().__init__(run_config, multiple_completion_supported=True)
-        self._base_url = base_url
         self._model_id = model_id
         self._max_tokens = max_tokens
         self._temperature = temperature
+        self._client = _openai_client(base_url)
+        self._async_client = _async_openai_client(base_url)
 
-    def generate_text(
+    def _build_completion_kwargs(
         self,
         prompt: PromptValue,
-        n: int = 1,
-        temperature: float | None = None,
-        stop: list[str] | None = None,
-        callbacks: Any = None,
-    ) -> LLMResult:
-        client = _openai_client(self._base_url)
+        n: int,
+        temperature: float | None,
+        stop: list[str] | None,
+    ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": self._model_id,
             "messages": [{"role": "user", "content": prompt.to_string()}],
@@ -175,25 +188,36 @@ class EvalHubOpenAILLM(BaseRagasLLM):
             kwargs["temperature"] = t
         if stop:
             kwargs["stop"] = stop
+        return kwargs
 
-        try:
-            response = client.chat.completions.create(**kwargs)
-        except Exception as e:
-            logger.error("Chat completion request failed: %s", e)
-            raise
-
+    @staticmethod
+    def _parse_completion_response(response: Any) -> LLMResult:
         generations = []
         for choice in getattr(response, "choices", []) or []:
             message = getattr(choice, "message", None)
             text = getattr(message, "content", "") or ""
             generations.append(Generation(text=text))
-
         if not generations:
             generations = [Generation(text="")]
-
         return LLMResult(
             generations=[generations], llm_output={"provider": "evalhub_openai"}
         )
+
+    def generate_text(
+        self,
+        prompt: PromptValue,
+        n: int = 1,
+        temperature: float | None = None,
+        stop: list[str] | None = None,
+        callbacks: Any = None,
+    ) -> LLMResult:
+        kwargs = self._build_completion_kwargs(prompt, n, temperature, stop)
+        try:
+            response = self._client.chat.completions.create(**kwargs)
+        except Exception as e:
+            logger.error("Chat completion request failed: %s", e)
+            raise
+        return self._parse_completion_response(response)
 
     def is_finished(self, response: LLMResult) -> bool:
         return True
@@ -206,9 +230,13 @@ class EvalHubOpenAILLM(BaseRagasLLM):
         stop: list[str] | None = None,
         callbacks: Any = None,
     ) -> LLMResult:
-        return self.generate_text(
-            prompt, n=n, temperature=temperature, stop=stop, callbacks=callbacks
-        )
+        kwargs = self._build_completion_kwargs(prompt, n, temperature, stop)
+        try:
+            response = await self._async_client.chat.completions.create(**kwargs)
+        except Exception as e:
+            logger.error("Async chat completion request failed: %s", e)
+            raise
+        return self._parse_completion_response(response)
 
     def get_temperature(self, n: int) -> float:
         if self._temperature is not None:
@@ -230,16 +258,16 @@ class EvalHubOpenAIEmbeddings(BaseRagasEmbeddings):
         run_config: RunConfig | None = None,
     ):
         super().__init__()
-        self._base_url = base_url
         self._model_id = model_id
         if run_config is None:
             run_config = RunConfig()
         self.set_run_config(run_config)
+        self._client = _openai_client(base_url)
+        self._async_client = _async_openai_client(base_url)
 
     def embed_query(self, text: str) -> list[float]:
-        client = _openai_client(self._base_url)
         try:
-            r = client.embeddings.create(input=text, model=self._model_id)
+            r = self._client.embeddings.create(input=text, model=self._model_id)
             if not r.data:
                 raise ValueError("Embeddings response had no data")
             emb = r.data[0].embedding
@@ -251,11 +279,10 @@ class EvalHubOpenAIEmbeddings(BaseRagasEmbeddings):
             raise
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        client = _openai_client(self._base_url)
         try:
-            r = client.embeddings.create(input=texts, model=self._model_id)
+            r = self._client.embeddings.create(input=texts, model=self._model_id)
             result = []
-            for d in r.data:
+            for d in sorted(r.data, key=lambda x: x.index):
                 if isinstance(d.embedding, str):
                     raise ValueError("Expected float embeddings, got base64 string")
                 result.append(d.embedding)
@@ -265,10 +292,34 @@ class EvalHubOpenAIEmbeddings(BaseRagasEmbeddings):
             raise
 
     async def aembed_query(self, text: str) -> list[float]:
-        return self.embed_query(text)
+        try:
+            r = await self._async_client.embeddings.create(
+                input=text, model=self._model_id
+            )
+            if not r.data:
+                raise ValueError("Embeddings response had no data")
+            emb = r.data[0].embedding
+            if isinstance(emb, str):
+                raise ValueError("Expected float embeddings, got base64 string")
+            return emb
+        except Exception as e:
+            logger.error("Async embed query failed: %s", e)
+            raise
 
     async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
-        return self.embed_documents(texts)
+        try:
+            r = await self._async_client.embeddings.create(
+                input=texts, model=self._model_id
+            )
+            result = []
+            for d in sorted(r.data, key=lambda x: x.index):
+                if isinstance(d.embedding, str):
+                    raise ValueError("Expected float embeddings, got base64 string")
+                result.append(d.embedding)
+            return result
+        except Exception as e:
+            logger.error("Async embed documents failed: %s", e)
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +469,8 @@ class RagasAdapter(FrameworkAdapter):
             embedding_model = bc.get("embedding_model") or model_name
             embedding_url = bc.get("embedding_url") or model_url
 
-            run_config = RunConfig(max_workers=1)
+            max_workers = min(max(int(bc.get("max_workers") or 1), 1), 10)
+            run_config = RunConfig(max_workers=max_workers)
             llm = EvalHubOpenAILLM(
                 base_url=model_url,
                 model_id=model_name,
