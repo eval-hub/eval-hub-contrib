@@ -1,0 +1,55 @@
+id: korean-comprehensive-eval
+name: Korean Comprehensive Evaluation
+category: language-korean
+description: >
+  Multi-benchmark Korean LLM evaluation covering legal reasoning (KMMLU Law),
+  lexical semantics (KoBEST WIC), and cross-lingual commonsense reasoning
+  (ARC Easy). All three benchmarks run concurrently under one MLflow experiment.
+  Designed for Gemma-4 class models; adjust limit for full dataset runs.
+tags:
+  - korean
+  - comprehensive
+  - multi-benchmark
+  - kmmlu
+  - kobest
+  - arc
+  - lm-evaluation-harness
+pass_criteria:
+  # Weighted average (equal weights 1+1+1); collection passes when avg >= 0.50
+  threshold: 0.50
+benchmarks:
+  - id: kmmlu_direct_law
+    provider_id: lm_evaluation_harness
+    weight: 1
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.35   # 0-shot law; above random (0.25), feasible for 2B+ models
+    parameters:
+      num_fewshot: 0
+      limit: 5
+
+  - id: kobest_wic
+    provider_id: lm_evaluation_harness
+    weight: 1
+    primary_score:
+      metric: acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.55   # Binary task; random=0.50; 0-shot Korean WIC is challenging
+    parameters:
+      num_fewshot: 0
+      limit: 5
+
+  - id: arc_easy
+    provider_id: lm_evaluation_harness
+    weight: 1
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.65   # English cross-lingual anchor; 2B+ models typically 65-75%
+    parameters:
+      num_fewshot: 0
+      limit: 5
