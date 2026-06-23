@@ -1,12 +1,11 @@
 eval-hub-sdk[adapter]==0.4.0
-# IBM CLEAR (agentic): PyPI `clear-eval` (e.g. 1.0.8) does not ship `clear_eval.agentic`—verified
-# the wheel has no agentic tree. Install from IBM/CLEAR until agentic is on PyPI.
-# Tag tracks a released version (bump tag when you need newer upstream fixes).
+# IBM CLEAR: now available on PyPI with agentic support included.
 # 2.x nests per-agent results under reasoning_eval / tools_eval — see main.py extraction.
-clear-eval @ git+https://github.com/IBM/CLEAR.git@2.0.0-rc.2
+clear-eval==2.0.2
 
 pandas>=2.0.0
 pydantic>=2.0.0
 
-# Optional (local MLflow): if artifact upload needs the upstream Python client, set
-# EVALHUB_MLFLOW_BACKEND=upstream and: pip install mlflow-skinny
+# Required for fetching full traces (with spans) from MLflow when
+# parameters.mlflow_traces_experiment_name is set.
+mlflow-skinny>=2.0.0
