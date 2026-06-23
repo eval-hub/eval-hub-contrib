@@ -10,6 +10,7 @@ VERSION ?= latest
 IMAGE_LIGHTEVAL = $(REGISTRY)/community-lighteval:$(VERSION)
 IMAGE_GUIDELLM = $(REGISTRY)/community-guidellm:$(VERSION)
 IMAGE_MTEB = $(REGISTRY)/community-mteb:$(VERSION)
+IMAGE_RAGAS = $(REGISTRY)/community-ragas:$(VERSION)
 IMAGE_SWEBENCH = $(REGISTRY)/community-swebench:$(VERSION)
 
 # Default target
@@ -22,6 +23,7 @@ help:
 	@echo "  make image-lighteval    - Build LightEval adapter image"
 	@echo "  make image-guidellm     - Build GuideLLM adapter image"
 	@echo "  make image-mteb         - Build MTEB adapter image"
+	@echo "  make image-ragas        - Build RAGAS adapter image"
 	@echo "  make image-swebench     - Build SWE-bench adapter image"
 	@echo "  make images             - Build all adapter images"
 	@echo ""
@@ -29,6 +31,7 @@ help:
 	@echo "  make push-lighteval     - Push LightEval adapter image"
 	@echo "  make push-guidellm      - Push GuideLLM adapter image"
 	@echo "  make push-mteb          - Push MTEB adapter image"
+	@echo "  make push-ragas         - Push RAGAS adapter image"
 	@echo "  make push-swebench      - Push SWE-bench adapter image"
 	@echo "  make push-images        - Push all adapter images"
 	@echo ""
@@ -36,6 +39,7 @@ help:
 	@echo "  make clean-lighteval    - Remove LightEval adapter image"
 	@echo "  make clean-guidellm     - Remove GuideLLM adapter image"
 	@echo "  make clean-mteb         - Remove MTEB adapter image"
+	@echo "  make clean-ragas        - Remove RAGAS adapter image"
 	@echo "  make clean-swebench     - Remove SWE-bench adapter image"
 	@echo "  make clean-images       - Remove all adapter images"
 	@echo ""
@@ -44,6 +48,7 @@ help:
 	@echo "  make test-lighteval    - Run LightEval adapter tests"
 	@echo "  make test-mteb         - Run MTEB adapter tests"
 	@echo "  make test-clear        - Run CLEAR adapter tests"
+	@echo "  make test-ragas        - Run RAGAS adapter tests"
 	@echo "  make tests             - Run all adapter tests"
 	@echo ""
 	@echo "Variables:"
@@ -76,6 +81,13 @@ image-mteb:
 	$(BUILD_TOOL) build -t $(IMAGE_MTEB) -f Containerfile .
 	@echo "✅ Built: $(IMAGE_MTEB)"
 
+.PHONY: image-ragas
+image-ragas:
+	@echo "Building RAGAS adapter image..."
+	cd adapters/ragas && \
+	$(BUILD_TOOL) build -t $(IMAGE_RAGAS) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_RAGAS)"
+
 .PHONY: image-swebench
 image-swebench:
 	@echo "Building SWE-bench adapter image..."
@@ -84,7 +96,7 @@ image-swebench:
 	@echo "✅ Built: $(IMAGE_SWEBENCH)"
 
 .PHONY: images
-images: image-lighteval image-guidellm image-mteb image-swebench
+images: image-lighteval image-guidellm image-mteb image-ragas image-swebench
 	@echo "✅ All adapter images built"
 
 # Push targets
@@ -106,6 +118,12 @@ push-mteb:
 	$(BUILD_TOOL) push $(IMAGE_MTEB)
 	@echo "✅ Pushed: $(IMAGE_MTEB)"
 
+.PHONY: push-ragas
+push-ragas:
+	@echo "Pushing RAGAS adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_RAGAS)
+	@echo "✅ Pushed: $(IMAGE_RAGAS)"
+
 .PHONY: push-swebench
 push-swebench:
 	@echo "Pushing SWE-bench adapter image..."
@@ -113,7 +131,7 @@ push-swebench:
 	@echo "✅ Pushed: $(IMAGE_SWEBENCH)"
 
 .PHONY: push-images
-push-images: push-lighteval push-guidellm push-mteb push-swebench
+push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench
 	@echo "✅ All adapter images pushed"
 
 # Clean targets
@@ -135,6 +153,12 @@ clean-mteb:
 	$(BUILD_TOOL) rmi $(IMAGE_MTEB) 2>/dev/null || true
 	@echo "✅ Removed: $(IMAGE_MTEB)"
 
+.PHONY: clean-ragas
+clean-ragas:
+	@echo "Removing RAGAS adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_RAGAS) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_RAGAS)"
+
 .PHONY: clean-swebench
 clean-swebench:
 	@echo "Removing SWE-bench adapter image..."
@@ -142,7 +166,7 @@ clean-swebench:
 	@echo "✅ Removed: $(IMAGE_SWEBENCH)"
 
 .PHONY: clean-images
-clean-images: clean-lighteval clean-guidellm clean-mteb clean-swebench
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench
 	@echo "✅ All adapter images removed"
 
 # Development targets
@@ -203,8 +227,17 @@ test-clear:
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ CLEAR tests passed"
 
+.PHONY: test-ragas
+test-ragas:
+	@echo "Running RAGAS adapter tests..."
+	cd adapters/ragas && \
+	test -d .venv || python3 -m venv .venv && \
+	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ RAGAS tests passed"
+
 .PHONY: tests
-tests: test-guidellm test-lighteval test-mteb test-clear
+tests: test-guidellm test-lighteval test-mteb test-clear test-ragas
 	@echo "✅ All adapter tests passed"
 .PHONY: test-swebench
 test-swebench:
