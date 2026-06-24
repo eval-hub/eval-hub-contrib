@@ -14,6 +14,7 @@ The adapter:
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -420,6 +421,17 @@ class LightEvalAdapter(FrameworkAdapter):
 
         logger.info(f"Executing LightEval CLI: {' '.join(cmd)}")
 
+        env = None
+        model_auth_dir = Path("/var/run/secrets/model")
+        if model_auth_dir.is_dir() and "HF_TOKEN" not in os.environ:
+            for token_file in model_auth_dir.iterdir():
+                if token_file.is_file():
+                    token = token_file.read_text().strip()
+                    if token:
+                        env = {**os.environ, "HF_TOKEN": token}
+                        logger.info(f"Injected HF_TOKEN from {token_file}")
+                        break
+
         try:
             # Run LightEval CLI
             result = subprocess.run(
@@ -428,6 +440,7 @@ class LightEvalAdapter(FrameworkAdapter):
                 text=True,
                 timeout=3600,  # 1 hour timeout
                 check=False,
+                env=env,
             )
 
             # Log output
@@ -543,19 +556,19 @@ class LightEvalAdapter(FrameworkAdapter):
                 elif isinstance(metric_value, bool):
                     metric_type = "bool"
 
-                # Create hierarchical metric name: task.metric
-                full_metric_name = f"{task_name}.{metric_name}"
+                clean_metric = self._normalise_metric_name(metric_name)
+                clean_task = self._normalise_task_name(task_name)
 
                 evaluation_results.append(
                     EvaluationResult(
-                        metric_name=full_metric_name,
+                        metric_name=clean_metric,
                         metric_value=metric_value,
                         metric_type=metric_type,
                         confidence_interval=confidence_interval,
                         num_samples=None,  # LightEval doesn't always provide this
                         metadata={
-                            "task": task_name,
-                            "metric": metric_name,
+                            "task": clean_task,
+                            "metric": clean_metric,
                             "stderr": stderr,
                         },
                     )
@@ -566,38 +579,50 @@ class LightEvalAdapter(FrameworkAdapter):
         logger.info(f"Extracted {len(evaluation_results)} metrics from LightEval results")
         return evaluation_results
 
+    @staticmethod
+    def _normalise_task_name(task_name: str) -> str:
+        # Strip |N fewshot suffix LightEval appends to task names in results JSON
+        # (e.g. math_500|0 → math_500)
+        if "|" in task_name:
+            return task_name.rsplit("|", 1)[0]
+        return task_name
+
+    @staticmethod
+    def _normalise_metric_name(metric_name: str) -> str:
+        # Normalise LightEval metric names to match collection primary_score.metric.
+        # pass@k:k=1&n=3 → pass@1  (query-string: extract k value)
+        # codegen_pass@1:16 → codegen_pass@1  (plain numeric suffix)
+        if ":" not in metric_name:
+            return metric_name
+        base, _, suffix = metric_name.rpartition(":")
+        if "@k" in base:
+            m = re.search(r"\bk=(\d+)\b", suffix)
+            if m:
+                return base.replace("@k", f"@{m.group(1)}")
+        if suffix.isdigit():
+            return base
+        return metric_name
+
     def _compute_overall_score(self, results: list[EvaluationResult]) -> float | None:
         """Compute overall score from evaluation results.
+
+        Returns the first numeric metric value. The EvalHub service selects
+        the primary metric from the full results list using primary_score.metric
+        from the collection YAML; the adapter's job is simply to report a
+        representative score for logging.
 
         Args:
             results: List of evaluation results
 
         Returns:
-            Overall score (average of primary metrics), or None if not applicable
+            First numeric metric value, normalised to [0, 1], or None.
         """
-        # Primary metrics to consider for overall score
-        primary_metric_names = ["accuracy", "acc", "exact_match", "extractive_match", "f1", "bleu"]
-
-        primary_values = []
         for result in results:
-            # Extract base metric name (after the task prefix)
-            metric_parts = result.metric_name.split(".")
-            if len(metric_parts) >= 2:
-                base_metric = metric_parts[-1]
-            else:
-                base_metric = result.metric_name
-
-            # Check if it's a primary metric
-            if base_metric in primary_metric_names:
-                if isinstance(result.metric_value, (int, float)):
-                    value = float(result.metric_value)
-                    # Assume metrics are already normalized to 0-1 or 0-100
-                    if value > 1.0:
-                        value = value / 100.0
-                    primary_values.append(value)
-
-        if primary_values:
-            return sum(primary_values) / len(primary_values)
+            if isinstance(result.metric_value, (int, float)):
+                value = float(result.metric_value)
+                if value > 1.0:
+                    value = value / 100.0
+                return value
         return None
 
     def _extract_num_evaluated(self, lighteval_results: dict[str, Any]) -> int:
@@ -609,12 +634,10 @@ class LightEvalAdapter(FrameworkAdapter):
         Returns:
             Number of examples evaluated, or 0 if not available
         """
-        # LightEval doesn't always provide this directly
-        # Try to extract from config or metadata
-        if "config_general" in lighteval_results and "max_samples" in lighteval_results["config_general"]:
-            return lighteval_results["config_general"]["max_samples"]
-
-        # Otherwise return 0 (unknown)
+        config_general = lighteval_results.get("config_general", {})
+        max_samples = config_general.get("max_samples") or config_general.get("num_samples")
+        if max_samples is not None:
+            return int(max_samples)
         return 0
 
     def _save_detailed_results(

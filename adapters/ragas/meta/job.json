@@ -1,0 +1,24 @@
+{
+  "id": "ragas-rag-eval-001",
+  "provider_id": "ragas",
+  "benchmark_id": "ragas_rag_default",
+  "benchmark_index": 0,
+  "model": {
+    "url": "http://127.0.0.1:8000",
+    "name": "Qwen/Qwen2.5-1.5B-Instruct"
+  },
+  "num_examples": 5,
+  "parameters": {
+    "metrics": [
+      "answer_relevancy",
+      "context_precision",
+      "faithfulness",
+      "context_recall"
+    ],
+    "embedding_model": "all-MiniLM-L6-v2",
+    "embedding_url": "http://127.0.0.1:8001",
+    "max_tokens": 512,
+    "temperature": 0.1
+  },
+  "callback_url": "http://localhost:8080"
+}

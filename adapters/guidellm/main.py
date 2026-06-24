@@ -14,6 +14,7 @@ Architecture:
     5. Structured metrics in JobResults format
 """
 
+import certifi
 import json
 import logging
 import os
@@ -38,6 +39,7 @@ from evalhub.adapter import (
     MessageInfo,
     OCIArtifactSpec,
 )
+from evalhub.adapter.auth import resolve_model_credentials
 
 # Configure logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -58,6 +60,9 @@ class GuideLLMAdapter(FrameworkAdapter):
     - Flexible data sources (synthetic, HuggingFace, local files)
     - Multiple output formats (JSON, CSV, HTML, YAML)
     """
+
+    ALLOWED_OUTPUT_FORMATS = frozenset({"json", "csv", "html", "yaml"})
+    DEFAULT_OUTPUTS = "json,csv,html,yaml"
 
     def __init__(self, job_spec_path: Optional[str] = None):
         """Initialize the GuideLLM adapter.
@@ -247,6 +252,25 @@ class GuideLLMAdapter(FrameworkAdapter):
             )
             raise
 
+    @staticmethod
+    def _validate_outputs(outputs: str) -> str:
+        """Validate and normalize comma-separated GuideLLM output format aliases."""
+        formats = [part.strip() for part in outputs.split(",") if part.strip()]
+        if not formats:
+            raise ValueError("outputs must include at least one format")
+
+        normalized: List[str] = []
+        for fmt in formats:
+            lower = fmt.lower()
+            if lower not in GuideLLMAdapter.ALLOWED_OUTPUT_FORMATS:
+                allowed = ", ".join(sorted(GuideLLMAdapter.ALLOWED_OUTPUT_FORMATS))
+                raise ValueError(
+                    f"Invalid output format '{fmt}'. Allowed formats: {allowed}"
+                )
+            normalized.append(lower)
+
+        return ",".join(normalized)
+
     def _build_guidellm_command(self, job_spec: JobSpec) -> List[str]:
         """
         Build the GuideLLM CLI command from job specification.
@@ -355,9 +379,12 @@ class GuideLLMAdapter(FrameworkAdapter):
         if "backend_kwargs" in config:
             cmd.extend(["--backend-kwargs", json.dumps(config["backend_kwargs"])])
 
-        # Output formats (always generate all for comprehensive reporting)
+        # Output formats (default: all formats for comprehensive reporting)
         # Note: GuideLLM uses --outputs, not --output-format
-        cmd.extend(["--outputs", "json,csv,html,yaml"])
+        outputs = self._validate_outputs(
+            config.get("outputs", self.DEFAULT_OUTPUTS)
+        )
+        cmd.extend(["--outputs", outputs])
 
         logger.debug(f"Built GuideLLM command: {' '.join(cmd)}")
         return cmd
@@ -372,6 +399,7 @@ class GuideLLMAdapter(FrameworkAdapter):
         Raises:
             RuntimeError: If GuideLLM execution fails
         """
+        ca_bundle_path = None
         try:
             env = os.environ.copy()
             # GuideLLM 0.5.3 defaults the HTML report template URL to
@@ -383,6 +411,38 @@ class GuideLLMAdapter(FrameworkAdapter):
                 "https://raw.githubusercontent.com/vllm-project/guidellm/"
                 "refs/heads/gh-pages/ui/v0.5.3/index.html",
             )
+
+            creds = resolve_model_credentials()
+            if creds.ca_cert_path:
+                combined = tempfile.NamedTemporaryFile(
+                    suffix=".pem", delete=False, mode="wb"
+                )
+                with open(certifi.where(), "rb") as f:
+                    combined.write(f.read())
+                with open(creds.ca_cert_path, "rb") as f:
+                    combined.write(f.read())
+                combined.close()
+                ca_bundle_path = combined.name
+                env["REQUESTS_CA_BUNDLE"] = ca_bundle_path
+                env["SSL_CERT_FILE"] = ca_bundle_path
+                logger.info("TLS: using CA cert from model auth secret (appended to certifi bundle)")
+
+            # guidellm's httpx client ignores OPENAI_API_KEY; inject via --backend-kwargs instead.
+            api_key = creds.api_key
+            if not api_key:
+                auth_value = creds.auth_headers.get("Authorization", "")
+                if auth_value.startswith("Bearer "):
+                    api_key = auth_value.removeprefix("Bearer ").strip()
+
+            if api_key:
+                if "--backend-kwargs" in cmd:
+                    idx = cmd.index("--backend-kwargs")
+                    existing = json.loads(cmd[idx + 1])
+                    existing.setdefault("api_key", api_key)
+                    cmd[idx + 1] = json.dumps(existing)
+                else:
+                    cmd.extend(["--backend-kwargs", json.dumps({"api_key": api_key})])
+                logger.info("Auth: injected API key into guidellm --backend-kwargs")
 
             process = subprocess.Popen(
                 cmd,
@@ -409,6 +469,9 @@ class GuideLLMAdapter(FrameworkAdapter):
         except Exception as e:
             logger.error(f"Failed to execute GuideLLM: {e}")
             raise
+        finally:
+            if ca_bundle_path:
+                os.unlink(ca_bundle_path)
 
     def _parse_results(self, job_spec: JobSpec) -> Dict[str, Any]:
         """

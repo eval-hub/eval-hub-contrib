@@ -1,4 +1,4 @@
-eval-hub-sdk[adapter]==0.1.7
+eval-hub-sdk[adapter]==0.4.0
 # IBM CLEAR (agentic): PyPI `clear-eval` (e.g. 1.0.8) does not ship `clear_eval.agentic`—verified
 # the wheel has no agentic tree. Install from IBM/CLEAR until agentic is on PyPI.
 # Tag tracks a released version (bump tag when you need newer upstream fixes).
