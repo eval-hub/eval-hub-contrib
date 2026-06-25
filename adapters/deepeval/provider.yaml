@@ -1,0 +1,112 @@
+# DeepEval — provider definition (same shape as eval-hub config/providers/*.yaml).
+# Mount into eval-hub or sync via your operator's provider sync process.
+#
+# Discovery: eval-hub may surface `parameters` in UI. The adapter validates required
+# inputs early in run_benchmark_job. Benchmark-specific metrics are defined below.
+
+id: deepeval
+name: DeepEval
+description: LLM-as-judge evaluation framework with metrics for faithfulness, relevancy, hallucination, correctness, and summarization
+type: builtin
+
+runtime:
+  k8s:
+    image: quay.io/evalhub/community-deepeval:latest
+    image_pull_policy: Always
+    entrypoint:
+      - python
+      - main.py
+    cpu_request: 100m
+    memory_request: 256Mi
+    cpu_limit: 500m
+    memory_limit: 1Gi
+  local: null
+
+benchmarks:
+  - id: deepeval-faithfulness
+    name: Faithfulness
+    description: >
+      Tests if LLM output is faithful to the provided context. Measures whether
+      claims in the output are supported by the retrieval context.
+    category: rag-evaluation
+    metrics:
+      - faithfulness_score
+      - claims_count
+      - supported_claims_count
+    tags:
+      - deepeval
+      - rag
+      - faithfulness
+
+  - id: deepeval-relevancy
+    name: Answer Relevancy
+    description: >
+      Tests if LLM output is relevant to the input query. Evaluates whether the
+      generated answer addresses the user's question.
+    category: rag-evaluation
+    metrics:
+      - relevancy_score
+    tags:
+      - deepeval
+      - rag
+      - relevancy
+
+  - id: deepeval-hallucination
+    name: Hallucination
+    description: >
+      Tests for hallucinated content in LLM output. Detects statements that are
+      not grounded in the provided context.
+    category: safety
+    metrics:
+      - hallucination_score
+      - hallucination_detected
+    tags:
+      - deepeval
+      - safety
+      - hallucination
+
+  - id: deepeval-correctness
+    name: Correctness
+    description: >
+      Tests factual correctness of LLM answers against expected output.
+      Compares generated answers to ground-truth references.
+    category: accuracy
+    metrics:
+      - correctness_score
+    tags:
+      - deepeval
+      - accuracy
+      - correctness
+
+  - id: deepeval-summarization
+    name: Summarization
+    description: >
+      Tests summarization quality of LLM output. Evaluates alignment with
+      the source text and coverage of key information.
+    category: nlp
+    metrics:
+      - summarization_score
+    tags:
+      - deepeval
+      - nlp
+      - summarization
+
+parameters:
+  - name: eval_model_name
+    type: string
+    description: >
+      Required. Judge model name used by DeepEval for LLM-as-judge evaluation
+      (e.g. "gpt-4o", "claude-sonnet-4-20250514").
+
+  - name: threshold
+    type: float
+    default: 0.5
+    description: >
+      Minimum pass threshold for metric scores. Test cases scoring below
+      this value are marked as failed.
+
+  - name: dataset_format
+    type: string
+    default: csv
+    description: >
+      Input dataset format. Supported values: csv, jsonl, json.
