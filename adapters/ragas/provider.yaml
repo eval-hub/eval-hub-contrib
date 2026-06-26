@@ -117,3 +117,11 @@ parameters:
     type: string
     default: null
     description: Explicit path to dataset file (overrides default /test_data and /data resolution)
+
+  - name: skip_ssl_verify
+    type: boolean
+    default: false
+    description: >-
+      Disable TLS/SSL certificate verification when connecting to the LLM and
+      embeddings endpoints. Use only for self-signed or internal CA endpoints.
+      WARNING: disabling SSL verification exposes requests to MITM attacks.
