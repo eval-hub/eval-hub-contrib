@@ -418,7 +418,7 @@ class GuideLLMAdapter(FrameworkAdapter):
                 if "--backend-kwargs" in cmd:
                     idx = cmd.index("--backend-kwargs")
                     existing = json.loads(cmd[idx + 1])
-                    existing.setdefault("api_key", creds.api_key)
+                    existing["api_key"] = creds.api_key
                     cmd[idx + 1] = json.dumps(existing)
                 else:
                     cmd.extend(["--backend-kwargs", json.dumps({"api_key": creds.api_key})])
