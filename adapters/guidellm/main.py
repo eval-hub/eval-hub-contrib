@@ -14,7 +14,6 @@ Architecture:
     5. Structured metrics in JobResults format
 """
 
-import certifi
 import json
 import logging
 import os
@@ -399,7 +398,6 @@ class GuideLLMAdapter(FrameworkAdapter):
         Raises:
             RuntimeError: If GuideLLM execution fails
         """
-        ca_bundle_path = None
         try:
             env = os.environ.copy()
             # GuideLLM 0.5.3 defaults the HTML report template URL to
@@ -412,36 +410,18 @@ class GuideLLMAdapter(FrameworkAdapter):
                 "refs/heads/gh-pages/ui/v0.5.3/index.html",
             )
 
+            # guidellm's httpx client ignores OPENAI_API_KEY; inject the ref token
+            # via --backend-kwargs so the sidecar can resolve it to the real key.
+            # CA cert and SA token injection are handled by the sidecar proxy.
             creds = resolve_model_credentials()
-            if creds.ca_cert_path:
-                combined = tempfile.NamedTemporaryFile(
-                    suffix=".pem", delete=False, mode="wb"
-                )
-                with open(certifi.where(), "rb") as f:
-                    combined.write(f.read())
-                with open(creds.ca_cert_path, "rb") as f:
-                    combined.write(f.read())
-                combined.close()
-                ca_bundle_path = combined.name
-                env["REQUESTS_CA_BUNDLE"] = ca_bundle_path
-                env["SSL_CERT_FILE"] = ca_bundle_path
-                logger.info("TLS: using CA cert from model auth secret (appended to certifi bundle)")
-
-            # guidellm's httpx client ignores OPENAI_API_KEY; inject via --backend-kwargs instead.
-            api_key = creds.api_key
-            if not api_key:
-                auth_value = creds.auth_headers.get("Authorization", "")
-                if auth_value.startswith("Bearer "):
-                    api_key = auth_value.removeprefix("Bearer ").strip()
-
-            if api_key:
+            if creds.api_key:
                 if "--backend-kwargs" in cmd:
                     idx = cmd.index("--backend-kwargs")
                     existing = json.loads(cmd[idx + 1])
-                    existing.setdefault("api_key", api_key)
+                    existing.setdefault("api_key", creds.api_key)
                     cmd[idx + 1] = json.dumps(existing)
                 else:
-                    cmd.extend(["--backend-kwargs", json.dumps({"api_key": api_key})])
+                    cmd.extend(["--backend-kwargs", json.dumps({"api_key": creds.api_key})])
                 logger.info("Auth: injected API key into guidellm --backend-kwargs")
 
             process = subprocess.Popen(
@@ -469,9 +449,6 @@ class GuideLLMAdapter(FrameworkAdapter):
         except Exception as e:
             logger.error(f"Failed to execute GuideLLM: {e}")
             raise
-        finally:
-            if ca_bundle_path:
-                os.unlink(ca_bundle_path)
 
     def _parse_results(self, job_spec: JobSpec) -> Dict[str, Any]:
         """
