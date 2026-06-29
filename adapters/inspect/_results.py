@@ -1,6 +1,7 @@
 """Log parsing and result extraction for the Inspect AI adapter."""
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -24,13 +25,14 @@ def parse_log(log_file: Path) -> dict[str, Any]:
             f"Error: {error_info.get('message', 'unknown')}"
         )
 
-    # Write a copy of the inspect log to /tmp for post-mortem inspection.
-    debug_copy = Path("/tmp") / f"inspect_eval_log_{log_file.stem}.json"
-    try:
-        debug_copy.write_text(json.dumps(data, indent=2))
-        logger.info(f"Inspect log copy written to {debug_copy}")
-    except Exception as exc:
-        logger.warning(f"Could not write debug log copy: {exc}")
+    if os.environ.get("INSPECT_DEBUG_COPY_LOG"):
+        debug_copy = Path("/tmp") / f"inspect_eval_log_{log_file.stem}.json"
+        try:
+            debug_copy.write_text(json.dumps(data, indent=2))
+            debug_copy.chmod(0o600)
+            logger.info(f"Inspect log copy written to {debug_copy}")
+        except OSError as exc:
+            logger.warning(f"Could not write debug log copy: {exc}")
 
     return data
 
