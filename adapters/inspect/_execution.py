@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -12,6 +13,13 @@ from _benchmarks import PETRI_SEED_MAP
 from _routing import _is_ollama_endpoint, role_model_spec, route_model, select_client, target_model_spec
 
 logger = logging.getLogger(__name__)
+
+_API_KEY_RE = re.compile(r'"api_key"\s*:\s*"[^"]*"')
+
+
+def redact_cmd(cmd: list[str]) -> str:
+    """Return a loggable representation of cmd with api_key values redacted."""
+    return " ".join(_API_KEY_RE.sub('"api_key": "[REDACTED]"', arg) for arg in cmd)
 
 
 def build_env(config: JobSpec, mode: str) -> dict[str, str]:

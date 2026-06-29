@@ -55,7 +55,7 @@ from _benchmarks import (
     STANDARD_TASK_MAP,
 )
 from _bloom import bloom_prepare
-from _execution import build_command, build_env, get_inspect_version, run_inspect
+from _execution import build_command, build_env, get_inspect_version, redact_cmd, run_inspect
 from _results import compute_overall_score, extract_results, parse_log
 from _routing import (
     build_role_spec,
@@ -118,7 +118,7 @@ class InspectAdapter(FrameworkAdapter):
 
             task_spec = self._resolve_task(config, mode, behavior_dir)
             cmd = build_command(config, mode, task_spec, log_dir, behavior_dir, env)
-            logger.info(f"Inspect command: {' '.join(cmd)}")
+            logger.info(f"Inspect command: {redact_cmd(cmd)}")
 
             progress = 0.3 if mode != "bloom" else 0.6
             run_label = "Petri audit" if mode == "petri" else "Bloom audit" if mode == "bloom" else task_spec
