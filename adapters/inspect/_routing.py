@@ -65,10 +65,13 @@ def build_role_spec(
         return json.dumps(cfg)
 
     if role_base_url:
+        role_client = _CLIENT_OLLAMA if _is_ollama_endpoint(role_base_url) else _CLIENT_OPENAI_COMPAT
         cfg: dict[str, Any] = {
-            "model": route_model(model_name, _CLIENT_OPENAI_COMPAT),
+            "model": route_model(model_name, role_client),
             "base_url": role_base_url,
         }
+        if role_client == _CLIENT_OPENAI_COMPAT:
+            cfg["model_args"] = {"responses_api": False}
         if role_api_key:
             cfg["api_key"] = role_api_key
         return json.dumps(cfg)
