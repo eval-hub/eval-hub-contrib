@@ -55,7 +55,7 @@ from _benchmarks import (
     STANDARD_TASK_MAP,
 )
 from _bloom import bloom_prepare
-from _execution import build_command, build_env, get_inspect_version, run_inspect
+from _execution import build_command, build_env, get_inspect_version, redact_cmd, run_inspect
 from _results import compute_overall_score, extract_results, parse_log
 from _routing import (
     build_role_spec,
@@ -118,7 +118,7 @@ class InspectAdapter(FrameworkAdapter):
 
             task_spec = self._resolve_task(config, mode, behavior_dir)
             cmd = build_command(config, mode, task_spec, log_dir, behavior_dir, env)
-            logger.info(f"Inspect command: {' '.join(cmd)}")
+            logger.info(f"Inspect command: {redact_cmd(cmd)}")
 
             progress = 0.3 if mode != "bloom" else 0.6
             run_label = "Petri audit" if mode == "petri" else "Bloom audit" if mode == "bloom" else task_spec
@@ -205,16 +205,10 @@ class InspectAdapter(FrameworkAdapter):
                 job_results.mlflow_run_id = mlflow_run_id
                 logger.info(f"MLflow run recorded: {mlflow_run_id}")
 
-            callbacks.report_status(JobStatusUpdate(
-                status=JobStatus.COMPLETED,
-                phase=JobPhase.COMPLETED,
-                progress=1.0,
-                message=MessageInfo(
-                    message=f"Evaluation completed | samples={num_samples} | score={overall_score}",
-                    message_code="completed",
-                ),
-            ))
-
+            # Do NOT call report_status(COMPLETED) here — report_results() in
+            # main() sends the results payload AND the COMPLETED status in one
+            # atomic event. Calling COMPLETED early locks the sidecar and causes
+            # the subsequent report_results() to get a 409, dropping all metrics.
             return job_results
 
         except Exception as e:

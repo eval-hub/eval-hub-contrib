@@ -92,6 +92,30 @@ All 38 Petri judge dimensions are captured as individual metrics.
 
 ---
 
+## Kubernetes and container notes
+
+### Sandbox
+
+Standard inspect-evals benchmarks default to the `local` sandbox — code runs directly
+in the adapter container without Docker. This is the only sandbox available in
+Kubernetes pods. Override with `parameters.sandbox` if you have a different provider
+configured (e.g. `"docker"` for local development with Docker Engine).
+
+```json
+{ "parameters": { "sandbox": "docker" } }
+```
+
+Petri and Bloom modes do not use a sandbox.
+
+### HuggingFace datasets
+
+Some inspect-evals benchmarks (e.g. `humaneval`, `mmlu`) download datasets from the
+HuggingFace Hub. The adapter reads an `hf-token` secret mounted at
+`/var/run/secrets/model/hf-token` and injects it as `HF_TOKEN` automatically. Mount
+the secret in your EvalHub provider configuration if gated datasets are required.
+
+---
+
 ## Model and credential configuration
 
 The adapter detects which API to use from environment variables. Model names are passed
@@ -304,6 +328,11 @@ Environment: `ANTHROPIC_API_KEY=sk-ant-...` (for auditor), `OPENAI_BASE_URL` set
 | `bloom_template` | `null` | Template for `bloom init --from <template>` (e.g. `delusion_sycophancy`) |
 | `behavior_dir` | `null` | Pre-built behavior directory — skips `bloom init` and `bloom scenarios` steps |
 | `scenarios_model` | *(auditor_model)* | Model for the `bloom scenarios` generation step |
+
+> **Note:** The `bloom scenarios` CLI only accepts bare `client/model` strings for the
+> scenarios role (e.g. `openai/gpt-oss-20b`). JSON model specs with `model_args` are not
+> supported at this step. The scenarios model uses the global `OPENAI_BASE_URL` / `OPENAI_API_KEY`
+> credentials; per-role endpoint overrides do not apply to the scenarios step.
 
 ## Building and testing
 

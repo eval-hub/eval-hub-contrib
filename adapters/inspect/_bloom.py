@@ -3,12 +3,11 @@
 import logging
 import subprocess
 from pathlib import Path
-from typing import Any
 
 from evalhub.adapter import JobCallbacks, JobPhase, JobSpec, JobStatus, JobStatusUpdate, MessageInfo
 
 from _benchmarks import BLOOM_TEMPLATE_MAP
-from _routing import role_model_spec
+from _routing import _is_ollama_endpoint, route_model, select_client
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +50,26 @@ def bloom_prepare(
 
     p = config.parameters
     scenarios_name = p.get("scenarios_model") or p.get("auditor_model") or "claude-sonnet-4-6"
-    scenarios_model = role_model_spec(scenarios_name, "scenarios", p, env)
+    scenarios_base_url = p.get("scenarios_base_url") or None
+    scenarios_api_key = p.get("scenarios_api_key") or None
+
+    # bloom CLI doesn't support the JSON dict model spec (model_args etc.) —
+    # use a bare client/model string, but resolve the client from the
+    # scenarios-specific endpoint so requests go to the right provider.
+    client = select_client(env, endpoint_url=scenarios_base_url)
+    scenarios_model = route_model(scenarios_name, client)
     logger.info(f"Running bloom scenarios with model={scenarios_model}")
+
+    # Overlay scenarios routing overrides onto a copy of the global env so the
+    # bloom subprocess targets the correct provider without affecting other roles.
+    scenarios_env = dict(env)
+    if scenarios_base_url:
+        if _is_ollama_endpoint(scenarios_base_url):
+            scenarios_env["OLLAMA_BASE_URL"] = scenarios_base_url
+        else:
+            scenarios_env["OPENAI_BASE_URL"] = scenarios_base_url
+    if scenarios_api_key:
+        scenarios_env["OPENAI_API_KEY"] = scenarios_api_key
 
     callbacks.report_status(
         JobStatusUpdate(
@@ -71,7 +88,7 @@ def bloom_prepare(
 
     scenarios_result = subprocess.run(
         ["bloom", "scenarios", str(behavior_dir), "--model-role", f"scenarios={scenarios_model}"],
-        env=env, capture_output=True, text=True, timeout=600,
+        env=scenarios_env, capture_output=True, text=True, timeout=600,
     )
     if scenarios_result.returncode != 0:
         raise RuntimeError(
