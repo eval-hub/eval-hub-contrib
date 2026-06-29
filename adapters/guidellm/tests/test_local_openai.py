@@ -140,7 +140,7 @@ def test_guidellm_local_openai(tmp_path, mock_sidecar):
 
     # Extract states from the events
     states = [
-        ev["body"]["benchmark_status_event"]["state"]
+        ev["body"]["benchmark_status_event"]["status"]
         for ev in events
         if "benchmark_status_event" in ev["body"]
     ]
