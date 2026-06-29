@@ -434,7 +434,8 @@ class LightEvalAdapter(FrameworkAdapter):
             cmd.extend(["--max-samples", str(limit)])
             logger.info(f"Limiting evaluation to {limit} samples per task")
 
-        logger.info(f"Executing LightEval CLI: {' '.join(cmd)}")
+        safe_cmd = [re.sub(r"(,api_key=)[^,]*", r"\1***", arg) for arg in cmd]
+        logger.info(f"Executing LightEval CLI: {' '.join(safe_cmd)}")
 
         env = None
         if "HF_TOKEN" not in os.environ:
