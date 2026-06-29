@@ -1,9 +1,9 @@
 {
-  "id": "deepeval-faithfulness-test-001",
+  "id": "faithfulness-test-001",
   "provider_id": "deepeval",
-  "benchmark_id": "deepeval-faithfulness",
+  "benchmark_id": "faithfulness",
   "benchmark_index": 0,
-  "experiment_name": "deepeval-faithfulness-eval",
+  "experiment_name": "faithfulness-eval",
   "model": {
     "url": "https://api.openai.com/v1",
     "name": "gpt-4o",

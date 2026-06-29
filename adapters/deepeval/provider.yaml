@@ -6,7 +6,7 @@
 
 id: deepeval
 name: DeepEval
-description: LLM-as-judge evaluation framework with metrics for faithfulness, relevancy, hallucination, correctness, and summarization
+description: LLM-as-judge evaluation framework with metrics for faithfulness, relevancy, hallucination, correctness, summarization, and multi-turn conversation evaluation
 type: builtin
 
 runtime:
@@ -23,7 +23,7 @@ runtime:
   local: null
 
 benchmarks:
-  - id: deepeval-faithfulness
+  - id: faithfulness
     name: Faithfulness
     description: >
       Tests if LLM output is faithful to the provided context. Measures whether
@@ -38,7 +38,7 @@ benchmarks:
       - rag
       - faithfulness
 
-  - id: deepeval-relevancy
+  - id: relevancy
     name: Answer Relevancy
     description: >
       Tests if LLM output is relevant to the input query. Evaluates whether the
@@ -51,7 +51,7 @@ benchmarks:
       - rag
       - relevancy
 
-  - id: deepeval-hallucination
+  - id: hallucination
     name: Hallucination
     description: >
       Tests for hallucinated content in LLM output. Detects statements that are
@@ -65,7 +65,7 @@ benchmarks:
       - safety
       - hallucination
 
-  - id: deepeval-correctness
+  - id: correctness
     name: Correctness
     description: >
       Tests factual correctness of LLM answers against expected output.
@@ -78,7 +78,7 @@ benchmarks:
       - accuracy
       - correctness
 
-  - id: deepeval-summarization
+  - id: summarization
     name: Summarization
     description: >
       Tests summarization quality of LLM output. Evaluates alignment with
@@ -90,6 +90,45 @@ benchmarks:
       - deepeval
       - nlp
       - summarization
+
+  - id: conversation-completeness
+    name: Conversation Completeness
+    description: >
+      Tests whether a chatbot adequately addresses all user needs across a multi-turn
+      conversation. Evaluates task completion turn by turn using an LLM judge.
+    category: multi-turn
+    metrics:
+      - conversation_completeness_score
+    tags:
+      - deepeval
+      - multi-turn
+      - completeness
+
+  - id: role-adherence
+    name: Role Adherence
+    description: >
+      Tests whether a chatbot adheres to its assigned persona or role throughout
+      a multi-turn conversation. Requires chatbot_role in the dataset or parameters.
+    category: multi-turn
+    metrics:
+      - role_adherence_score
+    tags:
+      - deepeval
+      - multi-turn
+      - role-adherence
+
+  - id: knowledge-retention
+    name: Knowledge Retention
+    description: >
+      Tests whether a chatbot retains and correctly uses information disclosed by
+      the user in earlier turns of a conversation.
+    category: multi-turn
+    metrics:
+      - knowledge_retention_score
+    tags:
+      - deepeval
+      - multi-turn
+      - knowledge-retention
 
 parameters:
   - name: eval_model_name
@@ -118,3 +157,55 @@ parameters:
     default: csv
     description: >
       Input dataset format. Supported values: csv, jsonl, json.
+      For multi-turn benchmarks, jsonl or json are recommended so the turns
+      field can be expressed as a native array.
+
+  - name: chatbot_role
+    type: string
+    default: null
+    description: >
+      Chatbot persona description used by the Role Adherence benchmark
+      (e.g. "helpful customer support agent"). Can also be provided per-record
+      in the dataset as the chatbot_role column.
+
+  - name: max_concurrent
+    type: int
+    default: 1
+    description: >
+      Maximum number of test cases evaluated concurrently. Lower values reduce
+      burst load on the judge endpoint. Defaults to 1 (serial evaluation).
+
+  - name: throttle_value
+    type: float
+    default: 0
+    description: >
+      Seconds to wait between test case evaluations. Use together with
+      max_concurrent to pace requests to a rate-limited judge endpoint.
+
+  - name: per_attempt_timeout_seconds
+    type: float
+    default: 300.0
+    description: >
+      Per-attempt timeout (seconds) for each LLM call made by the DeepEval judge.
+      Overrides DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE. Setting this also
+      causes DeepEval to auto-compute the outer per-task deadline as
+      attempts × per_attempt_timeout + expected_backoff, giving retries enough
+      headroom. The default of 300 s accommodates reasoning models (e.g. DeepSeek-R1,
+      Phi-4) that emit long chain-of-thought sequences before the first response token.
+      Reduce for fast non-reasoning judge models if tighter failure detection is needed.
+
+  - name: retry_max_attempts
+    type: int
+    default: 2
+    description: >
+      Total number of attempts per LLM call (first attempt + retries).
+      Increase when the judge endpoint is intermittently slow or rate-limited.
+      Overrides DEEPEVAL_RETRY_MAX_ATTEMPTS.
+
+  - name: retry_cap_seconds
+    type: float
+    default: 5.0
+    description: >
+      Maximum backoff sleep (seconds) between retry attempts.
+      Increase to give a loaded judge endpoint more time to recover between retries.
+      Overrides DEEPEVAL_RETRY_CAP_SECONDS.

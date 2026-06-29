@@ -19,14 +19,18 @@ from typing import Any, Optional
 
 import pandas as pd
 from deepeval import evaluate
+from deepeval.evaluate.configs import AsyncConfig
 from deepeval.metrics import (
     AnswerRelevancyMetric,
+    ConversationCompletenessMetric,
     FaithfulnessMetric,
     GEval,
     HallucinationMetric,
+    KnowledgeRetentionMetric,
+    RoleAdherenceMetric,
     SummarizationMetric,
 )
-from deepeval.test_case import LLMTestCase
+from deepeval.test_case import ConversationalTestCase, LLMTestCase, SingleTurnParams, Turn
 from evalhub.adapter import (
     DefaultCallbacks,
     ErrorInfo,
@@ -44,27 +48,46 @@ from evalhub.adapter.auth import resolve_model_credentials
 
 logger = logging.getLogger(__name__)
 
-# Maps benchmark_id to the DeepEval metric class and required test-case fields.
+# Maps benchmark_id to the DeepEval metric class and required test-case fields (single-turn).
 BENCHMARK_METRICS = {
-    "deepeval-faithfulness": {
+    "faithfulness": {
         "class": FaithfulnessMetric,
         "required_columns": ["input", "actual_output", "retrieval_context"],
     },
-    "deepeval-relevancy": {
+    "relevancy": {
         "class": AnswerRelevancyMetric,
         "required_columns": ["input", "actual_output"],
     },
-    "deepeval-hallucination": {
+    "hallucination": {
         "class": HallucinationMetric,
         "required_columns": ["input", "actual_output", "context"],
     },
-    "deepeval-correctness": {
+    "correctness": {
         "class": GEval,
         "required_columns": ["input", "actual_output", "expected_output"],
     },
-    "deepeval-summarization": {
+    "summarization": {
         "class": SummarizationMetric,
         "required_columns": ["input", "actual_output"],
+    },
+}
+
+# Maps benchmark_id to the DeepEval metric class and required fields (multi-turn).
+CONVERSATIONAL_BENCHMARK_METRICS = {
+    "conversation-completeness": {
+        "class": ConversationCompletenessMetric,
+        "required_columns": ["turns"],
+        "optional_columns": ["chatbot_role", "scenario", "expected_outcome"],
+    },
+    "role-adherence": {
+        "class": RoleAdherenceMetric,
+        "required_columns": ["turns", "chatbot_role"],
+        "optional_columns": ["scenario"],
+    },
+    "knowledge-retention": {
+        "class": KnowledgeRetentionMetric,
+        "required_columns": ["turns"],
+        "optional_columns": ["chatbot_role", "scenario"],
     },
 }
 
@@ -147,6 +170,48 @@ def _build_test_cases(records: list[dict[str, Any]], benchmark_id: str) -> list[
     return test_cases
 
 
+def _build_conversational_test_cases(
+    records: list[dict[str, Any]], benchmark_id: str
+) -> list[ConversationalTestCase]:
+    """Convert raw records into DeepEval ConversationalTestCase objects.
+
+    Each record must have a ``turns`` field: either a list of dicts (JSONL/JSON)
+    or a JSON-encoded string (CSV). Each turn dict requires ``role`` and ``content``.
+    Optional top-level fields ``chatbot_role``, ``scenario``, and ``expected_outcome``
+    are forwarded to the test case when present.
+    """
+    spec = CONVERSATIONAL_BENCHMARK_METRICS.get(benchmark_id)
+    if not spec:
+        raise ValueError(f"Unknown conversational benchmark_id: {benchmark_id}")
+
+    test_cases: list[ConversationalTestCase] = []
+    for i, rec in enumerate(records):
+        missing = [c for c in spec["required_columns"] if c not in rec or rec[c] is None]
+        if missing:
+            logger.warning("Skipping record %d: missing columns %s", i, missing)
+            continue
+
+        raw_turns = rec["turns"]
+        if isinstance(raw_turns, str):
+            raw_turns = json.loads(raw_turns)
+
+        turns = [Turn(role=t["role"], content=t["content"]) for t in raw_turns]
+
+        kwargs: dict[str, Any] = {"turns": turns}
+        for field in ("chatbot_role", "scenario", "expected_outcome"):
+            val = rec.get(field)
+            if val:
+                kwargs[field] = str(val)
+
+        test_cases.append(ConversationalTestCase(**kwargs))
+
+    if not test_cases:
+        raise ValueError(f"No valid conversational test cases built from {len(records)} records")
+
+    logger.info("Built %d conversational test cases for %s", len(test_cases), benchmark_id)
+    return test_cases
+
+
 def _resolve_judge_model(judge_name: str, judge_url: str) -> Any:
     """Return a GPTModel pointed at an OpenAI-compatible endpoint.
 
@@ -177,16 +242,16 @@ def _resolve_judge_model(judge_name: str, judge_url: str) -> Any:
 
 def _create_metric(benchmark_id: str, model: Any, threshold: float):
     """Instantiate the DeepEval metric for the given benchmark."""
-    if benchmark_id == "deepeval-correctness":
+    if benchmark_id == "correctness":
         return GEval(
             name="Correctness",
             criteria="Determine if the actual output is factually correct compared to the expected output.",
-            evaluation_params=["input", "actual_output", "expected_output"],
+            evaluation_params=[SingleTurnParams.INPUT, SingleTurnParams.ACTUAL_OUTPUT, SingleTurnParams.EXPECTED_OUTPUT],
             model=model,
             threshold=threshold,
         )
 
-    spec = BENCHMARK_METRICS.get(benchmark_id)
+    spec = BENCHMARK_METRICS.get(benchmark_id) or CONVERSATIONAL_BENCHMARK_METRICS.get(benchmark_id)
     if not spec:
         raise ValueError(f"Unknown benchmark_id: {benchmark_id}")
 
@@ -246,6 +311,19 @@ class DeepEvalAdapter(FrameworkAdapter):
             threshold = float(config.parameters.get("threshold", 0.5))
             dataset_format = config.parameters.get("dataset_format", "csv")
 
+            # Allow callers to tune retry/timeout behaviour; deepeval reads these from the environment.
+            # Default is 300s to accommodate reasoning models (e.g. DeepSeek-R1) that emit long
+            # chain-of-thought sequences before the first response token.
+            per_attempt_timeout = config.parameters.get("per_attempt_timeout_seconds", 300.0)
+            if per_attempt_timeout is not None:
+                os.environ["DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE"] = str(float(per_attempt_timeout))
+            retry_max_attempts = config.parameters.get("retry_max_attempts")
+            if retry_max_attempts is not None:
+                os.environ["DEEPEVAL_RETRY_MAX_ATTEMPTS"] = str(int(retry_max_attempts))
+            retry_cap_seconds = config.parameters.get("retry_cap_seconds")
+            if retry_cap_seconds is not None:
+                os.environ["DEEPEVAL_RETRY_CAP_SECONDS"] = str(float(retry_cap_seconds))
+
             # --- Phase: LOADING_DATA ---
             callbacks.report_status(
                 JobStatusUpdate(
@@ -261,7 +339,11 @@ class DeepEvalAdapter(FrameworkAdapter):
 
             data_dir = _resolve_data_dir(config)
             records = _load_dataset(data_dir, dataset_format)
-            test_cases = _build_test_cases(records, benchmark_id)
+            is_conversational = benchmark_id in CONVERSATIONAL_BENCHMARK_METRICS
+            if is_conversational:
+                test_cases = _build_conversational_test_cases(records, benchmark_id)
+            else:
+                test_cases = _build_test_cases(records, benchmark_id)
 
             # --- Phase: RUNNING_EVALUATION ---
             callbacks.report_status(
@@ -278,7 +360,17 @@ class DeepEvalAdapter(FrameworkAdapter):
 
             judge = _resolve_judge_model(judge_name, judge_url)
             metric = _create_metric(benchmark_id, judge, threshold)
-            eval_results = evaluate(test_cases=test_cases, metrics=[metric])
+            throttle_value = float(config.parameters.get("throttle_value", 0))
+            max_concurrent = int(config.parameters.get("max_concurrent", 1))
+            eval_results = evaluate(
+                test_cases=test_cases,
+                metrics=[metric],
+                async_config=AsyncConfig(
+                    run_async=True,
+                    throttle_value=throttle_value,
+                    max_concurrent=max_concurrent,
+                ),
+            )
 
             # --- Phase: POST_PROCESSING ---
             callbacks.report_status(
@@ -357,13 +449,12 @@ class DeepEvalAdapter(FrameworkAdapter):
         if not config.benchmark_id:
             raise ValueError("benchmark_id is required")
 
-        if config.benchmark_id not in BENCHMARK_METRICS:
+        all_benchmarks = {**BENCHMARK_METRICS, **CONVERSATIONAL_BENCHMARK_METRICS}
+        if config.benchmark_id not in all_benchmarks:
             raise ValueError(
                 f"Unsupported benchmark_id: {config.benchmark_id!r}. "
-                f"Supported: {', '.join(BENCHMARK_METRICS)}"
+                f"Supported: {', '.join(all_benchmarks)}"
             )
-
-        pass
 
     def _extract_results(
         self, eval_results: Any, benchmark_id: str
@@ -394,7 +485,7 @@ class DeepEvalAdapter(FrameworkAdapter):
         else:
             mean_score = 0.0
 
-        if benchmark_id == "deepeval-faithfulness":
+        if benchmark_id == "faithfulness":
             results.append(
                 EvaluationResult(
                     metric_name="faithfulness_score",
@@ -416,7 +507,7 @@ class DeepEvalAdapter(FrameworkAdapter):
                     metric_type="int",
                 )
             )
-        elif benchmark_id == "deepeval-relevancy":
+        elif benchmark_id == "relevancy":
             results.append(
                 EvaluationResult(
                     metric_name="relevancy_score",
@@ -424,7 +515,7 @@ class DeepEvalAdapter(FrameworkAdapter):
                     metric_type="float",
                 )
             )
-        elif benchmark_id == "deepeval-hallucination":
+        elif benchmark_id == "hallucination":
             results.append(
                 EvaluationResult(
                     metric_name="hallucination_score",
@@ -439,7 +530,7 @@ class DeepEvalAdapter(FrameworkAdapter):
                     metric_type="int",
                 )
             )
-        elif benchmark_id == "deepeval-correctness":
+        elif benchmark_id == "correctness":
             results.append(
                 EvaluationResult(
                     metric_name="correctness_score",
@@ -447,10 +538,34 @@ class DeepEvalAdapter(FrameworkAdapter):
                     metric_type="float",
                 )
             )
-        elif benchmark_id == "deepeval-summarization":
+        elif benchmark_id == "summarization":
             results.append(
                 EvaluationResult(
                     metric_name="summarization_score",
+                    metric_value=round(mean_score, 6),
+                    metric_type="float",
+                )
+            )
+        elif benchmark_id == "conversation-completeness":
+            results.append(
+                EvaluationResult(
+                    metric_name="conversation_completeness_score",
+                    metric_value=round(mean_score, 6),
+                    metric_type="float",
+                )
+            )
+        elif benchmark_id == "role-adherence":
+            results.append(
+                EvaluationResult(
+                    metric_name="role_adherence_score",
+                    metric_value=round(mean_score, 6),
+                    metric_type="float",
+                )
+            )
+        elif benchmark_id == "knowledge-retention":
+            results.append(
+                EvaluationResult(
+                    metric_name="knowledge_retention_score",
                     metric_value=round(mean_score, 6),
                     metric_type="float",
                 )
@@ -464,11 +579,14 @@ class DeepEvalAdapter(FrameworkAdapter):
     ) -> Optional[float]:  # type: ignore[override]
         """Compute overall score as the primary aggregate metric for the benchmark."""
         primary_metric = {
-            "deepeval-faithfulness": "faithfulness_score",
-            "deepeval-relevancy": "relevancy_score",
-            "deepeval-hallucination": "hallucination_score",
-            "deepeval-correctness": "correctness_score",
-            "deepeval-summarization": "summarization_score",
+            "faithfulness": "faithfulness_score",
+            "relevancy": "relevancy_score",
+            "hallucination": "hallucination_score",
+            "correctness": "correctness_score",
+            "summarization": "summarization_score",
+            "conversation-completeness": "conversation_completeness_score",
+            "role-adherence": "role_adherence_score",
+            "knowledge-retention": "knowledge_retention_score",
         }.get(benchmark_id)
 
         if primary_metric:

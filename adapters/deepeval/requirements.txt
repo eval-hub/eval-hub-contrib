@@ -1,5 +1,5 @@
 eval-hub-sdk[adapter]>=0.1.7
-deepeval>=2.0.0
+deepeval>=4.0.0
 litellm>=1.0.0
 pandas>=2.0.0
 pydantic>=2.0.0

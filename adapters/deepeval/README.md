@@ -2,17 +2,27 @@
 
 This directory is the **eval-hub community adapter** for **[DeepEval](https://github.com/confident-ai/deepeval)**, an open-source LLM evaluation framework. DeepEval provides a suite of metrics for evaluating LLM outputs, including faithfulness, answer relevancy, hallucination detection, factual correctness, and summarization quality. It uses an LLM-as-judge approach where a separate model scores the outputs.
 
-**What this adapter does:** It plugs DeepEval's metrics into **evalhub-sdk**'s `FrameworkAdapter` contract. Eval-hub supplies a **JobSpec** (from a mounted job file in Kubernetes or `EVALHUB_JOB_SPEC_PATH` locally). The adapter loads test data from CSV, JSONL, or JSON files, constructs DeepEval `LLMTestCase` objects, runs the appropriate metric, maps results into `JobResults` / `EvaluationResult` metrics, and reports progress to the eval-hub sidecar.
+**What this adapter does:** It plugs DeepEval's metrics into **evalhub-sdk**'s `FrameworkAdapter` contract. Eval-hub supplies a **JobSpec** (from a mounted job file in Kubernetes or `EVALHUB_JOB_SPEC_PATH` locally). The adapter loads test data from CSV, JSONL, or JSON files, constructs DeepEval test case objects (single-turn `LLMTestCase` or multi-turn `ConversationalTestCase`), runs the appropriate metric, maps results into `JobResults` / `EvaluationResult` metrics, and reports progress to the eval-hub sidecar.
 
 ## Available Benchmarks
 
+### Single-Turn Benchmarks
+
 | Benchmark ID | Category | Description | Metrics |
 |---|---|---|---|
-| `deepeval-faithfulness` | rag-evaluation | Tests if output is faithful to provided context | `faithfulness_score`, `claims_count`, `supported_claims_count` |
-| `deepeval-relevancy` | rag-evaluation | Tests if output is relevant to the input query | `relevancy_score` |
-| `deepeval-hallucination` | safety | Detects hallucinated content not grounded in context | `hallucination_score`, `hallucination_detected` |
-| `deepeval-correctness` | accuracy | Tests factual correctness against expected output | `correctness_score` |
-| `deepeval-summarization` | nlp | Tests summarization quality | `summarization_score` |
+| `faithfulness` | rag-evaluation | Tests if output is faithful to provided context | `faithfulness_score`, `claims_count`, `supported_claims_count` |
+| `relevancy` | rag-evaluation | Tests if output is relevant to the input query | `relevancy_score` |
+| `hallucination` | safety | Detects hallucinated content not grounded in context | `hallucination_score`, `hallucination_detected` |
+| `correctness` | accuracy | Tests factual correctness against expected output | `correctness_score` |
+| `summarization` | nlp | Tests summarization quality | `summarization_score` |
+
+### Multi-Turn Benchmarks
+
+| Benchmark ID | Category | Description | Metrics |
+|---|---|---|---|
+| `conversation-completeness` | multi-turn | Tests if a chatbot addresses all user needs across a conversation | `conversation_completeness_score` |
+| `role-adherence` | multi-turn | Tests if a chatbot stays in its assigned persona throughout a conversation | `role_adherence_score` |
+| `knowledge-retention` | multi-turn | Tests if a chatbot retains information disclosed by the user in earlier turns | `knowledge_retention_score` |
 
 ## Prerequisites
 
@@ -23,15 +33,47 @@ This directory is the **eval-hub community adapter** for **[DeepEval](https://gi
 | **Judge model API key** | An OpenAI or Anthropic API key for the judge model (set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`) |
 | **Test dataset** | CSV, JSONL, or JSON files with required columns per benchmark (see below) |
 
-### Required Dataset Columns
+### Required Dataset Columns — Single-Turn
 
 | Benchmark | Required Columns |
 |---|---|
-| `deepeval-faithfulness` | `input`, `actual_output`, `retrieval_context` |
-| `deepeval-relevancy` | `input`, `actual_output` |
-| `deepeval-hallucination` | `input`, `actual_output`, `context` |
-| `deepeval-correctness` | `input`, `actual_output`, `expected_output` |
-| `deepeval-summarization` | `input`, `actual_output` |
+| `faithfulness` | `input`, `actual_output`, `retrieval_context` |
+| `relevancy` | `input`, `actual_output` |
+| `hallucination` | `input`, `actual_output`, `context` |
+| `correctness` | `input`, `actual_output`, `expected_output` |
+| `summarization` | `input`, `actual_output` |
+
+### Required Dataset Columns — Multi-Turn
+
+Multi-turn benchmarks use `ConversationalTestCase` and require a `turns` field. **JSONL or JSON are the recommended formats** — using CSV requires `turns` to be a JSON-encoded string.
+
+| Benchmark | Required Columns | Optional Columns |
+|---|---|---|
+| `conversation-completeness` | `turns` | `chatbot_role`, `scenario`, `expected_outcome` |
+| `role-adherence` | `turns`, `chatbot_role` | `scenario` |
+| `knowledge-retention` | `turns` | `chatbot_role`, `scenario` |
+
+**JSONL format (recommended):**
+
+```jsonl
+{"turns": [{"role": "user", "content": "How do I reset my password?"}, {"role": "assistant", "content": "Click 'Forgot password' on the login page."}]}
+{"turns": [{"role": "user", "content": "My account is locked."}, {"role": "assistant", "content": "I can help you unlock it."}]}
+```
+
+**JSONL with `chatbot_role` (required for `role-adherence`):**
+
+```jsonl
+{"turns": [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi! How can I help?"}], "chatbot_role": "friendly customer support agent"}
+```
+
+**CSV format (turns must be a JSON-encoded string):**
+
+```csv
+turns,chatbot_role
+"[{""role"": ""user"", ""content"": ""Hello""}, {""role"": ""assistant"", ""content"": ""Hi!""}]",support agent
+```
+
+Each turn must have `role` (`"user"` or `"assistant"`) and `content` (string). Optional per-turn fields such as `retrieval_context` and `tools_called` are supported by DeepEval but not required by these benchmarks.
 
 ## Local Testing
 
@@ -50,7 +92,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 {
   "id": "deepeval-local-001",
   "provider_id": "deepeval",
-  "benchmark_id": "deepeval-faithfulness",
+  "benchmark_id": "faithfulness",
   "benchmark_index": 0,
   "model": {
     "url": "https://api.openai.com/v1",
@@ -96,10 +138,17 @@ make push-deepeval REGISTRY=quay.io/your-org VERSION=v1.0.0
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `eval_model_name` | string | Yes | - | Judge model name (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
+| `eval_model_name` | string | No | model.name | Judge model name (e.g. `microsoft-phi-4`, `gpt-4o`). Defaults to the evaluated model. |
+| `eval_model_url` | string | No | model.url | Judge model base URL. Defaults to the evaluated model's URL. |
 | `threshold` | float | No | `0.5` | Minimum pass threshold for metric scores |
-| `dataset_format` | string | No | `csv` | Input dataset format: `csv`, `jsonl`, or `json` |
+| `dataset_format` | string | No | `csv` | Input dataset format: `csv`, `jsonl`, or `json`. Use `jsonl` for multi-turn benchmarks. |
 | `data_dir` | string | No | - | Path to dataset directory (overridden by `/test_data` or `/data` mounts) |
+| `chatbot_role` | string | No | - | Chatbot persona for Role Adherence (e.g. `"helpful support agent"`). Can also be set per-record in the dataset. |
+| `per_attempt_timeout_seconds` | float | No | `300.0` | Per-attempt timeout for each LLM judge call. Default accommodates reasoning models (e.g. DeepSeek-R1, Phi-4) with long chain-of-thought output. Reduce for faster non-reasoning judges. |
+| `retry_max_attempts` | int | No | `2` | Total LLM call attempts per metric (first attempt + retries). |
+| `retry_cap_seconds` | float | No | `5.0` | Maximum backoff (seconds) between retry attempts. |
+| `max_concurrent` | int | No | `1` | Maximum test cases evaluated concurrently. Lower values reduce burst load on the judge endpoint. |
+| `throttle_value` | float | No | `0` | Seconds to wait between test case evaluations. Use with `max_concurrent` to pace a rate-limited endpoint. |
 
 ## Layout
 
