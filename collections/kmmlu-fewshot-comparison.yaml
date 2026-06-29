@@ -1,0 +1,30 @@
+id: kmmlu-fewshot-comparison
+name: KMMLU Law — Few-Shot Comparison
+category: language-korean
+description: >
+  Compares zero-shot and five-shot prompting on the Korean MMLU Law subset.
+  Submit as two jobs targeting the same MLflow experiment to track the impact
+  of prompting strategy. This collection defines the 5-shot reference run;
+  the 0-shot baseline is covered by korean-kmmlu-smoke-test.
+tags:
+  - korean
+  - kmmlu
+  - fewshot-comparison
+  - law
+  - prompting-strategy
+  - lm-evaluation-harness
+pass_criteria:
+  # 5-shot should meaningfully outperform the 0-shot baseline (0.30)
+  threshold: 0.45
+benchmarks:
+  - id: kmmlu_direct_law
+    provider_id: lm_evaluation_harness
+    weight: 1
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.45   # 5-shot expected gain: +0.10-0.20 over 0-shot baseline
+    parameters:
+      num_fewshot: 5
+      limit: 5
