@@ -45,6 +45,7 @@ from evalhub.adapter import (
     MessageInfo,
 )
 from evalhub.adapter.auth import resolve_model_credentials
+from evalhub.adapter.mlflow import MlflowArtifact
 
 logger = logging.getLogger(__name__)
 
@@ -402,7 +403,7 @@ class DeepEvalAdapter(FrameworkAdapter):
             )
 
             duration = time.time() - start_time
-            return JobResults(
+            job_results = JobResults(
                 id=config.id,
                 benchmark_id=config.benchmark_id,
                 benchmark_index=config.benchmark_index,
@@ -421,6 +422,40 @@ class DeepEvalAdapter(FrameworkAdapter):
                     "data_dir": data_dir,
                 },
             )
+
+            experiment_name = (config.experiment_name or "").strip()
+            if not experiment_name:
+                raw = config.parameters.get("mlflow_experiment_name")
+                if isinstance(raw, str) and raw.strip():
+                    experiment_name = raw.strip()
+
+            if experiment_name:
+                try:
+                    summary = {
+                        "benchmark_id": benchmark_id,
+                        "overall_score": overall_score,
+                        "num_examples_evaluated": len(test_cases),
+                        "results": [
+                            {"metric_name": r.metric_name, "metric_value": r.metric_value}
+                            for r in evaluation_results
+                        ],
+                    }
+                    summary_bytes = json.dumps(summary, indent=2, default=str).encode()
+                    spec = config.model_copy(update={"experiment_name": experiment_name})
+                    rid = callbacks.mlflow.save(
+                        job_results,
+                        spec,
+                        artifacts=[
+                            MlflowArtifact("results_summary.json", summary_bytes, "application/json")
+                        ],
+                    )
+                    if rid:
+                        job_results.mlflow_run_id = rid
+                        logger.info("MLflow run saved: %s (experiment=%s)", rid, experiment_name)
+                except Exception as exc:
+                    logger.warning("MLflow save failed (job still completes): %s", exc)
+
+            return job_results
 
         except Exception as exc:
             logger.exception("DeepEval evaluation failed")
