@@ -572,7 +572,7 @@ class LightEvalAdapter(FrameworkAdapter):
 
                 evaluation_results.append(
                     EvaluationResult(
-                        metric_name=clean_metric,
+                        metric_name=f"{clean_task}.{clean_metric}",
                         metric_value=metric_value,
                         metric_type=metric_type,
                         confidence_interval=confidence_interval,
