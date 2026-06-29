@@ -59,7 +59,7 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
 
     # Inject HF_TOKEN from sidecar-mounted secret if not already in env.
     # inspect-evals benchmarks (e.g. humaneval) download datasets from HF Hub.
-    if "HF_TOKEN" not in env:
+    if not env.get("HF_TOKEN"):
         hf_token = read_model_auth_key("hf-token")
         if hf_token:
             env["HF_TOKEN"] = hf_token
