@@ -96,8 +96,8 @@ def _parse_model_roles(cmd: list[str]) -> dict:
     return roles
 
 
-def test_petri_model_roles_via_env_var_mixed_apis(job_spec_path, tmp_path, monkeypatch):
-    """Petri routing: model names preserved in env var, no model flags in command."""
+def test_petri_model_roles_via_cli_flags_mixed_apis(job_spec_path, tmp_path, monkeypatch):
+    """Petri routing: all roles passed as --model-role CLI flags; model names preserved."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
     adapter = InspectAdapter(job_spec_path=job_spec_path)
@@ -109,22 +109,21 @@ def test_petri_model_roles_via_env_var_mixed_apis(job_spec_path, tmp_path, monke
     env = adapter._build_env(adapter.job_spec, "petri")
     cmd = adapter._build_command(adapter.job_spec, "petri", "inspect_petri/audit", tmp_path, None, env)
 
-    # Commands must not contain model names
-    assert "--model-role" not in cmd
+    # Roles must be in --model-role CLI flags (Click multiple=True takes CLI OR env, never both)
+    assert "--model-role" in cmd
     assert "--model" not in cmd
-    # Env var is set and preserves user-supplied model names
-    roles_env = env.get("INSPECT_EVAL_MODEL_ROLE", "")
-    assert roles_env != ""
-    assert "claude-sonnet-4-6" in roles_env   # auditor bare name preserved
-    assert "claude-opus-4-7" in roles_env      # judge bare name preserved
-    assert "ibm-granite/granite-3.3-8b-instruct" in roles_env  # target bare name preserved
-    assert "auditor=" in roles_env
-    assert "target=" in roles_env
-    assert "judge=" in roles_env
+    roles = _parse_model_roles(cmd)
+    assert "auditor" in roles
+    assert "target" in roles
+    assert "judge" in roles
+    # User-supplied model names are preserved in the routing spec
+    assert "claude-sonnet-4-6" in str(roles["auditor"])
+    assert "claude-opus-4-7" in str(roles["judge"])
+    assert "ibm-granite/granite-3.3-8b-instruct" in str(roles["target"])
 
 
-def test_petri_model_roles_via_env_var_all_openai_compat(job_spec_path, tmp_path, monkeypatch):
-    """All roles on same endpoint: env var set, command clean, model names preserved."""
+def test_petri_model_roles_via_cli_flags_all_openai_compat(job_spec_path, tmp_path, monkeypatch):
+    """All roles on same endpoint: --model-role flags in command, model names preserved."""
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "EMPTY")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -137,11 +136,12 @@ def test_petri_model_roles_via_env_var_all_openai_compat(job_spec_path, tmp_path
     env = adapter._build_env(adapter.job_spec, "petri")
     cmd = adapter._build_command(adapter.job_spec, "petri", "inspect_petri/audit", tmp_path, None, env)
 
-    assert "--model-role" not in cmd
+    assert "--model-role" in cmd
     assert "--model" not in cmd
-    roles_env = env.get("INSPECT_EVAL_MODEL_ROLE", "")
-    assert "meta-llama/Llama-3.3-70B-Instruct" in roles_env
-    assert "ibm-granite/granite-3.3-8b-instruct" in roles_env
+    roles = _parse_model_roles(cmd)
+    assert "meta-llama/Llama-3.3-70B-Instruct" in str(roles["auditor"])
+    assert "meta-llama/Llama-3.3-70B-Instruct" in str(roles["judge"])
+    assert "ibm-granite/granite-3.3-8b-instruct" in str(roles["target"])
 
 
 def test_petri_command_injects_seed_tag(job_spec_path, tmp_path, monkeypatch):
@@ -236,7 +236,12 @@ def test_client_selection_no_credentials_raises(job_spec_path, monkeypatch):
 
 
 def test_target_model_name_preserved_with_url(job_spec_path):
-    """model.url present: user-supplied model name preserved in routing spec."""
+    """model.url present: user-supplied model name preserved in routing spec.
+
+    base_url is NOT included in the spec — build_env sets OPENAI_BASE_URL from
+    config.model.url so the provider picks it up via the env var. The spec only
+    carries model_args to disable the Responses API.
+    """
     import json as _json
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.model.name = "ibm-granite/granite-3.3-8b-instruct"
@@ -246,7 +251,10 @@ def test_target_model_name_preserved_with_url(job_spec_path):
     parsed = _json.loads(spec)
     # User's model name is preserved unchanged in the routing spec
     assert "ibm-granite/granite-3.3-8b-instruct" in parsed["model"]
-    assert parsed["base_url"] == "http://vllm:8080/v1"
+    # base_url is set via OPENAI_BASE_URL env var, not inlined in the spec
+    assert "base_url" not in parsed
+    # Responses API is disabled to avoid 405 on /responses/input_tokens
+    assert parsed.get("model_args", {}).get("responses_api") is False
 
 
 def test_target_model_name_preserved_anthropic(job_spec_path):
@@ -309,9 +317,11 @@ def test_per_role_base_url_creates_inline_dict(job_spec_path, tmp_path, monkeypa
     assert "meta-llama/Llama-3.3-70B-Instruct" in roles["judge"]["model"]
     assert roles["judge"]["base_url"] == "http://vllm-judge:8080/v1"
     assert roles["judge"]["api_key"] == "EMPTY"
-    # target: uses per-role URL from model.url
+    # target: uses OPENAI_BASE_URL (set from model.url in build_env); base_url is not
+    # inlined in the spec — it's carried via the env var, not the role spec.
     assert isinstance(roles["target"], dict)
-    assert roles["target"]["base_url"] == "http://vllm-target:8080/v1"
+    assert "ibm-granite/granite-3.3-8b-instruct" in roles["target"]["model"]
+    assert "base_url" not in roles["target"]
 
 
 # ---------------------------------------------------------------------------
