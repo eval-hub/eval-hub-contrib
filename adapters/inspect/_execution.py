@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from evalhub.adapter import JobSpec
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 
 from _benchmarks import PETRI_SEED_MAP
 from _routing import _is_ollama_endpoint, role_model_spec, route_model, select_client, target_model_spec
@@ -16,17 +17,16 @@ logger = logging.getLogger(__name__)
 def build_env(config: JobSpec, mode: str) -> dict[str, str]:
     """Build the subprocess environment from job credentials and model routing.
 
-    Model routing is injected via Inspect AI env vars so that model names
-    never appear in the CLI command string (and therefore not in logs).
-    The user-supplied model names are read as-is from the job spec; the
-    internal routing details required by the Inspect AI framework are an
-    implementation detail of this adapter.
+    For standard mode, INSPECT_EVAL_MODEL is injected via env var to keep the
+    model name out of the CLI command log. For petri/bloom mode, all model roles
+    are passed as --model-role CLI flags (see build_command) because Click's
+    multiple=True option takes CLI args OR the env var, never both — so mixing
+    them silently drops whichever source loses.
 
-      INSPECT_EVAL_MODEL       — main model for standard mode
-      INSPECT_EVAL_MODEL_ROLE  — per-role models for Petri/Bloom mode
-      OPENAI_BASE_URL          — endpoint for OpenAI-compatible APIs
-      OPENAI_API_KEY           — key for OpenAI-compatible APIs
-      ANTHROPIC_API_KEY        — key for Anthropic Messages API
+      INSPECT_EVAL_MODEL  — main model for standard mode
+      OPENAI_BASE_URL     — endpoint for OpenAI-compatible APIs
+      OPENAI_API_KEY      — key for OpenAI-compatible APIs
+      ANTHROPIC_API_KEY   — key for Anthropic Messages API
     """
     env = os.environ.copy()
     p = config.parameters
@@ -37,9 +37,11 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
         else:
             env["OPENAI_BASE_URL"] = config.model.url
 
-    # Inspect AI requires OPENAI_API_KEY for OpenAI-compat endpoints that don't
-    # validate authentication. Not needed for Ollama (it uses its own auth).
-    openai_key = p.get("api_key") or env.get("OPENAI_API_KEY", "")
+    # Resolve API key: sidecar-mounted secret takes precedence, then job spec
+    # parameter, then existing env var, then a dummy fallback for endpoints that
+    # don't require auth (e.g. bare vLLM without a proxy).
+    creds = resolve_model_credentials()
+    openai_key = creds.api_key or p.get("api_key") or env.get("OPENAI_API_KEY", "")
     if openai_key:
         env["OPENAI_API_KEY"] = openai_key
     elif env.get("OPENAI_BASE_URL") and not env.get("OPENAI_API_KEY"):
@@ -51,52 +53,20 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
 
     # ANTHROPIC_BASE_URL passes through from host env.
 
-    # Inject model routing via Inspect AI env vars — hidden from CLI command logs.
-    if mode in ("petri", "bloom"):
-        env["INSPECT_EVAL_MODEL_ROLE"] = _build_model_role_env(config, env)
-    else:
+    if mode not in ("petri", "bloom"):
         client = select_client(env, endpoint_url=config.model.url)
         env["INSPECT_EVAL_MODEL"] = route_model(config.model.name, client)
 
+    # Inject HF_TOKEN from sidecar-mounted secret if not already in env.
+    # inspect-evals benchmarks (e.g. humaneval) download datasets from HF Hub.
+    if "HF_TOKEN" not in env:
+        hf_token = read_model_auth_key("hf-token")
+        if hf_token:
+            env["HF_TOKEN"] = hf_token
+            logger.info("Injected HF_TOKEN from mounted secret")
+
     env["INSPECT_NO_TELEMETRY"] = "1"
     return env
-
-
-def _build_model_role_env(config: JobSpec, env: dict[str, str]) -> str:
-    """Build the INSPECT_EVAL_MODEL_ROLE env var value (comma-separated roles).
-
-    Uses simple provider/model strings for all roles. OPENAI_BASE_URL and
-    ANTHROPIC_API_KEY env vars handle endpoint routing — no inline base_url
-    needed. This keeps the inspect eval CLI command free of model names.
-
-    Per-role URL overrides (via {role}_base_url params) use --model-role CLI
-    flags as fallback since JSON dicts with commas break Click's env var parsing.
-    """
-    p = config.parameters
-    # Detect if any role needs a per-role URL override (JSON dict spec)
-    has_per_role_url = any(
-        p.get(f"{role}_base_url") or p.get(f"{role}_anthropic_base_url")
-        for role in ("auditor", "judge", "target", "realism")
-    )
-    if has_per_role_url:
-        return ""  # sentinel: use --model-role CLI flags instead
-
-    # Build simple provider/model strings — URL routing via env vars
-    client = select_client(env, endpoint_url=config.model.url)
-    target_str  = route_model(config.model.name, client)
-    auditor_str = route_model(p.get("auditor_model", "claude-sonnet-4-6"), select_client(env))
-    judge_str   = route_model(p.get("judge_model",   "claude-opus-4-7"),   select_client(env))
-
-    parts = [f"auditor={auditor_str}", f"target={target_str}", f"judge={judge_str}"]
-
-    realism_name = p.get("realism_model")
-    if realism_name:
-        parts.append(f"realism={route_model(realism_name, select_client(env))}")
-
-    # Click splits INSPECT_EVAL_MODEL_ROLE on newlines for multiple=True options.
-    # Commas cannot be used: Inspect AI treats them as multi-model separators
-    # within a single role spec, which causes a resolution error.
-    return "\n".join(parts)
 
 
 def build_command(
@@ -107,11 +77,7 @@ def build_command(
     behavior_dir: Path | None,
     env: dict[str, str],
 ) -> list[str]:
-    """Build the inspect eval CLI command.
-
-    Model routing is handled entirely via env vars set by build_env().
-    Model names never appear in the command string.
-    """
+    """Build the inspect eval CLI command."""
     cmd = [
         "inspect", "eval", task_spec,
         "--log-dir", str(log_dir),
@@ -120,16 +86,18 @@ def build_command(
     ]
 
     if mode in ("petri", "bloom"):
-        # Model roles are normally set via INSPECT_EVAL_MODEL_ROLE env var.
-        # Fall back to --model-role flags only when per-role JSON dict specs
-        # are in use (i.e. env var was set to empty sentinel by build_env).
-        if not env.get("INSPECT_EVAL_MODEL_ROLE"):
-            cmd += _petri_model_role_flags(config, env)
+        # All model roles via --model-role CLI flags. Click's multiple=True
+        # option takes CLI args OR env var (INSPECT_EVAL_MODEL_ROLE), never
+        # both — so we use only CLI flags to avoid silently dropping roles.
+        cmd += _petri_model_role_flags(config, env)
         cmd += _petri_task_flags(config, mode, behavior_dir)
     else:
         # Main model is set via INSPECT_EVAL_MODEL env var — no --model flag needed.
-        if config.parameters.get("sandbox", "none") not in ("none", None):
-            cmd += ["--sandbox", config.parameters["sandbox"]]
+        # Default to "local" sandbox — Docker is not available in Kubernetes pods.
+        # Override by setting parameters.sandbox to another provider (e.g. "docker", "k8s").
+        sandbox = config.parameters.get("sandbox", "local")
+        if sandbox not in ("none", None):
+            cmd += ["--sandbox", sandbox]
 
     max_tasks = config.parameters.get("max_tasks")
     if max_tasks:
@@ -152,8 +120,15 @@ def build_command(
 
 
 def _petri_model_role_flags(config: JobSpec, env: dict[str, str]) -> list[str]:
-    """Fallback: --model-role CLI flags used only when per-role JSON dict specs
-    are present (e.g. per-role URL overrides). Normally replaced by env var."""
+    """Build --model-role CLI flags for all petri/bloom roles.
+
+    Target gets a JSON dict with model_args to explicitly disable the Responses
+    API — vLLM doesn't implement POST /responses/input_tokens which inspect_ai
+    calls during compaction when responses_api is True or inferred True.
+
+    auditor_model and judge_model can be overridden via job parameters;
+    defaults to claude-sonnet-4-6 / claude-opus-4-7 when not specified.
+    """
     p = config.parameters
     auditor = role_model_spec(p.get("auditor_model", "claude-sonnet-4-6"), "auditor", p, env)
     judge   = role_model_spec(p.get("judge_model",   "claude-opus-4-7"),   "judge",   p, env)
@@ -211,16 +186,18 @@ def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
     except subprocess.TimeoutExpired as e:
         raise RuntimeError("inspect eval timed out after 7200s.") from e
 
+    if result.returncode != 0:
+        logger.error(f"inspect eval stdout:\n{result.stdout[-3000:]}")
+        logger.error(f"inspect eval stderr:\n{result.stderr[-3000:]}")
+        raise RuntimeError(
+            f"inspect eval failed (exit {result.returncode}).\n"
+            f"stderr: {result.stderr[-2000:]}"
+        )
+
     if result.stdout:
         logger.debug(f"stdout (tail): {result.stdout[-2000:]}")
     if result.stderr:
         logger.debug(f"stderr (tail): {result.stderr[-2000:]}")
-
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"inspect eval failed (exit {result.returncode}).\n"
-            f"stderr: {result.stderr[-1000:]}"
-        )
 
     log_files = sorted(log_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)
     if not log_files:

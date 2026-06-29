@@ -23,6 +23,15 @@ def parse_log(log_file: Path) -> dict[str, Any]:
             f"inspect eval ended with status '{status}'. "
             f"Error: {error_info.get('message', 'unknown')}"
         )
+
+    # Write a copy of the inspect log to /tmp for post-mortem inspection.
+    debug_copy = Path("/tmp") / f"inspect_eval_log_{log_file.stem}.json"
+    try:
+        debug_copy.write_text(json.dumps(data, indent=2))
+        logger.info(f"Inspect log copy written to {debug_copy}")
+    except Exception as exc:
+        logger.warning(f"Could not write debug log copy: {exc}")
+
     return data
 
 
@@ -36,6 +45,12 @@ def extract_results(
 
     samples = eval_log.get("samples") or []
     num_samples = len(samples) if samples else results_section.get("total_samples", 0)
+
+    logger.info(f"extract_results | top-level keys={list(eval_log.keys())}")
+    logger.info(f"extract_results | results keys={list(results_section.keys())}")
+    logger.info(f"extract_results | scores count={len(scores_list)} | num_samples={num_samples}")
+    for i, s in enumerate(scores_list):
+        logger.info(f"extract_results | score[{i}]={s}")
 
     evaluation_results: list[EvaluationResult] = []
     capability_entries: list[CapabilityEvalEntry] = []

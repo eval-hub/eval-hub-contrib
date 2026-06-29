@@ -9,8 +9,8 @@
   },
   "num_examples": 5,
   "parameters": {
-    "auditor_model": "claude-sonnet-4-6",
-    "judge_model": "claude-opus-4-7",
+    "auditor_model": "gpt-oss-20b",
+    "judge_model": "gpt-oss-20b",
     "max_turns": 20,
     "enable_rollback": true,
     "realism_filter": false,

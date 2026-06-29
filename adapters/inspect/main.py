@@ -205,16 +205,10 @@ class InspectAdapter(FrameworkAdapter):
                 job_results.mlflow_run_id = mlflow_run_id
                 logger.info(f"MLflow run recorded: {mlflow_run_id}")
 
-            callbacks.report_status(JobStatusUpdate(
-                status=JobStatus.COMPLETED,
-                phase=JobPhase.COMPLETED,
-                progress=1.0,
-                message=MessageInfo(
-                    message=f"Evaluation completed | samples={num_samples} | score={overall_score}",
-                    message_code="completed",
-                ),
-            ))
-
+            # Do NOT call report_status(COMPLETED) here — report_results() in
+            # main() sends the results payload AND the COMPLETED status in one
+            # atomic event. Calling COMPLETED early locks the sidecar and causes
+            # the subsequent report_results() to get a 409, dropping all metrics.
             return job_results
 
         except Exception as e:

@@ -3,12 +3,11 @@
 import logging
 import subprocess
 from pathlib import Path
-from typing import Any
 
 from evalhub.adapter import JobCallbacks, JobPhase, JobSpec, JobStatus, JobStatusUpdate, MessageInfo
 
 from _benchmarks import BLOOM_TEMPLATE_MAP
-from _routing import role_model_spec
+from _routing import route_model, select_client
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +50,10 @@ def bloom_prepare(
 
     p = config.parameters
     scenarios_name = p.get("scenarios_model") or p.get("auditor_model") or "claude-sonnet-4-6"
-    scenarios_model = role_model_spec(scenarios_name, "scenarios", p, env)
+    # bloom CLI doesn't support the JSON dict model spec (model_args etc.) —
+    # use a bare client/model string.
+    client = select_client(env)
+    scenarios_model = route_model(scenarios_name, client)
     logger.info(f"Running bloom scenarios with model={scenarios_model}")
 
     callbacks.report_status(
