@@ -10,6 +10,7 @@ VERSION ?= latest
 IMAGE_LIGHTEVAL = $(REGISTRY)/community-lighteval:$(VERSION)
 IMAGE_GUIDELLM = $(REGISTRY)/community-guidellm:$(VERSION)
 IMAGE_MTEB = $(REGISTRY)/community-mteb:$(VERSION)
+IMAGE_INSPECT = $(REGISTRY)/community-inspect:$(VERSION)
 IMAGE_DEEPEVAL = $(REGISTRY)/community-deepeval:$(VERSION)
 IMAGE_RAGAS = $(REGISTRY)/community-ragas:$(VERSION)
 IMAGE_SWEBENCH = $(REGISTRY)/community-swebench:$(VERSION)
@@ -24,6 +25,7 @@ help:
 	@echo "  make image-lighteval    - Build LightEval adapter image"
 	@echo "  make image-guidellm     - Build GuideLLM adapter image"
 	@echo "  make image-mteb         - Build MTEB adapter image"
+	@echo "  make image-inspect      - Build Inspect AI adapter image"
 	@echo "  make image-deepeval     - Build DeepEval adapter image"
 	@echo "  make image-ragas        - Build RAGAS adapter image"
 	@echo "  make image-swebench     - Build SWE-bench adapter image"
@@ -33,6 +35,7 @@ help:
 	@echo "  make push-lighteval     - Push LightEval adapter image"
 	@echo "  make push-guidellm      - Push GuideLLM adapter image"
 	@echo "  make push-mteb          - Push MTEB adapter image"
+	@echo "  make push-inspect       - Push Inspect AI adapter image"
 	@echo "  make push-deepeval      - Push DeepEval adapter image"
 	@echo "  make push-ragas         - Push RAGAS adapter image"
 	@echo "  make push-swebench      - Push SWE-bench adapter image"
@@ -42,6 +45,7 @@ help:
 	@echo "  make clean-lighteval    - Remove LightEval adapter image"
 	@echo "  make clean-guidellm     - Remove GuideLLM adapter image"
 	@echo "  make clean-mteb         - Remove MTEB adapter image"
+	@echo "  make clean-inspect      - Remove Inspect AI adapter image"
 	@echo "  make clean-deepeval     - Remove DeepEval adapter image"
 	@echo "  make clean-ragas        - Remove RAGAS adapter image"
 	@echo "  make clean-swebench     - Remove SWE-bench adapter image"
@@ -52,6 +56,7 @@ help:
 	@echo "  make test-lighteval    - Run LightEval adapter tests"
 	@echo "  make test-mteb         - Run MTEB adapter tests"
 	@echo "  make test-clear        - Run CLEAR adapter tests"
+	@echo "  make test-inspect      - Run Inspect AI adapter tests"
 	@echo "  make test-deepeval     - Run DeepEval adapter tests"
 	@echo "  make test-ragas        - Run RAGAS adapter tests"
 	@echo "  make tests             - Run all adapter tests"
@@ -86,6 +91,15 @@ image-mteb:
 	$(BUILD_TOOL) build -t $(IMAGE_MTEB) -f Containerfile .
 	@echo "✅ Built: $(IMAGE_MTEB)"
 
+.PHONY: image-inspect
+image-inspect:
+	@echo "Building Inspect AI adapter image..."
+	cd adapters/inspect && \
+	$(BUILD_TOOL) build -t $(IMAGE_INSPECT) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_INSPECT)"
+
+.PHONY: images
+images: image-lighteval image-guidellm image-mteb image-inspect
 .PHONY: image-deepeval
 image-deepeval:
 	@echo "Building DeepEval adapter image..."
@@ -132,6 +146,14 @@ push-mteb:
 	$(BUILD_TOOL) push $(IMAGE_MTEB)
 	@echo "✅ Pushed: $(IMAGE_MTEB)"
 
+.PHONY: push-inspect
+push-inspect:
+	@echo "Pushing Inspect AI adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_INSPECT)
+	@echo "✅ Pushed: $(IMAGE_INSPECT)"
+
+.PHONY: push-images
+push-images: push-lighteval push-guidellm push-mteb push-inspect
 .PHONY: push-deepeval
 push-deepeval:
 	@echo "Pushing DeepEval adapter image..."
@@ -175,6 +197,14 @@ clean-mteb:
 	$(BUILD_TOOL) rmi $(IMAGE_MTEB) 2>/dev/null || true
 	@echo "✅ Removed: $(IMAGE_MTEB)"
 
+.PHONY: clean-inspect
+clean-inspect:
+	@echo "Removing Inspect AI adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_INSPECT) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_INSPECT)"
+
+.PHONY: clean-images
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-inspect
 .PHONY: clean-deepeval
 clean-deepeval:
 	@echo "Removing DeepEval adapter image..."
@@ -260,6 +290,17 @@ test-clear:
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ CLEAR tests passed"
 
+.PHONY: test-inspect
+test-inspect:
+	@echo "Running Inspect AI adapter tests..."
+	cd adapters/inspect && \
+	test -d .venv || python3 -m venv .venv && \
+	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ Inspect AI tests passed"
+
+.PHONY: tests
+tests: test-guidellm test-lighteval test-mteb test-clear test-inspect
 .PHONY: test-deepeval
 test-deepeval:
 	@echo "Running DeepEval adapter tests..."
