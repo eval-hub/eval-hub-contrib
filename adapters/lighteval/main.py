@@ -35,6 +35,8 @@ from evalhub.adapter import (
     JobStatusUpdate,
     MessageInfo,
     OCIArtifactSpec,
+    read_model_auth_key,
+    resolve_model_credentials,
 )
 
 logger = logging.getLogger(__name__)
@@ -391,10 +393,23 @@ class LightEvalAdapter(FrameworkAdapter):
 
             model_args = f"model_name={model_name}"
 
+            creds = resolve_model_credentials()
+
             if model_config.url:
-                model_args += f",base_url={model_config.url}"
-                # Add dummy API key for custom endpoints that don't require auth
-                model_args += ",api_key=dummy"
+                # model.url is already the sidecar address (http://localhost:8080).
+                # Append /v1 so litellm sends to /v1/chat/completions — the sidecar
+                # forwards the path verbatim to the real model URL.
+                sidecar_url = model_config.url.rstrip("/") + "/v1"
+                model_args += f",base_url={sidecar_url}"
+                if creds.api_key:
+                    # Inject ref token so the sidecar resolves it to the real key.
+                    model_args += f",api_key={creds.api_key}"
+                else:
+                    # litellm rejects a falsy api_key client-side before making any
+                    # HTTP call. "dummy" passes the check; the sidecar sees an empty
+                    # Bearer (isBearerEmpty) and injects the SA token, or for truly
+                    # open models forwards the request as-is.
+                    model_args += ",api_key=dummy"
 
             # Add additional parameters from benchmark_config
             parameters = benchmark_config.get("parameters", {})
@@ -422,15 +437,11 @@ class LightEvalAdapter(FrameworkAdapter):
         logger.info(f"Executing LightEval CLI: {' '.join(cmd)}")
 
         env = None
-        model_auth_dir = Path("/var/run/secrets/model")
-        if model_auth_dir.is_dir() and "HF_TOKEN" not in os.environ:
-            for token_file in model_auth_dir.iterdir():
-                if token_file.is_file():
-                    token = token_file.read_text().strip()
-                    if token:
-                        env = {**os.environ, "HF_TOKEN": token}
-                        logger.info(f"Injected HF_TOKEN from {token_file}")
-                        break
+        if "HF_TOKEN" not in os.environ:
+            hf_token = read_model_auth_key("hf-token")
+            if hf_token:
+                env = {**os.environ, "HF_TOKEN": hf_token}
+                logger.info("Injected HF_TOKEN from model secret")
 
         try:
             # Run LightEval CLI
