@@ -26,8 +26,15 @@ Copy or start from **`meta/job.json`**. Minimum expectations include:
 - **`benchmark_id`**
 - **`parameters.data_dir`** — path to your trace folder
 - **`parameters.eval_model_name`**, **`parameters.provider`**
-- **`parameters.inference_backend`**: **`"litellm"`**
+- **`parameters.inference_backend`**: **`"litellm"`** or **`"endpoint"`**
 - **`model.url`** — OpenAI-compatible API base (often **`…/v1`**)
+
+**How `model.url` is used depends on the backend (`parameters.provider` is required for both):**
+
+| `inference_backend` | How `model.url` is used |
+|---|---|
+| `"litellm"` (default) | The adapter reads `model.url` and sets it as `OPENAI_BASE_URL` before invoking CLEAR. LiteLLM picks up `OPENAI_BASE_URL` automatically and routes all calls through it. If `model.url` is not set, LiteLLM falls back to the OpenAI SDK default. |
+| `"endpoint"` | The adapter passes `model.url` as `endpoint_url` directly in the CLEAR config. |
 
 For **local** runs with **`litellm`**, you often **delete `model.auth`** from the JSON when no Kubernetes Secret exists, and set **`OPENAI_API_KEY`** in the shell **only if** your endpoint requires it. Many **local** servers (for example some **Ollama** setups) do not require a key.
 

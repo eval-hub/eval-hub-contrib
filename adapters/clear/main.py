@@ -580,6 +580,7 @@ class ClearAdapter(FrameworkAdapter):
             "run_name": output_dir.name,
             "provider": config.parameters["provider"],
             "eval_model_name": config.parameters["eval_model_name"],
+            "inference_backend": config.parameters.get("inference_backend", "litellm"),
             "overwrite": config.parameters.get("overwrite", True),
             "max_workers": config.parameters.get("max_workers", 20),
 
@@ -795,7 +796,10 @@ class ClearAdapter(FrameworkAdapter):
             )
         )
 
-        results_dir = Path("/tmp/clear_results") / config.id
+        if self.local_jobs_base_path is not None:
+            results_dir = self.local_jobs_base_path / "results"
+        else:
+            results_dir = Path(__file__).parent / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(results_path, results_dir / "clear_results.json")

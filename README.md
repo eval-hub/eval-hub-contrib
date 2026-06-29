@@ -35,6 +35,14 @@ The Inspect AI adapter exposes alignment auditing and safety evaluation through 
 | `ANTHROPIC_API_KEY` | Anthropic Messages API |
 
 See [adapters/inspect/README.md](adapters/inspect/README.md) for full documentation, deployment examples, and benchmark catalog.
+| Framework | Container Image | Local | Kubernetes | Notes |
+|-----------|----------------|-------|------------|-------|
+| [LightEval](https://github.com/huggingface/lighteval) | `quay.io/evalhub/community-lighteval:latest` | ✗ | ✓ | Lightweight evaluation framework for language models |
+| [GuideLLM](https://github.com/vllm-project/guidellm) | `quay.io/evalhub/community-guidellm:latest` | ✗ | ✓ | Performance benchmarking platform for LLM inference servers |
+| [MTEB](https://github.com/embeddings-benchmark/mteb) | `quay.io/evalhub/community-mteb:latest` | ✗ | ✓ | Massive Text Embedding Benchmark for embedding models |
+| [IBM CLEAR](https://github.com/IBM/CLEAR) | `quay.io/evalhub/community-ibm-clear:latest` | ✓ | ✓ | Agentic trace analysis (LLM-as-judge error reporting) |
+| [RAGAS](https://github.com/explodinggradients/ragas) | `quay.io/evalhub/community-ragas:latest` | ✗ | ✓ | RAG pipeline quality evaluation (faithfulness, relevancy, context precision/recall, and more) |
+| [SWE-bench](https://github.com/SWE-bench/SWE-bench) | `quay.io/evalhub/community-swebench:latest` | ✗ | ✓ | Software engineering benchmark for code patch evaluation |
 
 ## Building Adapters
 

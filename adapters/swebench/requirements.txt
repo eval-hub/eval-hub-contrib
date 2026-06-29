@@ -1,0 +1,4 @@
+eval-hub-sdk[adapter]==0.4.0
+swebench==4.1.0
+kubernetes>=28.0
+requests>=2.31.0

@@ -10,6 +10,7 @@ before this file is imported.
 
 import copy
 import json
+from pathlib import Path
 from unittest.mock import create_autospec
 
 import main
@@ -173,3 +174,51 @@ def test_clear_happy_path(monkeypatch, tmp_path):
     assert JobPhase.LOADING_DATA in phases
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
+
+
+@pytest.mark.integration
+def test_artifacts_use_local_jobs_base_path(tmp_path):
+    """OCI artifacts are saved under local_jobs_base_path/results, not hardcoded /tmp paths."""
+    import shutil
+
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    shutil.copy(Path("meta/job.json"), meta_dir / "job.json")
+
+    adapter = ClearAdapter(job_spec_path=str(meta_dir / "job.json"))
+
+    expected_base = adapter.local_jobs_base_path
+    assert expected_base is not None, "local mode should provide local_jobs_base_path"
+    assert expected_base == tmp_path
+    expected_results_dir = expected_base / "results"
+
+    fake_results = tmp_path / "clear_results.json"
+    fake_results.write_text(json.dumps(CANNED_CLEAR_RESULTS))
+
+    from unittest.mock import MagicMock
+    from evalhub.models.api import OCICoordinates
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.exports = MagicMock()
+    config.exports.oci.coordinates = OCICoordinates(
+        oci_host="quay.io", oci_repository="test/test",
+    )
+
+    callbacks = create_autospec(JobCallbacks)
+    callbacks.create_oci_artifact.return_value = OCIArtifactResult(
+        digest="sha256:fake", reference="fake:latest",
+    )
+
+    adapter._report_artifacts(
+        config=config,
+        callbacks=callbacks,
+        json_results_path=fake_results,
+        evaluation_results=[],
+        overall_score=0.85,
+        num_evaluated=100,
+    )
+
+    assert expected_results_dir.exists()
+    assert (expected_results_dir / "clear_results.json").exists()
+    assert (expected_results_dir / "metrics_summary.json").exists()
+    assert "/tmp/clear_results" not in str(expected_results_dir)

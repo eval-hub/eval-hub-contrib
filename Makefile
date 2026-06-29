@@ -11,6 +11,9 @@ IMAGE_LIGHTEVAL = $(REGISTRY)/community-lighteval:$(VERSION)
 IMAGE_GUIDELLM = $(REGISTRY)/community-guidellm:$(VERSION)
 IMAGE_MTEB = $(REGISTRY)/community-mteb:$(VERSION)
 IMAGE_INSPECT = $(REGISTRY)/community-inspect:$(VERSION)
+IMAGE_DEEPEVAL = $(REGISTRY)/community-deepeval:$(VERSION)
+IMAGE_RAGAS = $(REGISTRY)/community-ragas:$(VERSION)
+IMAGE_SWEBENCH = $(REGISTRY)/community-swebench:$(VERSION)
 
 # Default target
 .PHONY: help
@@ -23,6 +26,9 @@ help:
 	@echo "  make image-guidellm     - Build GuideLLM adapter image"
 	@echo "  make image-mteb         - Build MTEB adapter image"
 	@echo "  make image-inspect      - Build Inspect AI adapter image"
+	@echo "  make image-deepeval     - Build DeepEval adapter image"
+	@echo "  make image-ragas        - Build RAGAS adapter image"
+	@echo "  make image-swebench     - Build SWE-bench adapter image"
 	@echo "  make images             - Build all adapter images"
 	@echo ""
 	@echo "Image Push:"
@@ -30,6 +36,9 @@ help:
 	@echo "  make push-guidellm      - Push GuideLLM adapter image"
 	@echo "  make push-mteb          - Push MTEB adapter image"
 	@echo "  make push-inspect       - Push Inspect AI adapter image"
+	@echo "  make push-deepeval      - Push DeepEval adapter image"
+	@echo "  make push-ragas         - Push RAGAS adapter image"
+	@echo "  make push-swebench      - Push SWE-bench adapter image"
 	@echo "  make push-images        - Push all adapter images"
 	@echo ""
 	@echo "Clean:"
@@ -37,6 +46,9 @@ help:
 	@echo "  make clean-guidellm     - Remove GuideLLM adapter image"
 	@echo "  make clean-mteb         - Remove MTEB adapter image"
 	@echo "  make clean-inspect      - Remove Inspect AI adapter image"
+	@echo "  make clean-deepeval     - Remove DeepEval adapter image"
+	@echo "  make clean-ragas        - Remove RAGAS adapter image"
+	@echo "  make clean-swebench     - Remove SWE-bench adapter image"
 	@echo "  make clean-images       - Remove all adapter images"
 	@echo ""
 	@echo "Test:"
@@ -45,6 +57,8 @@ help:
 	@echo "  make test-mteb         - Run MTEB adapter tests"
 	@echo "  make test-clear        - Run CLEAR adapter tests"
 	@echo "  make test-inspect      - Run Inspect AI adapter tests"
+	@echo "  make test-deepeval     - Run DeepEval adapter tests"
+	@echo "  make test-ragas        - Run RAGAS adapter tests"
 	@echo "  make tests             - Run all adapter tests"
 	@echo ""
 	@echo "Variables:"
@@ -86,6 +100,31 @@ image-inspect:
 
 .PHONY: images
 images: image-lighteval image-guidellm image-mteb image-inspect
+.PHONY: image-deepeval
+image-deepeval:
+	@echo "Building DeepEval adapter image..."
+	cd adapters/deepeval && \
+	$(BUILD_TOOL) build -t $(IMAGE_DEEPEVAL) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_DEEPEVAL)"
+
+.PHONY: images
+images: image-lighteval image-guidellm image-mteb image-deepeval
+.PHONY: image-ragas
+image-ragas:
+	@echo "Building RAGAS adapter image..."
+	cd adapters/ragas && \
+	$(BUILD_TOOL) build -t $(IMAGE_RAGAS) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_RAGAS)"
+
+.PHONY: image-swebench
+image-swebench:
+	@echo "Building SWE-bench adapter image..."
+	cd adapters/swebench && \
+	$(BUILD_TOOL) build -t $(IMAGE_SWEBENCH) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_SWEBENCH)"
+
+.PHONY: images
+images: image-lighteval image-guidellm image-mteb image-ragas image-swebench
 	@echo "✅ All adapter images built"
 
 # Push targets
@@ -115,6 +154,28 @@ push-inspect:
 
 .PHONY: push-images
 push-images: push-lighteval push-guidellm push-mteb push-inspect
+.PHONY: push-deepeval
+push-deepeval:
+	@echo "Pushing DeepEval adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_DEEPEVAL)
+	@echo "✅ Pushed: $(IMAGE_DEEPEVAL)"
+
+.PHONY: push-images
+push-images: push-lighteval push-guidellm push-mteb push-deepeval
+.PHONY: push-ragas
+push-ragas:
+	@echo "Pushing RAGAS adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_RAGAS)
+	@echo "✅ Pushed: $(IMAGE_RAGAS)"
+
+.PHONY: push-swebench
+push-swebench:
+	@echo "Pushing SWE-bench adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_SWEBENCH)
+	@echo "✅ Pushed: $(IMAGE_SWEBENCH)"
+
+.PHONY: push-images
+push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench
 	@echo "✅ All adapter images pushed"
 
 # Clean targets
@@ -144,6 +205,28 @@ clean-inspect:
 
 .PHONY: clean-images
 clean-images: clean-lighteval clean-guidellm clean-mteb clean-inspect
+.PHONY: clean-deepeval
+clean-deepeval:
+	@echo "Removing DeepEval adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_DEEPEVAL) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_DEEPEVAL)"
+
+.PHONY: clean-images
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-deepeval
+.PHONY: clean-ragas
+clean-ragas:
+	@echo "Removing RAGAS adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_RAGAS) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_RAGAS)"
+
+.PHONY: clean-swebench
+clean-swebench:
+	@echo "Removing SWE-bench adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_SWEBENCH) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_SWEBENCH)"
+
+.PHONY: clean-images
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench
 	@echo "✅ All adapter images removed"
 
 # Development targets
@@ -158,6 +241,13 @@ build-and-push-guidellm: image-guidellm push-guidellm
 .PHONY: build-and-push-mteb
 build-and-push-mteb: image-mteb push-mteb
 	@echo "✅ MTEB adapter built and pushed"
+
+.PHONY: build-and-push-deepeval
+build-and-push-deepeval: image-deepeval push-deepeval
+	@echo "✅ DeepEval adapter built and pushed"
+.PHONY: build-and-push-swebench
+build-and-push-swebench: image-swebench push-swebench
+	@echo "✅ SWE-bench adapter built and pushed"
 
 .PHONY: build-and-push-all
 build-and-push-all: images push-images
@@ -211,4 +301,35 @@ test-inspect:
 
 .PHONY: tests
 tests: test-guidellm test-lighteval test-mteb test-clear test-inspect
+.PHONY: test-deepeval
+test-deepeval:
+	@echo "Running DeepEval adapter tests..."
+	cd adapters/deepeval && \
+	test -d .venv || python3 -m venv .venv && \
+	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ DeepEval tests passed"
+
+.PHONY: tests
+tests: test-guidellm test-lighteval test-mteb test-clear test-deepeval
+.PHONY: test-ragas
+test-ragas:
+	@echo "Running RAGAS adapter tests..."
+	cd adapters/ragas && \
+	test -d .venv || python3 -m venv .venv && \
+	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ RAGAS tests passed"
+
+.PHONY: tests
+tests: test-guidellm test-lighteval test-mteb test-clear test-ragas
 	@echo "✅ All adapter tests passed"
+.PHONY: test-swebench
+test-swebench:
+	@echo "Testing SWE-bench adapter..."
+	cd adapters/swebench && \
+	python -m venv .venv 2>/dev/null || true && \
+	. .venv/bin/activate && \
+	pip install -q -r requirements.txt -r requirements-test.txt && \
+	pytest tests/ -v
+	@echo "✅ SWE-bench adapter tests passed"
