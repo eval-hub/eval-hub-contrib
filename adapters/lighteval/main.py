@@ -396,10 +396,11 @@ class LightEvalAdapter(FrameworkAdapter):
             creds = resolve_model_credentials()
 
             if model_config.url:
-                # model.url is already the sidecar address (http://localhost:8080).
-                # Append /v1 so litellm sends to /v1/chat/completions — the sidecar
-                # forwards the path verbatim to the real model URL.
-                sidecar_url = model_config.url.rstrip("/") + "/v1"
+                # Ensure base_url ends with /v1 exactly once. model.url is normally
+                # the sidecar address (http://localhost:8080) with no path, but local
+                # test setups may pass a full URL that already includes /v1.
+                _stripped = model_config.url.rstrip("/")
+                sidecar_url = _stripped if _stripped.endswith("/v1") else _stripped + "/v1"
                 model_args += f",base_url={sidecar_url}"
                 if creds.api_key:
                     # Inject ref token so the sidecar resolves it to the real key.
