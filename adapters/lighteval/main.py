@@ -393,8 +393,6 @@ class LightEvalAdapter(FrameworkAdapter):
 
             model_args = f"model_name={model_name}"
 
-            creds = resolve_model_credentials()
-
             if model_config.url:
                 # Ensure base_url ends with /v1 exactly once. model.url is normally
                 # the sidecar address (http://localhost:8080) with no path, but local
@@ -402,6 +400,7 @@ class LightEvalAdapter(FrameworkAdapter):
                 _stripped = model_config.url.rstrip("/")
                 sidecar_url = _stripped if _stripped.endswith("/v1") else _stripped + "/v1"
                 model_args += f",base_url={sidecar_url}"
+                creds = resolve_model_credentials()
                 if creds.api_key:
                     # Inject ref token so the sidecar resolves it to the real key.
                     model_args += f",api_key={creds.api_key}"
