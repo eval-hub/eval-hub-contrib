@@ -155,9 +155,9 @@ def test_lighteval_local_openai(tmp_path, mock_sidecar):
     for ev in events:
         assert ev["path"] == expected_path
 
-    # Extract states from the events
+    # Extract states from the events (SDK uses "status", not "state")
     states = [
-        ev["body"]["benchmark_status_event"]["state"]
+        ev["body"]["benchmark_status_event"]["status"]
         for ev in events
         if "benchmark_status_event" in ev["body"]
     ]

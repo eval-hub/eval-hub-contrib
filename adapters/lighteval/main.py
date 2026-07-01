@@ -35,6 +35,8 @@ from evalhub.adapter import (
     JobStatusUpdate,
     MessageInfo,
     OCIArtifactSpec,
+    read_model_auth_key,
+    resolve_model_credentials,
 )
 
 logger = logging.getLogger(__name__)
@@ -392,9 +394,22 @@ class LightEvalAdapter(FrameworkAdapter):
             model_args = f"model_name={model_name}"
 
             if model_config.url:
-                model_args += f",base_url={model_config.url}"
-                # Add dummy API key for custom endpoints that don't require auth
-                model_args += ",api_key=dummy"
+                # Ensure base_url ends with /v1 exactly once. model.url is normally
+                # the sidecar address (http://localhost:8080) with no path, but local
+                # test setups may pass a full URL that already includes /v1.
+                _stripped = model_config.url.rstrip("/")
+                sidecar_url = _stripped if _stripped.endswith("/v1") else _stripped + "/v1"
+                model_args += f",base_url={sidecar_url}"
+                creds = resolve_model_credentials()
+                if creds.api_key:
+                    # Inject ref token so the sidecar resolves it to the real key.
+                    model_args += f",api_key={creds.api_key}"
+                else:
+                    # litellm rejects a falsy api_key client-side before making any
+                    # HTTP call. "dummy" passes the check; the sidecar sees an empty
+                    # Bearer (isBearerEmpty) and injects the SA token, or for truly
+                    # open models forwards the request as-is.
+                    model_args += ",api_key=dummy"
 
             # Add additional parameters from benchmark_config
             parameters = benchmark_config.get("parameters", {})
@@ -419,18 +434,15 @@ class LightEvalAdapter(FrameworkAdapter):
             cmd.extend(["--max-samples", str(limit)])
             logger.info(f"Limiting evaluation to {limit} samples per task")
 
-        logger.info(f"Executing LightEval CLI: {' '.join(cmd)}")
+        safe_cmd = [re.sub(r"(,api_key=)[^,]*", r"\1***", arg) for arg in cmd]
+        logger.info(f"Executing LightEval CLI: {' '.join(safe_cmd)}")
 
         env = None
-        model_auth_dir = Path("/var/run/secrets/model")
-        if model_auth_dir.is_dir() and "HF_TOKEN" not in os.environ:
-            for token_file in model_auth_dir.iterdir():
-                if token_file.is_file():
-                    token = token_file.read_text().strip()
-                    if token:
-                        env = {**os.environ, "HF_TOKEN": token}
-                        logger.info(f"Injected HF_TOKEN from {token_file}")
-                        break
+        if "HF_TOKEN" not in os.environ:
+            hf_token = read_model_auth_key("hf-token")
+            if hf_token:
+                env = {**os.environ, "HF_TOKEN": hf_token}
+                logger.info("Injected HF_TOKEN from model secret")
 
         try:
             # Run LightEval CLI
@@ -561,7 +573,7 @@ class LightEvalAdapter(FrameworkAdapter):
 
                 evaluation_results.append(
                     EvaluationResult(
-                        metric_name=clean_metric,
+                        metric_name=f"{clean_task}.{clean_metric}",
                         metric_value=metric_value,
                         metric_type=metric_type,
                         confidence_interval=confidence_interval,
