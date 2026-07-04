@@ -333,6 +333,31 @@ class EvalHubOpenAIEmbeddings(BaseRagasEmbeddings):
 
 
 # ---------------------------------------------------------------------------
+# Parameter helpers
+# ---------------------------------------------------------------------------
+def _parse_bool_param(value: Any, *, default: bool = False) -> bool:
+    """Coerce a provider parameter value to ``bool``.
+
+    EvalHub does not validate provider-specific parameters, so the runtime
+    type of *value* is not guaranteed.  This helper accepts:
+
+    * ``None``  → *default*
+    * native ``bool`` → returned as-is (the happy path)
+    * any other type → stringified and matched case-insensitively against
+      the truthy literals ``"1"``, ``"true"``, ``"yes"``
+
+    The last rule guards against YAML/JSON deserialisation returning a string
+    such as ``"false"`` or ``"0"`` — both of which ``bool()`` would wrongly
+    convert to ``True`` because they are non-empty strings.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes")
+
+
+# ---------------------------------------------------------------------------
 # Dataset helpers
 # ---------------------------------------------------------------------------
 def _first_dataset_in_dir(path: Path) -> Path | None:
@@ -481,7 +506,7 @@ class RagasAdapter(FrameworkAdapter):
 
             max_workers = min(max(int(bc.get("max_workers") or 1), 1), 10)
             run_config = RunConfig(max_workers=max_workers)
-            skip_ssl_verify = bool(bc.get("skip_ssl_verify", False))
+            skip_ssl_verify = _parse_bool_param(bc.get("skip_ssl_verify"), default=False)
             if skip_ssl_verify:
                 logger.warning(
                     "skip_ssl_verify=true: TLS certificate verification is DISABLED "
