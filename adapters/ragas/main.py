@@ -124,22 +124,30 @@ def _openai_credentials(base_url: str) -> tuple[str, str]:
     return url, api_key or "DUMMY"
 
 
-def _openai_client(base_url: str) -> Any:
+def _openai_client(base_url: str, *, skip_ssl_verify: bool = False) -> Any:
     if not _HAS_OPENAI:
         raise RuntimeError(
             "openai package is required — install with: pip install openai>=1.0.0"
         )
     url, api_key = _openai_credentials(base_url)
-    return OpenAI(base_url=url, api_key=api_key)
+    http_client = None
+    if skip_ssl_verify:
+        import httpx
+        http_client = httpx.Client(verify=False)
+    return OpenAI(base_url=url, api_key=api_key, http_client=http_client)
 
 
-def _async_openai_client(base_url: str) -> Any:
+def _async_openai_client(base_url: str, *, skip_ssl_verify: bool = False) -> Any:
     if not _HAS_OPENAI:
         raise RuntimeError(
             "openai package is required — install with: pip install openai>=1.0.0"
         )
     url, api_key = _openai_credentials(base_url)
-    return AsyncOpenAI(base_url=url, api_key=api_key)
+    http_client = None
+    if skip_ssl_verify:
+        import httpx
+        http_client = httpx.AsyncClient(verify=False)
+    return AsyncOpenAI(base_url=url, api_key=api_key, http_client=http_client)
 
 
 class EvalHubOpenAILLM(BaseRagasLLM):
@@ -158,6 +166,7 @@ class EvalHubOpenAILLM(BaseRagasLLM):
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        skip_ssl_verify: bool = False,
         run_config: RunConfig | None = None,
     ):
         if run_config is None:
@@ -166,8 +175,8 @@ class EvalHubOpenAILLM(BaseRagasLLM):
         self._model_id = model_id
         self._max_tokens = max_tokens
         self._temperature = temperature
-        self._client = _openai_client(base_url)
-        self._async_client = _async_openai_client(base_url)
+        self._client = _openai_client(base_url, skip_ssl_verify=skip_ssl_verify)
+        self._async_client = _async_openai_client(base_url, skip_ssl_verify=skip_ssl_verify)
 
     def _build_completion_kwargs(
         self,
@@ -255,6 +264,7 @@ class EvalHubOpenAIEmbeddings(BaseRagasEmbeddings):
         base_url: str,
         model_id: str,
         *,
+        skip_ssl_verify: bool = False,
         run_config: RunConfig | None = None,
     ):
         super().__init__()
@@ -262,8 +272,8 @@ class EvalHubOpenAIEmbeddings(BaseRagasEmbeddings):
         if run_config is None:
             run_config = RunConfig()
         self.set_run_config(run_config)
-        self._client = _openai_client(base_url)
-        self._async_client = _async_openai_client(base_url)
+        self._client = _openai_client(base_url, skip_ssl_verify=skip_ssl_verify)
+        self._async_client = _async_openai_client(base_url, skip_ssl_verify=skip_ssl_verify)
 
     def embed_query(self, text: str) -> list[float]:
         try:
@@ -320,6 +330,31 @@ class EvalHubOpenAIEmbeddings(BaseRagasEmbeddings):
         except Exception as e:
             logger.error("Async embed documents failed: %s", e)
             raise
+
+
+# ---------------------------------------------------------------------------
+# Parameter helpers
+# ---------------------------------------------------------------------------
+def _parse_bool_param(value: Any, *, default: bool = False) -> bool:
+    """Coerce a provider parameter value to ``bool``.
+
+    EvalHub does not validate provider-specific parameters, so the runtime
+    type of *value* is not guaranteed.  This helper accepts:
+
+    * ``None``  → *default*
+    * native ``bool`` → returned as-is (the happy path)
+    * any other type → stringified and matched case-insensitively against
+      the truthy literals ``"1"``, ``"true"``, ``"yes"``
+
+    The last rule guards against YAML/JSON deserialisation returning a string
+    such as ``"false"`` or ``"0"`` — both of which ``bool()`` would wrongly
+    convert to ``True`` because they are non-empty strings.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes")
 
 
 # ---------------------------------------------------------------------------
@@ -471,16 +506,24 @@ class RagasAdapter(FrameworkAdapter):
 
             max_workers = min(max(int(bc.get("max_workers") or 1), 1), 10)
             run_config = RunConfig(max_workers=max_workers)
+            skip_ssl_verify = _parse_bool_param(bc.get("skip_ssl_verify"), default=False)
+            if skip_ssl_verify:
+                logger.warning(
+                    "skip_ssl_verify=true: TLS certificate verification is DISABLED "
+                    "for model endpoint %s", model_url
+                )
             llm = EvalHubOpenAILLM(
                 base_url=model_url,
                 model_id=model_name,
                 max_tokens=bc.get("max_tokens"),
                 temperature=bc.get("temperature"),
+                skip_ssl_verify=skip_ssl_verify,
                 run_config=run_config,
             )
             embeddings = EvalHubOpenAIEmbeddings(
                 base_url=embedding_url,
                 model_id=embedding_model,
+                skip_ssl_verify=skip_ssl_verify,
                 run_config=run_config,
             )
 
