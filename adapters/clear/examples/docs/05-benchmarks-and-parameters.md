@@ -42,6 +42,17 @@ CLEAR maps traces against this list rather than relying only on open-ended clust
 
 Sample: [`benchmark-jobs/03-predefined-issues.json`](../benchmark-jobs/03-predefined-issues.json)
 
+## Tool-call analysis (SPARC)
+
+Set **`parameters.separate_tools`** to **`true`** to enable SPARC — CLEAR's tool-call analysis mode. When enabled, each span whose response contains a tool call is split into a separate row before the judge sees it, giving finer-grained per-tool scoring.
+
+```json
+"separate_tools": true
+```
+
+- Default is **`false`** (standard agentic mode — tool calls are evaluated in-context with the surrounding agent step).
+- Requires the adapter to be installed with the `[tool-calls]` extra (already included in `requirements.txt`).
+
 ## Inference backend
 
 Set **`parameters.inference_backend`** to **`"litellm"`**. Configure **`model.url`** and credentials per [03-local-run.md](03-local-run.md) and the adapter **`README.md`**.

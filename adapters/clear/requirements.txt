@@ -1,11 +1,6 @@
-eval-hub-sdk[adapter]==0.4.0
-# IBM CLEAR: now available on PyPI with agentic support included.
-# 2.x nests per-agent results under reasoning_eval / tools_eval — see main.py extraction.
-clear-eval==2.0.2
+eval-hub-sdk[adapter]>=0.4.1
+# IBM CLEAR with tool-call (SPARC) support. Set parameters.separate_tools: true to enable.
+clear_eval[tool-calls] @ git+https://github.com/IBM/clear.git@main_with_sparc
 
 pandas>=2.0.0
 pydantic>=2.0.0
-
-# Required for fetching full traces (with spans) from MLflow when
-# parameters.mlflow_traces_experiment_name is set.
-mlflow-skinny>=2.0.0

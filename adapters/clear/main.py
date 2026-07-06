@@ -281,23 +281,38 @@ def _apply_clear_dashboard_theme(html_paths: list[Path], theme: str | None) -> N
             logger.warning("Could not apply dashboard theme to %s: %s", path, exc)
 
 
-def _fetch_mlflow_traces_to_dir(parameters: dict[str, Any], output_dir: str) -> None:
-    """Fetch full traces (with spans) from MLflow and write CLEAR-compatible JSON files.
+def _unwrap_proto_attr_value(v_wrapper: Any) -> Any:
+    """Unwrap a protobuf-style attribute value dict to a plain Python value."""
+    if not isinstance(v_wrapper, dict):
+        return v_wrapper
+    for key in ("string_value", "bytes_value", "int_value", "double_value", "bool_value"):
+        if key in v_wrapper:
+            return v_wrapper[key]
+    if "array_value" in v_wrapper:
+        return str(v_wrapper["array_value"])
+    return str(v_wrapper)
 
-    Uses the native mlflow Python client to get full span data, then converts each
-    trace to the flat format CLEAR's preprocessor expects:
+
+def _proto_attrs_to_dict(attrs: Any) -> dict[str, Any]:
+    """Convert protobuf-style span attributes list to a plain dict."""
+    if isinstance(attrs, dict):
+        return attrs
+    if not isinstance(attrs, list):
+        return {}
+    result: dict[str, Any] = {}
+    for item in attrs:
+        if isinstance(item, dict) and "key" in item:
+            result[str(item["key"])] = _unwrap_proto_attr_value(item.get("value", {}))
+    return result
+
+
+def _fetch_mlflow_traces_to_dir(mlflow_client: Any, parameters: dict[str, Any], output_dir: str) -> None:
+    """Fetch full traces (with spans) from MLflow using the eval-hub-sdk client.
+
+    Uses the sdk's TracesNamespace (search + get) to retrieve spans via the MLflow
+    3.x API, then converts each trace to the flat format CLEAR's preprocessor expects:
     {trace_id, experiment_id, state, timestamp_ms, execution_time_ms, tags, spans[]}
     """
-    try:
-        import mlflow as _mlflow
-    except ImportError as exc:
-        raise ImportError(
-            "mlflow-skinny is required to fetch traces from MLflow. "
-            "Install it with: pip install mlflow-skinny"
-        ) from exc
-
-    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
-    native_client = _mlflow.MlflowClient(tracking_uri=tracking_uri)
     experiment_name = parameters.get("mlflow_traces_experiment_name")
     experiment_id = parameters.get("mlflow_traces_experiment_id")
     max_results = int(parameters.get("mlflow_traces_max_results", 100))
@@ -309,44 +324,70 @@ def _fetch_mlflow_traces_to_dir(parameters: dict[str, Any], output_dir: str) -> 
         )
 
     if not experiment_id and experiment_name:
-        exp = native_client.get_experiment_by_name(experiment_name)
+        exp = mlflow_client.get_experiment_by_name(experiment_name)
         if exp is None:
             raise ValueError(f"MLflow experiment not found: {experiment_name!r}")
         experiment_id = exp.experiment_id
 
-    filter_string = f"run_id = '{run_id}'" if run_id else None
-    traces = _mlflow.search_traces(
-        experiment_ids=[experiment_id],
-        max_results=max_results,
-        filter_string=filter_string,
-        return_type="list",
-    )
+    filter_string = None
+    if run_id:
+        safe_run_id = run_id.strip().replace("'", "''")
+        filter_string = f"attribute.run_id = '{safe_run_id}'"
 
-    if not traces:
+    all_trace_summaries = []
+    page_token: str | None = None
+    while len(all_trace_summaries) < max_results:
+        page_size = min(100, max_results - len(all_trace_summaries))
+        traces, page_token = mlflow_client.traces.search(
+            experiment_ids=[experiment_id],
+            max_results=page_size,
+            filter_string=filter_string,
+            page_token=page_token,
+        )
+        if not traces:
+            break
+        all_trace_summaries.extend(traces)
+        if not page_token:
+            break
+
+    if not all_trace_summaries:
         raise ValueError(
             f"No traces found in MLflow experiment {experiment_name or experiment_id!r}"
         )
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    for trace in traces:
+    for summary in all_trace_summaries:
+        # Re-fetch with get() to include full span data (3.x API)
+        trace = mlflow_client.traces.get(
+            request_id=summary.info.request_id,
+            experiment_id=experiment_id,
+        )
         info = trace.info
         rid = info.request_id
 
         spans = []
-        for s in (trace.data.spans or []):
-            attrs = dict(s.attributes or {})
-            if "mlflow.spanInputs" not in attrs and s.inputs:
-                attrs["mlflow.spanInputs"] = s.inputs
-            if "mlflow.spanOutputs" not in attrs and s.outputs:
-                attrs["mlflow.spanOutputs"] = s.outputs
+        for s in trace.data.get("spans", []):
+            attrs = _proto_attrs_to_dict(s.get("attributes", []))
+            raw_status = s.get("status", {})
+            if isinstance(raw_status, dict):
+                code = raw_status.get("code", "")
+                if code.startswith("STATUS_CODE_"):
+                    code = code[len("STATUS_CODE_"):]
+                span_status = {"status_code": code or info.status, "description": ""}
+            else:
+                span_status = {"status_code": info.status, "description": ""}
+
+            start_ns = s.get("start_time_unix_nano", 0)
+            end_ns = s.get("end_time_unix_nano", 0)
+            duration_ms = (end_ns - start_ns) / 1_000_000 if end_ns and start_ns else None
             spans.append({
-                "span_id": s.span_id,
-                "parent_span_id": s.parent_id,
-                "name": s.name,
-                "status": {"status_code": info.status, "description": ""},
-                "start_time_unix_nano": s.start_time_ns,
-                "end_time_unix_nano": s.end_time_ns,
-                "duration_ms": None,
+                "span_id": s.get("span_id", ""),
+                "parent_span_id": s.get("parent_span_id"),
+                "name": s.get("name", ""),
+                "status": span_status,
+                "start_time_unix_nano": start_ns,
+                "end_time_unix_nano": end_ns,
+                "duration_ms": duration_ms,
                 "attributes": attrs,
             })
 
@@ -356,7 +397,7 @@ def _fetch_mlflow_traces_to_dir(parameters: dict[str, Any], output_dir: str) -> 
             "state": info.status,
             "timestamp_ms": info.timestamp_ms,
             "execution_time_ms": info.execution_time_ms,
-            "tags": dict(info.tags or {}),
+            "tags": info.tags or {},
             "spans": spans,
         }
 
@@ -366,7 +407,7 @@ def _fetch_mlflow_traces_to_dir(parameters: dict[str, Any], output_dir: str) -> 
             json.dump(trace_doc, fh, indent=2, default=str)
 
     logger.info("Fetched %d trace(s) from MLflow experiment %s -> %s",
-                len(traces), experiment_name or experiment_id, output_dir)
+                len(all_trace_summaries), experiment_name or experiment_id, output_dir)
 
 
 class ClearAdapter(FrameworkAdapter):
@@ -446,7 +487,7 @@ class ClearAdapter(FrameworkAdapter):
                         )
                     )
                     mlflow_traces_dir = tempfile.mkdtemp(prefix="clear_mlflow_traces_")
-                    _fetch_mlflow_traces_to_dir(config.parameters, mlflow_traces_dir)
+                    _fetch_mlflow_traces_to_dir(self.mlflow, config.parameters, mlflow_traces_dir)
                     data_dir = mlflow_traces_dir
                     logger.info("MLflow traces fetched to %s", data_dir)
                 else:

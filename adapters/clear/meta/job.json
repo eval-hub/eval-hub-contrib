@@ -22,7 +22,9 @@
     "inference_backend": "litellm",
     "clear_dashboard_theme": "red_hat",
 
-    "mlflow_traces_experiment_name": "your-agent-experiment"
+    "mlflow_traces_experiment_name": "your-agent-experiment",
+
+    "separate_tools": false
   },
 
   "test_data_ref": {
