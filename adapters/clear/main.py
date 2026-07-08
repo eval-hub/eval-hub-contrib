@@ -35,6 +35,7 @@ from evalhub.adapter import (
     OCIArtifactResult,
     OCIArtifactSpec,
 )
+from evalhub.adapter.mlflow import MlflowClient as EvalHubMlflowClient
 from evalhub.adapter.auth import resolve_model_credentials
 from evalhub.adapter.mlflow import MlflowArtifact, TracesNamespace
 
@@ -49,7 +50,8 @@ try:
     from clear_eval.agentic.pipeline.utils import get_run_output_dir
 except ImportError as exc:
     raise ImportError(
-        "Install IBM CLEAR: pip install clear-eval==2.0.2 (see requirements.txt)."
+        "Install IBM CLEAR with tool-calls support (see requirements.txt): "
+        "pip install 'clear_eval[tool-calls] @ git+https://github.com/IBM/clear.git@main_with_sparc'"
     ) from exc
 
 logger = logging.getLogger(__name__)
@@ -306,7 +308,7 @@ def _proto_attrs_to_dict(attrs: Any) -> dict[str, Any]:
     return result
 
 
-def _fetch_mlflow_traces_to_dir(mlflow_client: Any, parameters: dict[str, Any], output_dir: str) -> None:
+def _fetch_mlflow_traces_to_dir(mlflow_client: EvalHubMlflowClient, parameters: dict[str, Any], output_dir: str) -> None:
     """Fetch full traces (with spans) from MLflow using the eval-hub-sdk client.
 
     Uses the sdk's TracesNamespace (search + get) to retrieve spans via the MLflow
