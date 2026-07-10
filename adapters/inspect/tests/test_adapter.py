@@ -491,7 +491,7 @@ def test_petri_happy_path(monkeypatch, job_spec_path, petri_log_file):
     assert JobPhase.LOADING_DATA in phases
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
-    assert JobPhase.PERSISTING_ARTIFACTS in phases
+    # PERSISTING_ARTIFACTS only emitted when OCI exports are configured
 
 
 # ---------------------------------------------------------------------------

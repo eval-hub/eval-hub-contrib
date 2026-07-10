@@ -162,7 +162,7 @@ def test_deepeval_happy_path(tmp_path, monkeypatch, benchmark_id, file_content, 
     assert JobPhase.LOADING_DATA in phases
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
-    assert JobPhase.PERSISTING_ARTIFACTS in phases
+    # PERSISTING_ARTIFACTS only emitted when OCI exports are configured
 
 
 @pytest.mark.integration

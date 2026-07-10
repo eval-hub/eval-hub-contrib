@@ -41,7 +41,6 @@ from typing import Any
 
 from evalhub.adapter import (
     DefaultCallbacks,
-    ErrorInfo,
     EvaluationResult,
     FrameworkAdapter,
     JobCallbacks,
@@ -178,15 +177,7 @@ class MTEBAdapter(FrameworkAdapter):
         try:
             # Phase 1: Initialize and validate
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.INITIALIZING,
-                    progress=0.0,
-                    message=MessageInfo(
-                        message=f"Initializing MTEB for benchmark {config.benchmark_id}",
-                        message_code="initializing",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
             )
 
             self._validate_config(config)
@@ -199,34 +190,12 @@ class MTEBAdapter(FrameworkAdapter):
 
             # Phase 2: Loading data (MTEB handles internally, but we signal the phase)
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.LOADING_DATA,
-                    progress=0.1,
-                    message=MessageInfo(
-                        message=f"MTEB preparing {len(tasks)} task(s) for evaluation",
-                        message_code="loading_data",
-                    ),
-                    current_step="Preparing evaluation",
-                    total_steps=5,
-                    completed_steps=1,
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
             )
 
             # Phase 3: Run MTEB evaluation
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.RUNNING_EVALUATION,
-                    progress=0.2,
-                    message=MessageInfo(
-                        message=f"Running MTEB evaluation on {len(tasks)} task(s)",
-                        message_code="running_evaluation",
-                    ),
-                    current_step="Executing benchmark",
-                    total_steps=5,
-                    completed_steps=2,
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
             )
 
             cmd = self._build_mteb_command(
@@ -241,18 +210,7 @@ class MTEBAdapter(FrameworkAdapter):
 
             # Phase 4: Post-processing - parse and extract results
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.POST_PROCESSING,
-                    progress=0.8,
-                    message=MessageInfo(
-                        message="Processing MTEB evaluation results",
-                        message_code="post_processing",
-                    ),
-                    current_step="Extracting metrics",
-                    total_steps=5,
-                    completed_steps=3,
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
             )
 
             mteb_results = self._parse_results(output_dir, config.model.name)
@@ -262,22 +220,6 @@ class MTEBAdapter(FrameworkAdapter):
             logger.info(
                 f"Post-processing complete. Overall score: {overall_score}, "
                 f"Metrics extracted: {len(evaluation_results)}"
-            )
-
-            # Phase 5: Persist artifacts
-            callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.PERSISTING_ARTIFACTS,
-                    progress=0.9,
-                    message=MessageInfo(
-                        message="Persisting MTEB artifacts to OCI registry",
-                        message_code="persisting_artifacts",
-                    ),
-                    current_step="Creating OCI artifact",
-                    total_steps=5,
-                    completed_steps=4,
-                )
             )
 
             output_files = self._save_detailed_results(
@@ -291,6 +233,9 @@ class MTEBAdapter(FrameworkAdapter):
             oci_artifact = None
             oci_exports = config.exports.oci if config.exports else None
             if oci_exports is not None and output_files:
+                callbacks.report_status(
+                    JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
+                )
                 coords = oci_exports.coordinates.model_copy(deep=True)
                 coords.annotations.update(
                     {
@@ -336,23 +281,13 @@ class MTEBAdapter(FrameworkAdapter):
 
         except Exception as e:
             logger.exception("MTEB evaluation failed")
-            error_msg = str(e)
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
-                    message=MessageInfo(
-                        message=error_msg,
-                        message_code="failed",
-                    ),
-                    error=ErrorInfo(
-                        message=error_msg,
+                    error_message=MessageInfo(
+                        message=str(e),
                         message_code="evaluation_error",
                     ),
-                    error_details={
-                        "exception_type": type(e).__name__,
-                        "benchmark_id": config.benchmark_id,
-                        "model_name": config.model.name,
-                    },
                 )
             )
             raise

@@ -31,7 +31,6 @@ from typing import Any
 
 from evalhub.adapter import (
     DefaultCallbacks,
-    ErrorInfo,
     EvaluationResult,
     FrameworkAdapter,
     JobCallbacks,
@@ -80,15 +79,7 @@ class SWEBenchAdapter(FrameworkAdapter):
         logger.info("Starting SWE-bench evaluation job: %s", config.id)
 
         callbacks.report_status(
-            JobStatusUpdate(
-                status=JobStatus.RUNNING,
-                phase=JobPhase.INITIALIZING,
-                progress=0.0,
-                message=MessageInfo(
-                    message="Initializing SWE-bench evaluation",
-                    message_code="initializing",
-                ),
-            )
+            JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
         )
 
         try:
@@ -125,15 +116,7 @@ class SWEBenchAdapter(FrameworkAdapter):
 
             # -- Phase 2: LOADING_DATA --
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.LOADING_DATA,
-                    progress=0.1,
-                    message=MessageInfo(
-                        message=f"Loading SWE-bench dataset ({benchmark_id}, {len(predictions)} predictions)",
-                        message_code="loading_data",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
             )
 
             from swebench.harness.utils import load_swebench_dataset
@@ -150,15 +133,7 @@ class SWEBenchAdapter(FrameworkAdapter):
 
             # -- Phase 3: RUNNING_EVALUATION --
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.RUNNING_EVALUATION,
-                    progress=0.2,
-                    message=MessageInfo(
-                        message=f"Running evaluation ({len(dataset)} instances, {max_workers} workers)",
-                        message_code="running_evaluation",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
             )
 
             from k8s_runner import run_instances_k8s
@@ -178,36 +153,21 @@ class SWEBenchAdapter(FrameworkAdapter):
 
             # -- Phase 4: POST_PROCESSING --
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.POST_PROCESSING,
-                    progress=0.8,
-                    message=MessageInfo(
-                        message="Processing evaluation results",
-                        message_code="post_processing",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
             )
 
             evaluation_results, overall_score, summary = self._process_results(
                 results, config
             )
 
-            # -- Phase 5: PERSISTING_ARTIFACTS --
-            callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.PERSISTING_ARTIFACTS,
-                    progress=0.9,
-                    message=MessageInfo(
-                        message="Persisting evaluation artifacts",
-                        message_code="persisting_artifacts",
-                    ),
-                )
-            )
-
             artifact_files = self._save_artifacts(results, summary, config)
-            self._persist_oci_artifact(artifact_files, config, callbacks)
+
+            oci_exports = config.exports.oci if config.exports else None
+            if oci_exports is not None:
+                callbacks.report_status(
+                    JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
+                )
+                self._persist_oci_artifact(artifact_files, config, callbacks)
 
             duration = time.time() - start_time
 
@@ -243,9 +203,7 @@ class SWEBenchAdapter(FrameworkAdapter):
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
-                    phase=JobPhase.RUNNING_EVALUATION,
-                    progress=0.0,
-                    error=ErrorInfo(
+                    error_message=MessageInfo(
                         message=str(e),
                         message_code="evaluation_failed",
                     ),

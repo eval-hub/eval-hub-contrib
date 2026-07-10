@@ -44,6 +44,54 @@ See [adapters/inspect/README.md](adapters/inspect/README.md) for full documentat
 | [RAGAS](https://github.com/explodinggradients/ragas) | `quay.io/evalhub/community-ragas:latest` | ✗ | ✓ | RAG pipeline quality evaluation (faithfulness, relevancy, context precision/recall, and more) |
 | [SWE-bench](https://github.com/SWE-bench/SWE-bench) | `quay.io/evalhub/community-swebench:latest` | ✗ | ✓ | Software engineering benchmark for code patch evaluation |
 
+## JobPhase Lifecycle
+
+Every adapter must report progress through the `JobPhase` lifecycle via `callbacks.report_status()`. The server validates phases against a fixed set, so adapters must emit them in order and use only the values listed below.
+
+### Phases
+
+1. **`INITIALIZING`** — Validate configuration, resolve credentials, set up temporary directories. Emit at the start of `run_benchmark_job`.
+2. **`LOADING_DATA`** — Load datasets, download test data, prepare inputs. Emit before any data I/O.
+3. **`RUNNING_EVALUATION`** — Execute the framework (subprocess, API call, etc.). Emit before the main workload begins.
+4. **`POST_PROCESSING`** — Parse results, extract metrics, compute scores. Emit after the framework finishes.
+5. **`PERSISTING_ARTIFACTS`** — Create OCI artifacts from result files. Emit **only when OCI exports are configured** (`config.exports.oci`). Skip this phase entirely when there is nothing to persist.
+6. **`COMPLETED`** — **Do not emit manually.** This phase is sent automatically by `callbacks.report_results()`.
+
+### Status update format
+
+Only `status` and `phase` are forwarded to the server. Other fields (`progress`, `message`, `current_step`, etc.) are silently dropped by the SDK.
+
+```python
+# Success path — emit for each phase
+callbacks.report_status(
+    JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
+)
+
+# Failure path — use error_message (ErrorInfo is deprecated)
+callbacks.report_status(
+    JobStatusUpdate(
+        status=JobStatus.FAILED,
+        error_message=MessageInfo(message=str(e), message_code="evaluation_error"),
+    )
+)
+```
+
+### PERSISTING_ARTIFACTS gating
+
+The `PERSISTING_ARTIFACTS` phase must only be reported when OCI exports are configured. When no exports are configured, skip both the phase and the OCI call:
+
+```python
+oci_artifact = None
+oci_exports = config.exports.oci if config.exports else None
+if oci_exports is not None and output_files:
+    callbacks.report_status(
+        JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
+    )
+    oci_artifact = callbacks.create_oci_artifact(
+        OCIArtifactSpec(files_path=results_dir, coordinates=oci_exports.coordinates)
+    )
+```
+
 ## Building Adapters
 
 ```bash
