@@ -162,12 +162,15 @@ class SWEBenchAdapter(FrameworkAdapter):
 
             artifact_files = self._save_artifacts(results, summary, config)
 
+            oci_artifact: OCIArtifactResult | None = None
             oci_exports = config.exports.oci if config.exports else None
             if oci_exports is not None:
                 callbacks.report_status(
                     JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
                 )
-                self._persist_oci_artifact(artifact_files, config, callbacks)
+                oci_artifact = self._persist_oci_artifact(
+                    artifact_files, oci_exports.coordinates, callbacks
+                )
 
             duration = time.time() - start_time
 
@@ -180,6 +183,7 @@ class SWEBenchAdapter(FrameworkAdapter):
                 overall_score=overall_score,
                 num_examples_evaluated=len(results),
                 duration_seconds=duration,
+                oci_artifact=oci_artifact,
             )
         
             summary_bytes = json.dumps(summary, indent=2).encode()            
@@ -392,27 +396,26 @@ class SWEBenchAdapter(FrameworkAdapter):
     def _persist_oci_artifact(
         self,
         files: list[Path],
-        config: JobSpec,
+        coordinates: OCICoordinates,
         callbacks: JobCallbacks,
-    ) -> None:
+    ) -> OCIArtifactResult | None:
         """Create an OCI artifact from result files."""
         if not files:
-            return
+            return None
 
         try:
             artifact_dir = files[0].parent
-            callbacks.create_oci_artifact(
+            result = callbacks.create_oci_artifact(
                 OCIArtifactSpec(
                     files_path=artifact_dir,
-                    coordinates=OCICoordinates(
-                        oci_host="",
-                        oci_repository=f"swebench/{config.id}",
-                    ),
+                    coordinates=coordinates,
                 )
             )
             logger.info("OCI artifact created from %s", artifact_dir)
+            return result
         except Exception as e:
             logger.warning("Failed to create OCI artifact: %s", e)
+            return None
 
     def _empty_results(self, config: JobSpec, start_time: float) -> JobResults:
         """Return empty results when no instances to evaluate."""

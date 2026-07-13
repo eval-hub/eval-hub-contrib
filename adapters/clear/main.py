@@ -298,6 +298,10 @@ class ClearAdapter(FrameworkAdapter):
 
             self._validate_config(config)
 
+            callbacks.report_status(
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
+            )
+
             data_dir: str | None = None
             test_data_path = Path("/test_data")
             if test_data_path.exists() and any(test_data_path.iterdir()):
@@ -368,10 +372,6 @@ class ClearAdapter(FrameworkAdapter):
                 raise ValueError(f"No JSON trace files found in {data_dir}")
 
             logger.info("Found %d trace file(s) in %s", len(trace_files), data_dir)
-
-            callbacks.report_status(
-                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
-            )
 
             results_dir_param = config.parameters.get("results_dir")
             run_name_param = config.parameters.get("run_name")
