@@ -737,14 +737,14 @@ class ClearAdapter(FrameworkAdapter):
         if not config.exports or not config.exports.oci:
             return None
 
-        callbacks.report_status(
-            JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
-        )
-
         results_path = Path(json_results_path)
         if not results_path.exists():
             logger.warning("OCI skipped: missing %s", results_path)
             return None
+
+        callbacks.report_status(
+            JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
+        )
 
         if self.local_jobs_base_path is not None:
             results_dir = self.local_jobs_base_path / "results"

@@ -9,6 +9,7 @@ or LLM calls are made. Tests cover all three execution modes:
 
 import json
 import pytest
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from evalhub.adapter import JobPhase, OCIArtifactResult
@@ -492,6 +493,60 @@ def test_petri_happy_path(monkeypatch, job_spec_path, petri_log_file):
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
     # PERSISTING_ARTIFACTS only emitted when OCI exports are configured
+
+
+@pytest.mark.integration
+def test_oci_export_persists_artifacts(monkeypatch, job_spec_path, petri_eval_log):
+    """When exports.oci is configured, PERSISTING_ARTIFACTS is emitted and create_oci_artifact is called."""
+    # Patch job spec to include OCI exports
+    job_spec = Path(job_spec_path)
+    job = json.loads(job_spec.read_text())
+    job["exports"] = {
+        "oci": {
+            "coordinates": {
+                "oci_host": "quay.io",
+                "oci_repository": "test-org/test-repo",
+                "oci_tag": "test-tag",
+                "annotations": {},
+            }
+        }
+    }
+    patched_spec = job_spec.parent / "job_oci.json"
+    patched_spec.write_text(json.dumps(job))
+
+    adapter = InspectAdapter(job_spec_path=str(patched_spec))
+    callbacks = MagicMock()
+    callbacks.create_oci_artifact.return_value = OCIArtifactResult(
+        digest="sha256:fake", reference="fake:latest",
+    )
+    callbacks.mlflow.save.return_value = None
+
+    # run_inspect must place the log file inside the adapter's log_dir
+    def fake_run_inspect(cmd, env, log_dir):
+        log_file = log_dir / "petri_sycophancy_001.json"
+        log_file.write_text(json.dumps(petri_eval_log))
+        return log_file
+
+    import main as _main
+    monkeypatch.setattr(_main, "run_inspect", fake_run_inspect)
+    monkeypatch.setattr(adapter, "_get_inspect_version", lambda: "0.3.40")
+
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    # PERSISTING_ARTIFACTS phase was reported
+    phases = [c.args[0].phase for c in callbacks.report_status.call_args_list]
+    assert JobPhase.PERSISTING_ARTIFACTS in phases
+
+    # create_oci_artifact was called with log_dir as files_path
+    call_args = callbacks.create_oci_artifact.call_args
+    assert call_args is not None
+    spec = call_args.args[0]
+    # work_dir is cleaned up in a finally block, so we verify the path shape
+    assert spec.files_path.name == "logs"
+
+    # OCI artifact is attached to results
+    assert results.oci_artifact is not None
+    assert results.oci_artifact.digest == "sha256:fake"
 
 
 # ---------------------------------------------------------------------------

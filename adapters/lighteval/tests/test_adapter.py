@@ -78,6 +78,57 @@ def test_lighteval_happy_path(tmp_path, monkeypatch):
 
 
 @pytest.mark.integration
+def test_oci_export_persists_artifacts(tmp_path, monkeypatch):
+    """When exports.oci is configured, PERSISTING_ARTIFACTS is emitted and create_oci_artifact is called."""
+    import json
+
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    with open(Path("meta/job.json")) as f:
+        job = json.load(f)
+    job["exports"] = {
+        "oci": {
+            "coordinates": {
+                "oci_host": "quay.io",
+                "oci_repository": "test-org/test-repo",
+                "oci_tag": "test-tag",
+                "annotations": {},
+            }
+        }
+    }
+    (meta_dir / "job.json").write_text(json.dumps(job))
+
+    adapter = LightEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
+
+    callbacks = create_autospec(JobCallbacks)
+    callbacks.create_oci_artifact.return_value = OCIArtifactResult(
+        digest="sha256:fake", reference="fake:latest",
+    )
+
+    monkeypatch.setattr(
+        adapter, "_run_lighteval",
+        lambda **kwargs: CANNED_RESULTS,
+    )
+
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    # PERSISTING_ARTIFACTS phase was reported
+    phases = [c.args[0].phase for c in callbacks.report_status.call_args_list]
+    assert JobPhase.PERSISTING_ARTIFACTS in phases
+
+    # create_oci_artifact was called with a directory containing result files
+    call_args = callbacks.create_oci_artifact.call_args
+    assert call_args is not None
+    spec = call_args.args[0]
+    assert spec.files_path.exists()
+    assert spec.files_path.is_dir()
+
+    # OCI artifact is attached to results
+    assert results.oci_artifact is not None
+    assert results.oci_artifact.digest == "sha256:fake"
+
+
+@pytest.mark.integration
 def test_results_use_local_jobs_base_path(tmp_path):
     """Results are saved under local_jobs_base_path/results, not hardcoded /tmp paths."""
     import shutil
