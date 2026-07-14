@@ -53,16 +53,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve image name
+        id: image
+        env:
+          ADAPTER: ${{ matrix.adapter }}
+        run: |
+          # Validate adapter name: directory names are lowercase letters, digits, and hyphens only.
+          if [[ ! "$ADAPTER" =~ ^[a-z0-9-]+$ ]]; then
+            echo "::error::Invalid adapter name: '${ADAPTER}'" >&2
+            exit 1
+          fi
+          # Mapping of adapter directory name -> image name suffix.
+          # Omit an entry to default to community-<adapter>.
+          declare -A IMAGE_MAP=(
+            [clear]=ibm-clear
+          )
+          suffix="${IMAGE_MAP[$ADAPTER]:-$ADAPTER}"
+          echo "name=community-${suffix}" >> "$GITHUB_OUTPUT"
+
       - name: Build image
+        env:
+          ADAPTER: ${{ matrix.adapter }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          GIT_SHA: ${{ github.sha }}
         run: |
           docker build \
-            -f adapters/${{ matrix.adapter }}/Containerfile \
-            -t ${REGISTRY}/community-${{ matrix.adapter }}:${{ github.sha }} \
-            -t ${REGISTRY}/community-${{ matrix.adapter }}:latest \
-            adapters/${{ matrix.adapter }}
+            -f "adapters/${ADAPTER}/Containerfile" \
+            -t "${REGISTRY}/${IMAGE_NAME}:${GIT_SHA}" \
+            -t "${REGISTRY}/${IMAGE_NAME}:latest" \
+            "adapters/${ADAPTER}"
 
       - name: Push image
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          GIT_SHA: ${{ github.sha }}
         run: |
           echo "${{ secrets.QUAY_TOKEN }}" | docker login quay.io -u "${{ secrets.QUAY_USER }}" --password-stdin
-          docker push ${REGISTRY}/community-${{ matrix.adapter }}:${{ github.sha }}
-          docker push ${REGISTRY}/community-${{ matrix.adapter }}:latest
+          docker push "${REGISTRY}/${IMAGE_NAME}:${GIT_SHA}"
+          docker push "${REGISTRY}/${IMAGE_NAME}:latest"
