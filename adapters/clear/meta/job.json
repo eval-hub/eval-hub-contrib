@@ -3,7 +3,9 @@
   "provider_id": "ibm-clear",
   "benchmark_id": "agentic-evaluation",
   "benchmark_index": 0,
+
   "experiment_name": "clear-agentic-eval-example",
+
   "model": {
     "url": "http://127.0.0.1:8000/v1",
     "name": "example-model",
@@ -11,15 +13,20 @@
       "secret_ref": "your-model-api-key-secret"
     }
   },
+
   "parameters": {
-    "data_dir": "input-trace",
     "eval_model_name": "openai/example-model",
     "provider": "openai",
     "agent_framework": "langgraph",
     "observability_framework": "mlflow",
     "inference_backend": "litellm",
-    "clear_dashboard_theme": "red_hat"
+    "clear_dashboard_theme": "red_hat",
+
+    "mlflow_traces_experiment_name": "your-agent-experiment",
+
+    "separate_tools": false
   },
+
   "test_data_ref": {
     "s3": {
       "bucket": "clear-traces",
@@ -30,5 +37,6 @@
       }
     }
   },
+
   "callback_url": "http://localhost:8080"
 }
