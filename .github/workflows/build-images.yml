@@ -53,16 +53,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve image name
+        id: image
+        run: |
+          # Mapping of adapter directory name -> image name suffix.
+          # Omit an entry to default to community-<adapter>.
+          declare -A IMAGE_MAP=(
+            [clear]=ibm-clear
+          )
+          adapter="${{ matrix.adapter }}"
+          suffix="${IMAGE_MAP[$adapter]:-$adapter}"
+          echo "name=community-${suffix}" >> "$GITHUB_OUTPUT"
+
       - name: Build image
         run: |
           docker build \
             -f adapters/${{ matrix.adapter }}/Containerfile \
-            -t ${REGISTRY}/community-${{ matrix.adapter }}:${{ github.sha }} \
-            -t ${REGISTRY}/community-${{ matrix.adapter }}:latest \
+            -t ${REGISTRY}/${{ steps.image.outputs.name }}:${{ github.sha }} \
+            -t ${REGISTRY}/${{ steps.image.outputs.name }}:latest \
             adapters/${{ matrix.adapter }}
 
       - name: Push image
         run: |
           echo "${{ secrets.QUAY_TOKEN }}" | docker login quay.io -u "${{ secrets.QUAY_USER }}" --password-stdin
-          docker push ${REGISTRY}/community-${{ matrix.adapter }}:${{ github.sha }}
-          docker push ${REGISTRY}/community-${{ matrix.adapter }}:latest
+          docker push ${REGISTRY}/${{ steps.image.outputs.name }}:${{ github.sha }}
+          docker push ${REGISTRY}/${{ steps.image.outputs.name }}:latest
