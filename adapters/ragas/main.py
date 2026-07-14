@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Any
 
 from evalhub.adapter import (
-    ErrorInfo,
     EvaluationResult,
     FrameworkAdapter,
     JobCallbacks,
@@ -414,30 +413,14 @@ class RagasAdapter(FrameworkAdapter):
         try:
             # --- INITIALIZING ---
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.INITIALIZING,
-                    progress=0.0,
-                    message=MessageInfo(
-                        message="Validating configuration and resolving data path",
-                        message_code="initializing",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
             )
             self._validate_config(config)
             bc = config.parameters or {}
 
             # --- LOADING_DATA ---
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.LOADING_DATA,
-                    progress=0.15,
-                    message=MessageInfo(
-                        message="Loading evaluation dataset",
-                        message_code="loading_data",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
             )
             data_path = _resolve_data_path(config)
             records = _load_dataset(data_path)
@@ -485,15 +468,7 @@ class RagasAdapter(FrameworkAdapter):
             )
 
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.RUNNING_EVALUATION,
-                    progress=0.3,
-                    message=MessageInfo(
-                        message=f"Running RAGAS evaluation ({len(metrics)} metrics)",
-                        message_code="running_evaluation",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
             )
 
             ragas_result = self._run_ragas(
@@ -506,15 +481,7 @@ class RagasAdapter(FrameworkAdapter):
 
             # --- POST_PROCESSING ---
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.POST_PROCESSING,
-                    progress=0.85,
-                    message=MessageInfo(
-                        message="Processing RAGAS results",
-                        message_code="post_processing",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
             )
 
             result_df = ragas_result.to_pandas()
@@ -569,19 +536,10 @@ class RagasAdapter(FrameworkAdapter):
                 else None
             )
 
-            # --- PERSISTING_ARTIFACTS ---
             oci_artifact = None
             if config.exports and config.exports.oci:
                 callbacks.report_status(
-                    JobStatusUpdate(
-                        status=JobStatus.RUNNING,
-                        phase=JobPhase.PERSISTING_ARTIFACTS,
-                        progress=0.9,
-                        message=MessageInfo(
-                            message="Persisting results to OCI",
-                            message_code="persisting_artifacts",
-                        ),
-                    )
+                    JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
                 )
                 if self.local_jobs_base_path is not None:
                     results_dir = self.local_jobs_base_path / "results"
@@ -621,8 +579,10 @@ class RagasAdapter(FrameworkAdapter):
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
-                    error=ErrorInfo(message=str(e), message_code="job_failed"),
-                    error_details={"exception_type": type(e).__name__},
+                    error_message=MessageInfo(
+                        message=str(e),
+                        message_code="job_failed",
+                    ),
                 )
             )
             raise

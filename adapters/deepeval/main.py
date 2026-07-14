@@ -33,7 +33,6 @@ from deepeval.metrics import (
 from deepeval.test_case import ConversationalTestCase, LLMTestCase, SingleTurnParams, Turn
 from evalhub.adapter import (
     DefaultCallbacks,
-    ErrorInfo,
     EvaluationResult,
     FrameworkAdapter,
     JobCallbacks,
@@ -43,6 +42,7 @@ from evalhub.adapter import (
     JobStatus,
     JobStatusUpdate,
     MessageInfo,
+    OCIArtifactSpec,
 )
 from evalhub.adapter.auth import resolve_model_credentials
 from evalhub.adapter.mlflow import MlflowArtifact
@@ -292,15 +292,7 @@ class DeepEvalAdapter(FrameworkAdapter):
         try:
             # --- Phase: INITIALIZING ---
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.INITIALIZING,
-                    progress=0.0,
-                    message=MessageInfo(
-                        message="Initializing DeepEval evaluation",
-                        message_code="initializing",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
             )
 
             self._validate_config(config)
@@ -327,15 +319,7 @@ class DeepEvalAdapter(FrameworkAdapter):
 
             # --- Phase: LOADING_DATA ---
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.LOADING_DATA,
-                    progress=0.2,
-                    message=MessageInfo(
-                        message="Loading test dataset",
-                        message_code="loading_data",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
             )
 
             data_dir = _resolve_data_dir(config)
@@ -348,15 +332,7 @@ class DeepEvalAdapter(FrameworkAdapter):
 
             # --- Phase: RUNNING_EVALUATION ---
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.RUNNING_EVALUATION,
-                    progress=0.4,
-                    message=MessageInfo(
-                        message=f"Running DeepEval {benchmark_id} on {len(test_cases)} test cases",
-                        message_code="running_evaluation",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
             )
 
             judge = _resolve_judge_model(judge_name, judge_url)
@@ -375,32 +351,49 @@ class DeepEvalAdapter(FrameworkAdapter):
 
             # --- Phase: POST_PROCESSING ---
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.POST_PROCESSING,
-                    progress=0.8,
-                    message=MessageInfo(
-                        message="Processing DeepEval results",
-                        message_code="post_processing",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
             )
 
             evaluation_results = self._extract_results(eval_results, benchmark_id)
             overall_score = self._compute_overall_score(evaluation_results, benchmark_id)
 
-            # --- Phase: PERSISTING_ARTIFACTS ---
-            callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.PERSISTING_ARTIFACTS,
-                    progress=0.9,
-                    message=MessageInfo(
-                        message="Persisting DeepEval artifacts",
-                        message_code="persisting_artifacts",
-                    ),
+            summary_bytes = json.dumps(
+                {
+                    "benchmark_id": benchmark_id,
+                    "overall_score": overall_score,
+                    "num_examples_evaluated": len(test_cases),
+                    "results": [
+                        {"metric_name": r.metric_name, "metric_value": r.metric_value}
+                        for r in evaluation_results
+                    ],
+                },
+                indent=2,
+                default=str,
+            ).encode()
+
+            oci_artifact = None
+            oci_exports = config.exports.oci if config.exports else None
+            if oci_exports is not None:
+                callbacks.report_status(
+                    JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
                 )
-            )
+                if self.local_jobs_base_path is not None:
+                    results_dir = self.local_jobs_base_path / "results"
+                else:
+                    results_dir = Path(__file__).parent / "results"
+                results_dir.mkdir(parents=True, exist_ok=True)
+                (results_dir / "results_summary.json").write_bytes(summary_bytes)
+                coords = oci_exports.coordinates.model_copy(deep=True)
+                coords.annotations.update({
+                    "org.opencontainers.image.created": datetime.now(UTC).isoformat(),
+                    "io.github.eval-hub.benchmark": config.benchmark_id,
+                    "io.github.eval-hub.model": config.model.name,
+                    "io.github.eval-hub.job_id": config.id,
+                })
+                oci_artifact = callbacks.create_oci_artifact(
+                    OCIArtifactSpec(files_path=results_dir, coordinates=coords)
+                )
+                logger.info("OCI artifact created: %s", oci_artifact.reference)
 
             duration = time.time() - start_time
             job_results = JobResults(
@@ -421,6 +414,7 @@ class DeepEvalAdapter(FrameworkAdapter):
                     "dataset_format": dataset_format,
                     "data_dir": data_dir,
                 },
+                oci_artifact=oci_artifact,
             )
 
             experiment_name = (config.experiment_name or "").strip()
@@ -431,16 +425,6 @@ class DeepEvalAdapter(FrameworkAdapter):
 
             if experiment_name:
                 try:
-                    summary = {
-                        "benchmark_id": benchmark_id,
-                        "overall_score": overall_score,
-                        "num_examples_evaluated": len(test_cases),
-                        "results": [
-                            {"metric_name": r.metric_name, "metric_value": r.metric_value}
-                            for r in evaluation_results
-                        ],
-                    }
-                    summary_bytes = json.dumps(summary, indent=2, default=str).encode()
                     spec = config.model_copy(update={"experiment_name": experiment_name})
                     rid = callbacks.mlflow.save(
                         job_results,
@@ -459,22 +443,13 @@ class DeepEvalAdapter(FrameworkAdapter):
 
         except Exception as exc:
             logger.exception("DeepEval evaluation failed")
-            error_msg = str(exc)
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
-                    message=MessageInfo(
-                        message=error_msg,
-                        message_code="failed",
-                    ),
-                    error=ErrorInfo(
-                        message=error_msg,
+                    error_message=MessageInfo(
+                        message=str(exc),
                         message_code="evaluation_error",
                     ),
-                    error_details={
-                        "exception_type": type(exc).__name__,
-                        "benchmark_id": config.benchmark_id,
-                    },
                 )
             )
             raise

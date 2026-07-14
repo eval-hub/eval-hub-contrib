@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, create_autospec
 
 import pytest
 
-from evalhub.adapter import JobCallbacks, JobPhase
+from evalhub.adapter import JobCallbacks, JobPhase, OCIArtifactResult
 from main import (
     DeepEvalAdapter,
     _build_conversational_test_cases,
@@ -162,7 +162,59 @@ def test_deepeval_happy_path(tmp_path, monkeypatch, benchmark_id, file_content, 
     assert JobPhase.LOADING_DATA in phases
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
+    # PERSISTING_ARTIFACTS only emitted when OCI exports are configured
+
+
+@pytest.mark.integration
+def test_oci_export_persists_artifacts(tmp_path, monkeypatch):
+    """When exports.oci is configured, PERSISTING_ARTIFACTS is emitted, results file is written, and create_oci_artifact is called."""
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    with open(Path("meta/job.json")) as f:
+        job = json.load(f)
+    job["exports"] = {
+        "oci": {
+            "coordinates": {
+                "oci_host": "quay.io",
+                "oci_repository": "test-org/test-repo",
+                "oci_tag": "test-tag",
+                "annotations": {},
+            }
+        }
+    }
+    (meta_dir / "job.json").write_text(json.dumps(job))
+
+    adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
+    callbacks = create_autospec(JobCallbacks)
+    callbacks.create_oci_artifact.return_value = OCIArtifactResult(
+        digest="sha256:fake", reference="fake:latest",
+    )
+
+    data_dir = tmp_path / "test_data"
+    data_dir.mkdir()
+    (data_dir / "data.csv").write_text("input,actual_output,retrieval_context\nq,a,ctx\n")
+
+    monkeypatch.setattr("main._resolve_data_dir", lambda _config: str(data_dir))
+    monkeypatch.setattr("main._resolve_judge_model", lambda _name, _url: SimpleNamespace(name="MockModel"))
+    monkeypatch.setattr("main._create_metric", lambda _bid, _model, _threshold: SimpleNamespace(name="MockMetric"))
+    monkeypatch.setattr("main.evaluate", lambda **kwargs: _make_canned_eval_results())
+
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    # PERSISTING_ARTIFACTS phase was reported
+    phases = [c.args[0].phase for c in callbacks.report_status.call_args_list]
     assert JobPhase.PERSISTING_ARTIFACTS in phases
+
+    # Results file was written to disk before create_oci_artifact was called
+    call_args = callbacks.create_oci_artifact.call_args
+    assert call_args is not None
+    spec = call_args.args[0]
+    assert spec.files_path.exists()
+    assert (spec.files_path / "results_summary.json").exists()
+
+    # OCI artifact is attached to results
+    assert results.oci_artifact is not None
+    assert results.oci_artifact.digest == "sha256:fake"
 
 
 @pytest.mark.integration

@@ -22,7 +22,6 @@ from typing import Any, Optional
 
 from evalhub.adapter import (
     DefaultCallbacks,
-    ErrorInfo,
     EvaluationResult,
     FrameworkAdapter,
     JobCallbacks,
@@ -294,18 +293,14 @@ class ClearAdapter(FrameworkAdapter):
 
         try:
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.INITIALIZING,
-                    progress=0.0,
-                    message=MessageInfo(
-                        message="Initializing CLEAR for agentic evaluation",
-                        message_code="initializing",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
             )
 
             self._validate_config(config)
+
+            callbacks.report_status(
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
+            )
 
             data_dir: str | None = None
             test_data_path = Path("/test_data")
@@ -378,18 +373,6 @@ class ClearAdapter(FrameworkAdapter):
 
             logger.info("Found %d trace file(s) in %s", len(trace_files), data_dir)
 
-            callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.LOADING_DATA,
-                    progress=0.2,
-                    message=MessageInfo(
-                        message="Processing MLflow traces",
-                        message_code="loading_data",
-                    ),
-                )
-            )
-
             results_dir_param = config.parameters.get("results_dir")
             run_name_param = config.parameters.get("run_name")
             if results_dir_param and run_name_param:
@@ -403,15 +386,7 @@ class ClearAdapter(FrameworkAdapter):
             logger.info("CLEAR output base: %s", output_dir)
 
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.RUNNING_EVALUATION,
-                    progress=0.4,
-                    message=MessageInfo(
-                        message="Running CLEAR agentic pipeline",
-                        message_code="running_evaluation",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
             )
 
             if config.model.url and config.parameters.get("inference_backend") != "endpoint":
@@ -431,15 +406,7 @@ class ClearAdapter(FrameworkAdapter):
             logger.info("Results file: %s", json_results_path)
 
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.POST_PROCESSING,
-                    progress=0.8,
-                    message=MessageInfo(
-                        message="Processing CLEAR results",
-                        message_code="post_processing",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
             )
 
             evaluation_results = self._extract_agentic_results(str(json_results_path))
@@ -495,22 +462,13 @@ class ClearAdapter(FrameworkAdapter):
 
         except Exception as exc:
             logger.exception("CLEAR evaluation failed")
-            error_msg = str(exc)
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
-                    message=MessageInfo(
-                        message=error_msg,
-                        message_code="failed",
-                    ),
-                    error=ErrorInfo(
-                        message=error_msg,
+                    error_message=MessageInfo(
+                        message=str(exc),
                         message_code="evaluation_error",
                     ),
-                    error_details={
-                        "exception_type": type(exc).__name__,
-                        "benchmark_id": config.benchmark_id,
-                    },
                 )
             )
             raise
@@ -785,15 +743,7 @@ class ClearAdapter(FrameworkAdapter):
             return None
 
         callbacks.report_status(
-            JobStatusUpdate(
-                status=JobStatus.RUNNING,
-                phase=JobPhase.PERSISTING_ARTIFACTS,
-                progress=0.9,
-                message=MessageInfo(
-                    message="Persisting CLEAR artifacts",
-                    message_code="persisting_artifacts",
-                ),
-            )
+            JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
         )
 
         if self.local_jobs_base_path is not None:

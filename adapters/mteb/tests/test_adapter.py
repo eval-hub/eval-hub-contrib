@@ -85,7 +85,61 @@ def test_mteb_happy_path(tmp_path, monkeypatch):
     assert JobPhase.LOADING_DATA in phases
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
+    # PERSISTING_ARTIFACTS only emitted when OCI exports are configured
+
+
+@pytest.mark.integration
+def test_oci_export_persists_artifacts(tmp_path, monkeypatch):
+    """When exports.oci is configured, PERSISTING_ARTIFACTS is emitted and create_oci_artifact is called."""
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    with open(Path("meta/job.json")) as f:
+        job = json.load(f)
+    job["exports"] = {
+        "oci": {
+            "coordinates": {
+                "oci_host": "quay.io",
+                "oci_repository": "test-org/test-repo",
+                "oci_tag": "test-tag",
+                "annotations": {},
+            }
+        }
+    }
+    (meta_dir / "job.json").write_text(json.dumps(job))
+
+    adapter = MTEBAdapter(job_spec_path=str(meta_dir / "job.json"))
+
+    callbacks = create_autospec(JobCallbacks)
+    callbacks.create_oci_artifact.return_value = OCIArtifactResult(
+        digest="sha256:fake", reference="fake:latest",
+    )
+
+    def fake_run(cmd, timeout):
+        idx = cmd.index("--output-folder")
+        output_dir = Path(cmd[idx + 1])
+        model_dir = output_dir / "model" / "no_revision"
+        model_dir.mkdir(parents=True)
+        (model_dir / "STS12.json").write_text(json.dumps(CANNED_STS12))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(adapter, "_run_mteb_subprocess", fake_run)
+
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    # PERSISTING_ARTIFACTS phase was reported
+    phases = [c.args[0].phase for c in callbacks.report_status.call_args_list]
     assert JobPhase.PERSISTING_ARTIFACTS in phases
+
+    # create_oci_artifact was called with a directory containing result files
+    call_args = callbacks.create_oci_artifact.call_args
+    assert call_args is not None
+    spec = call_args.args[0]
+    assert spec.files_path.exists()
+    assert spec.files_path.is_dir()
+
+    # OCI artifact is attached to results
+    assert results.oci_artifact is not None
+    assert results.oci_artifact.digest == "sha256:fake"
 
 
 @pytest.mark.integration

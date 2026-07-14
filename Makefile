@@ -5,6 +5,7 @@
 REGISTRY ?= quay.io/eval-hub
 BUILD_TOOL ?= podman
 VERSION ?= latest
+PYTHON_VERSION ?= 3.12
 
 # Image names
 IMAGE_LIGHTEVAL = $(REGISTRY)/community-lighteval:$(VERSION)
@@ -65,6 +66,7 @@ help:
 	@echo "  REGISTRY=$(REGISTRY)"
 	@echo "  BUILD_TOOL=$(BUILD_TOOL)"
 	@echo "  VERSION=$(VERSION)"
+	@echo "  PYTHON_VERSION=$(PYTHON_VERSION)"
 	@echo ""
 	@echo "Example:"
 	@echo "  make image-lighteval REGISTRY=localhost:5000 VERSION=dev"
@@ -258,8 +260,8 @@ build-and-push-all: images push-images
 test-guidellm:
 	@echo "Running GuideLLM adapter tests..."
 	cd adapters/guidellm && \
-	test -d .venv || python3 -m venv .venv && \
-	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ GuideLLM tests passed"
 
@@ -267,8 +269,8 @@ test-guidellm:
 test-lighteval:
 	@echo "Running LightEval adapter tests..."
 	cd adapters/lighteval && \
-	test -d .venv || python3 -m venv .venv && \
-	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ LightEval tests passed"
 
@@ -276,8 +278,8 @@ test-lighteval:
 test-mteb:
 	@echo "Running MTEB adapter tests..."
 	cd adapters/mteb && \
-	test -d .venv || python3 -m venv .venv && \
-	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ MTEB tests passed"
 
@@ -285,8 +287,8 @@ test-mteb:
 test-clear:
 	@echo "Running CLEAR adapter tests..."
 	cd adapters/clear && \
-	test -d .venv || python3 -m venv .venv && \
-	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ CLEAR tests passed"
 
@@ -294,8 +296,8 @@ test-clear:
 test-inspect:
 	@echo "Running Inspect AI adapter tests..."
 	cd adapters/inspect && \
-	test -d .venv || python3 -m venv .venv && \
-	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ Inspect AI tests passed"
 
@@ -305,8 +307,8 @@ tests: test-guidellm test-lighteval test-mteb test-clear test-inspect
 test-deepeval:
 	@echo "Running DeepEval adapter tests..."
 	cd adapters/deepeval && \
-	test -d .venv || python3 -m venv .venv && \
-	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ DeepEval tests passed"
 
@@ -316,8 +318,8 @@ tests: test-guidellm test-lighteval test-mteb test-clear test-deepeval
 test-ragas:
 	@echo "Running RAGAS adapter tests..."
 	cd adapters/ragas && \
-	test -d .venv || python3 -m venv .venv && \
-	.venv/bin/pip install --quiet -r requirements.txt -r requirements-test.txt && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ RAGAS tests passed"
 
@@ -326,10 +328,9 @@ tests: test-guidellm test-lighteval test-mteb test-clear test-ragas
 	@echo "✅ All adapter tests passed"
 .PHONY: test-swebench
 test-swebench:
-	@echo "Testing SWE-bench adapter..."
+	@echo "Running SWE-bench adapter tests..."
 	cd adapters/swebench && \
-	python -m venv .venv 2>/dev/null || true && \
-	. .venv/bin/activate && \
-	pip install -q -r requirements.txt -r requirements-test.txt && \
-	pytest tests/ -v
-	@echo "✅ SWE-bench adapter tests passed"
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ SWE-bench tests passed"

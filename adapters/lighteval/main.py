@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any
 
 from evalhub.adapter import (
-    ErrorInfo,
     EvaluationResult,
     FrameworkAdapter,
     JobCallbacks,
@@ -83,15 +82,7 @@ class LightEvalAdapter(FrameworkAdapter):
         try:
             # Phase 1: Initialize
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.INITIALIZING,
-                    progress=0.0,
-                    message=MessageInfo(
-                        message=f"Initialising LightEval for benchmark {config.benchmark_id}",
-                        message_code="initializing",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
             )
 
             self._validate_config(config)
@@ -101,34 +92,12 @@ class LightEvalAdapter(FrameworkAdapter):
 
             # Phase 2: Loading data (LightEval handles this internally)
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.LOADING_DATA,
-                    progress=0.2,
-                    message=MessageInfo(
-                        message=f"LightEval loading benchmark data for {len(tasks)} task(s)",
-                        message_code="loading_data",
-                    ),
-                    current_step="Preparing evaluation",
-                    total_steps=4,
-                    completed_steps=1,
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
             )
 
             # Phase 3: Run evaluation
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.RUNNING_EVALUATION,
-                    progress=0.3,
-                    message=MessageInfo(
-                        message=f"Running LightEval on {len(tasks)} task(s)",
-                        message_code="running_evaluation",
-                    ),
-                    current_step="Executing benchmark",
-                    total_steps=4,
-                    completed_steps=2,
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
             )
 
             lighteval_results = self._run_lighteval(
@@ -143,18 +112,7 @@ class LightEvalAdapter(FrameworkAdapter):
 
             # Phase 4: Post-processing
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.POST_PROCESSING,
-                    progress=0.8,
-                    message=MessageInfo(
-                        message="Processing LightEval results",
-                        message_code="post_processing",
-                    ),
-                    current_step="Extracting metrics",
-                    total_steps=4,
-                    completed_steps=3,
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
             )
 
             evaluation_results = self._extract_evaluation_results(
@@ -178,24 +136,12 @@ class LightEvalAdapter(FrameworkAdapter):
             )
 
             # Phase 5: Persist artifacts
-            callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.PERSISTING_ARTIFACTS,
-                    progress=0.9,
-                    message=MessageInfo(
-                        message="Persisting LightEval artifacts to OCI registry",
-                        message_code="persisting_artifacts",
-                    ),
-                    current_step="Creating OCI artifact",
-                    total_steps=4,
-                    completed_steps=4,
-                )
-            )
-
             oci_artifact = None
             oci_exports = config.exports.oci if config.exports else None
             if oci_exports is not None and output_files:
+                callbacks.report_status(
+                    JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
+                )
                 coords = oci_exports.coordinates.model_copy(deep=True)
                 coords.annotations.update(
                     {
@@ -243,22 +189,13 @@ class LightEvalAdapter(FrameworkAdapter):
 
         except Exception as e:
             logger.exception("LightEval evaluation failed")
-            error_msg = str(e)
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
-                    message=MessageInfo(
-                        message=error_msg,
-                        message_code="failed",
-                    ),
-                    error=ErrorInfo(
-                        message=error_msg,
+                    error_message=MessageInfo(
+                        message=str(e),
                         message_code="evaluation_error",
                     ),
-                    error_details={
-                        "exception_type": type(e).__name__,
-                        "benchmark_id": config.benchmark_id,
-                    },
                 )
             )
             raise

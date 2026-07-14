@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from evalhub.adapter import (
-    ErrorInfo,
     EvaluationResult,
     FrameworkAdapter,
     JobCallbacks,
@@ -97,15 +96,7 @@ class GuideLLMAdapter(FrameworkAdapter):
         logger.info(f"Starting GuideLLM benchmark job: {config.id}")
 
         callbacks.report_status(
-            JobStatusUpdate(
-                status=JobStatus.RUNNING,
-                phase=JobPhase.INITIALIZING,
-                progress=0.0,
-                message=MessageInfo(
-                    message="Initializing GuideLLM benchmark",
-                    message_code="initializing",
-                ),
-            )
+            JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
         )
 
         try:
@@ -114,34 +105,21 @@ class GuideLLMAdapter(FrameworkAdapter):
             logger.info(f"Results directory: {self.results_dir}")
 
             # Build GuideLLM command
+            callbacks.report_status(
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
+            )
             cmd = self._build_guidellm_command(config)
             logger.info(f"Running command: {' '.join(cmd)}")
 
             # Execute GuideLLM
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.RUNNING_EVALUATION,
-                    progress=0.3,
-                    message=MessageInfo(
-                        message="Executing performance benchmark",
-                        message_code="running_evaluation",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
             )
             self._run_guidellm(cmd)
 
             # Parse results
             callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.POST_PROCESSING,
-                    progress=0.8,
-                    message=MessageInfo(
-                        message="Processing benchmark results",
-                        message_code="post_processing",
-                    ),
-                )
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
             )
             results_data = self._parse_results(config)
 
@@ -230,23 +208,14 @@ class GuideLLMAdapter(FrameworkAdapter):
             return results
 
         except Exception as e:
-            error_msg = f"Benchmark failed: {str(e)}"
-            logger.error(error_msg, exc_info=True)
+            logger.error("Benchmark failed: %s", e, exc_info=True)
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
-                    message=MessageInfo(
-                        message=error_msg,
-                        message_code="failed",
-                    ),
-                    error=ErrorInfo(
-                        message=error_msg,
+                    error_message=MessageInfo(
+                        message=str(e),
                         message_code="benchmark_error",
                     ),
-                    error_details={
-                        "exception_type": type(e).__name__,
-                        "benchmark_id": config.benchmark_id,
-                    },
                 )
             )
             raise
@@ -571,6 +540,10 @@ class GuideLLMAdapter(FrameworkAdapter):
         if oci_exports is None:
             logger.info("No OCI exports configured; skipping artifact persistence")
             return None
+
+        callbacks.report_status(
+            JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
+        )
 
         # Create OCI artifact with all files
         logger.info(f"Creating OCI artifact with {len(output_files)} files")

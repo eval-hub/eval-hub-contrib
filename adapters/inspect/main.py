@@ -36,7 +36,6 @@ from typing import Any
 
 from evalhub.adapter import (
     EnvironmentCardMetadata,
-    ErrorInfo,
     EvalCardMetadata,
     FrameworkAdapter,
     JobCallbacks,
@@ -79,13 +78,9 @@ class InspectAdapter(FrameworkAdapter):
         work_dir: Path | None = None
 
         try:
-            callbacks.report_status(JobStatusUpdate(
-                status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING, progress=0.0,
-                message=MessageInfo(
-                    message=f"Initializing Inspect AI ({mode} mode) for benchmark {config.benchmark_id}",
-                    message_code="initializing",
-                ),
-            ))
+            callbacks.report_status(
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
+            )
 
             extra_packages = ["inspect-ai"]
             if mode in ("petri", "bloom"):
@@ -106,11 +101,9 @@ class InspectAdapter(FrameworkAdapter):
 
             env = build_env(config, mode)
 
-            callbacks.report_status(JobStatusUpdate(
-                status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA, progress=0.1,
-                message=MessageInfo(message=self._loading_message(config, mode), message_code="loading_data"),
-                current_step="Preparing evaluation task", total_steps=4, completed_steps=1,
-            ))
+            callbacks.report_status(
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
+            )
 
             behavior_dir: Path | None = None
             if mode == "bloom":
@@ -120,39 +113,27 @@ class InspectAdapter(FrameworkAdapter):
             cmd = build_command(config, mode, task_spec, log_dir, behavior_dir, env)
             logger.info(f"Inspect command: {redact_cmd(cmd)}")
 
-            progress = 0.3 if mode != "bloom" else 0.6
-            run_label = "Petri audit" if mode == "petri" else "Bloom audit" if mode == "bloom" else task_spec
-            callbacks.report_status(JobStatusUpdate(
-                status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION, progress=progress,
-                message=MessageInfo(
-                    message=f"Running {run_label} against {config.model.name}",
-                    message_code="running_evaluation",
-                ),
-                current_step="Executing Inspect eval", total_steps=4, completed_steps=2,
-            ))
+            callbacks.report_status(
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
+            )
 
             log_file = run_inspect(cmd, env, log_dir)
             eval_log = parse_log(log_file)
 
-            callbacks.report_status(JobStatusUpdate(
-                status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING, progress=0.85,
-                message=MessageInfo(message="Processing Inspect scores", message_code="post_processing"),
-                current_step="Extracting metrics", total_steps=4, completed_steps=3,
-            ))
+            callbacks.report_status(
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
+            )
 
             evaluation_results, capability_entries, num_samples = extract_results(eval_log, config.benchmark_id, mode)
             overall_score = compute_overall_score(evaluation_results, mode)
             logger.info(f"Post-processing complete | samples={num_samples} | overall_score={overall_score}")
 
-            callbacks.report_status(JobStatusUpdate(
-                status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS, progress=0.93,
-                message=MessageInfo(message="Persisting Inspect artifacts to OCI registry", message_code="persisting_artifacts"),
-                current_step="Creating OCI artifact", total_steps=4, completed_steps=4,
-            ))
-
             oci_artifact = None
             oci_exports = config.exports.oci if config.exports else None
             if oci_exports is not None and log_file.exists():
+                callbacks.report_status(
+                    JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
+                )
                 coords = oci_exports.coordinates.model_copy(deep=True)
                 coords.annotations.update({
                     "org.opencontainers.image.created": datetime.now(UTC).isoformat(),
@@ -213,13 +194,15 @@ class InspectAdapter(FrameworkAdapter):
 
         except Exception as e:
             logger.exception("Inspect AI evaluation failed")
-            error_msg = str(e)
-            callbacks.report_status(JobStatusUpdate(
-                status=JobStatus.FAILED,
-                message=MessageInfo(message=error_msg, message_code="failed"),
-                error=ErrorInfo(message=error_msg, message_code="evaluation_error"),
-                error_details={"exception_type": type(e).__name__, "benchmark_id": config.benchmark_id},
-            ))
+            callbacks.report_status(
+                JobStatusUpdate(
+                    status=JobStatus.FAILED,
+                    error_message=MessageInfo(
+                        message=str(e),
+                        message_code="evaluation_error",
+                    ),
+                )
+            )
             raise
 
         finally:

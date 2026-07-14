@@ -207,6 +207,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Test-generated fixtures
+adapters/*/meta/job_oci.json
+
 #Evaluation specific files
 .litellm_cache/
 /.idea/libraries/my_test_package.xml
