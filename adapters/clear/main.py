@@ -472,17 +472,6 @@ class ClearAdapter(FrameworkAdapter):
             if not data_dir and TracesNamespace.is_source_configured(config.parameters):
                 if os.environ.get("MLFLOW_TRACKING_URI"):
                     logger.info("Fetching traces from MLflow experiment via SDK")
-                    callbacks.report_status(
-                        JobStatusUpdate(
-                            status=JobStatus.RUNNING,
-                            phase=JobPhase.LOADING_DATA,
-                            progress=0.1,
-                            message=MessageInfo(
-                                message="Fetching traces from MLflow",
-                                message_code="fetching_mlflow_traces",
-                            ),
-                        )
-                    )
                     mlflow_traces_dir = tempfile.mkdtemp(prefix="clear_mlflow_traces_")
                     _fetch_mlflow_traces_to_dir(self.mlflow, config.parameters, mlflow_traces_dir)
                     data_dir = mlflow_traces_dir
