@@ -333,3 +333,251 @@ docker run \
 ```
 
 This will run all tasks in the "commonsense_reasoning" category.
+
+## LightEval Results and Eval Card Fields
+
+### How the Adapter Processes LightEval Output
+
+LightEval writes a `results_*.json` file to the output directory. The adapter reads this file and extracts:
+
+- **Metrics** from `results` -- each `task|N` key maps to metric name/value pairs
+- **Task configuration** from `config_tasks` -- dataset repos, subsets, fewshot counts
+- **Generation parameters** from `config_general.model_config.generation_parameters`
+- **Sample count** from `config_general.max_samples`
+
+### Sample LightEval Results
+
+#### Single-task benchmark (`benchmark_id=gsm8k`, zero-shot)
+
+```json
+{
+  "config_general": {
+    "lighteval_sha": "?",
+    "num_fewshot_seeds": 1,
+    "max_samples": 5,
+    "model_config": {
+      "model_name": "openai/llama3.2:3b-instruct-q4_K_M",
+      "generation_parameters": {
+        "temperature": 0,
+        "max_new_tokens": null,
+        "top_p": null,
+        "seed": null
+      }
+    }
+  },
+  "results": {
+    "gsm8k|0": {
+      "extractive_match": 0.8,
+      "extractive_match_stderr": 0.02
+    },
+    "all": {
+      "extractive_match": 0.8,
+      "extractive_match_stderr": 0.02
+    }
+  },
+  "config_tasks": {
+    "gsm8k|0": {
+      "name": "gsm8k",
+      "hf_repo": "openai/gsm8k",
+      "hf_subset": "main",
+      "hf_revision": null,
+      "num_fewshots": 0
+    }
+  }
+}
+```
+
+Corresponding `additional_info` produced by the adapter (`num_fewshots == 0` → `zero_shot`):
+
+```json
+"additional_info": {
+  "dataset": [
+    {
+      "hf_repo": "openai/gsm8k",
+      "hf_subset": "main",
+      "sha": "740312add88f781978c0658806c59bc2815b9866"
+    }
+  ],
+  "generation_parameters": {
+    "temperature": 0
+  },
+  "zero_shot": 0.8
+}
+```
+
+#### Multi-task benchmark (`benchmark_id=math`, 3-shot)
+
+When `benchmark_id` maps to multiple tasks (e.g. `math` expands to `gsm8k`, `math:algebra`,
+`math:counting_and_probability`), the results contain one entry per task plus an `all` aggregate:
+
+```json
+{
+  "config_general": {
+    "max_samples": 5,
+    "model_config": {
+      "model_name": "openai/llama3.2:3b-instruct-q4_K_M",
+      "generation_parameters": {
+        "temperature": 0.1,
+        "max_new_tokens": 512,
+        "top_p": null,
+        "seed": null
+      }
+    }
+  },
+  "results": {
+    "gsm8k|3": {
+      "extractive_match": 1.0,
+      "extractive_match_stderr": 0.0
+    },
+    "math:algebra|3": {
+      "maj@n:n=4&...": 0.0,
+      "maj@n:n=4&..._stderr": 0.0
+    },
+    "math:counting_and_probability|3": {
+      "maj@n:n=4&...": 0.0,
+      "maj@n:n=4&..._stderr": 0.0
+    },
+    "math:_average|3": {
+      "maj@n:n=4&...": 0.0,
+      "maj@n:n=4&..._stderr": 0.0
+    },
+    "all": {
+      "extractive_match": 1.0,
+      "extractive_match_stderr": 0.0,
+      "maj@n:n=4&...": 0.0,
+      "maj@n:n=4&..._stderr": 0.0
+    }
+  },
+  "config_tasks": {
+    "gsm8k|3": {
+      "name": "gsm8k",
+      "hf_repo": "openai/gsm8k",
+      "hf_subset": "main",
+      "num_fewshots": 3
+    },
+    "math:algebra|3": {
+      "name": "math:algebra",
+      "hf_repo": "DigitalLearningGmbH/MATH-lighteval",
+      "hf_subset": "algebra",
+      "num_fewshots": 3
+    },
+    "math:counting_and_probability|3": {
+      "name": "math:counting_and_probability",
+      "hf_repo": "DigitalLearningGmbH/MATH-lighteval",
+      "hf_subset": "counting_and_probability",
+      "num_fewshots": 3
+    }
+  }
+}
+```
+
+Corresponding `additional_info` produced by the adapter (`num_fewshots == 3` → `alt_prompting`):
+
+```json
+"additional_info": {
+  "alt_prompting": 0,
+  "alt_prompting_description": "3-Shot",
+  "dataset": [
+    {
+      "hf_repo": "openai/gsm8k",
+      "hf_subset": "main",
+      "sha": "740312add88f781978c0658806c59bc2815b9866"
+    },
+    {
+      "hf_repo": "DigitalLearningGmbH/MATH-lighteval",
+      "hf_subset": "algebra",
+      "sha": "0530c78699ea5e8eb5530600900e1f328b48acad"
+    },
+    {
+      "hf_repo": "DigitalLearningGmbH/MATH-lighteval",
+      "hf_subset": "counting_and_probability",
+      "sha": "0530c78699ea5e8eb5530600900e1f328b48acad"
+    }
+  ],
+  "generation_parameters": {
+    "max_new_tokens": 512,
+    "temperature": 0.1
+  }
+}
+```
+
+### Fields the Adapter Extracts
+
+| LightEval field | Adapter output | Description |
+|---|---|---|
+| `results.<task\|N>.<metric>` | `EvaluationResult.metric_name` | Normalised to `task.metric` (strips `\|N` suffix, simplifies metric names like `pass@k:k=1` to `pass@1`) |
+| `results.<task\|N>.<metric>_stderr` | `EvaluationResult.confidence_interval` | Converted to a 95% CI: `value +/- 1.96 * stderr` |
+| `config_general.max_samples` | `JobResults.num_examples_evaluated` | Number of samples evaluated per task |
+| `config_tasks.<task>.hf_repo` | `additional_info.dataset[].hf_repo` | HuggingFace dataset repository |
+| `config_tasks.<task>.hf_subset` | `additional_info.dataset[].hf_subset` | Dataset subset (e.g. `main`, `algebra`) |
+| `config_tasks.<task>.num_fewshots` | `additional_info.zero_shot` or `additional_info.alt_prompting` | Determines prompting strategy (see below) |
+| `config_general.model_config.generation_parameters` | `additional_info.generation_parameters` | Non-null generation parameters (temperature, max_new_tokens, etc.) |
+
+### `additional_info` Structure
+
+The `additional_info` dict is attached to `JobResults` and written into `results.json`. Its fields
+are populated from LightEval's `config_tasks` and `config_general` sections.
+
+#### `dataset`
+
+An array of dataset references, one per HuggingFace repo + subset combination. The adapter resolves
+the current commit SHA from HuggingFace Hub when available:
+
+```json
+"dataset": [
+  {"hf_repo": "openai/gsm8k", "hf_subset": "main", "sha": "abc123..."},
+  {"hf_repo": "DigitalLearningGmbH/MATH-lighteval", "hf_subset": "algebra", "sha": "def456..."}
+]
+```
+
+If the SHA lookup fails (network error, private repo), the entry is included without a `sha` field.
+
+#### `zero_shot` and `alt_prompting` (mutually exclusive)
+
+These fields are **mutually exclusive** -- only one set is present in the output, never both.
+
+The adapter reads `num_fewshots` from `config_tasks.<task>.num_fewshots`, which is set by LightEval
+based on the `|N` suffix appended to each task in the CLI invocation (e.g. `gsm8k|3` means 3-shot).
+
+- **Zero-shot** (`num_fewshots == 0`): only `zero_shot` is present, set to the overall score.
+
+  ```json
+  {"dataset": [...], "zero_shot": 0.78}
+  ```
+
+- **Few-shot** (`num_fewshots > 0`): only `alt_prompting` and `alt_prompting_description` are
+  present. `alt_prompting` holds the overall score; `alt_prompting_description` is a human-readable
+  label like `"3-Shot"` or `"5-Shot"`.
+
+  ```json
+  {"dataset": [...], "alt_prompting": 0.78, "alt_prompting_description": "3-Shot"}
+  ```
+
+**How N-shot information is collected:** The adapter passes `num_few_shot` from the job parameters
+to LightEval as a per-task suffix (e.g. `gsm8k|3`). After evaluation, LightEval records the actual
+fewshot count in `config_tasks.<task>.num_fewshots`. The adapter reads this value back from the
+results rather than relying on the input parameter, so the recorded value reflects what LightEval
+actually used.
+
+#### `generation_parameters`
+
+Non-null generation parameters extracted from the model config. Only parameters with actual values
+are included; null-valued parameters are omitted:
+
+```json
+"generation_parameters": {"temperature": 0.1, "max_new_tokens": 512, "seed": 42}
+```
+
+If all generation parameters are null, this key is omitted entirely.
+
+### Limitations: CoT and Multi-Turn Detection
+
+Chain-of-Thought (CoT) and multi-turn evaluation strategies **cannot be reliably detected** from
+LightEval results alone. LightEval does not expose structured metadata indicating whether a task
+used CoT prompting or multi-turn interaction -- these are embedded in the task's prompt function
+and are not surfaced in the results JSON.
+
+<!-- Enhancement: CoT and multi-turn could be supported as explicit user-provided parameters
+     (e.g. `"prompting_strategy": "cot"` or `"multi_turn": true` in the job parameters).
+     The adapter would pass these through to additional_info without needing to infer them
+     from the framework output. -->

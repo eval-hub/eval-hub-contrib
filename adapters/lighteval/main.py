@@ -115,11 +115,16 @@ class LightEvalAdapter(FrameworkAdapter):
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
             )
 
+            config_tasks = lighteval_results.get("config_tasks", {})
+
             evaluation_results = self._extract_evaluation_results(
                 lighteval_results, config.benchmark_id
             )
             overall_score = self._compute_overall_score(evaluation_results)
             num_evaluated = self._extract_num_evaluated(lighteval_results)
+            additional_info = self._build_additional_info(
+                overall_score, lighteval_results, config_tasks
+            )
 
             # Save detailed results
             output_files = self._save_detailed_results(
@@ -128,6 +133,7 @@ class LightEvalAdapter(FrameworkAdapter):
                 model_name=config.model.name,
                 lighteval_results=lighteval_results,
                 evaluation_results=evaluation_results,
+                additional_info=additional_info,
             )
 
             logger.info(
@@ -185,6 +191,7 @@ class LightEvalAdapter(FrameworkAdapter):
                     "model_provider": config.parameters.get("provider", "endpoint"),
                 },
                 oci_artifact=oci_artifact,
+                additional_info=additional_info,
             )
 
         except Exception as e:
@@ -314,7 +321,7 @@ class LightEvalAdapter(FrameworkAdapter):
                 model_args += f",device={device}"
             cmd = ["lighteval", "accelerate", model_args, tasks_arg]
 
-        elif provider in ["vllm"]:
+        elif provider == "vllm":
             # For vLLM models
             model_args = f"pretrained={model_config.name}"
             cmd = ["lighteval", "vllm", model_args, tasks_arg]
@@ -350,9 +357,8 @@ class LightEvalAdapter(FrameworkAdapter):
 
             # Add additional parameters from benchmark_config
             parameters = benchmark_config.get("parameters", {})
-            if parameters:
-                for key, value in parameters.items():
-                    model_args += f",{key}={value}"
+            for key, value in parameters.items():
+                model_args += f",{key}={value}"
 
             cmd = ["lighteval", "endpoint", "litellm", model_args, tasks_arg]
 
@@ -471,16 +477,8 @@ class LightEvalAdapter(FrameworkAdapter):
             if not isinstance(task_metrics, dict):
                 continue
 
-            # Process each metric
-            processed_metrics = set()  # Track processed metrics to avoid duplicates
-
             for metric_name, metric_value in task_metrics.items():
-                # Skip stderr metrics (we'll handle them separately)
                 if metric_name.endswith("_stderr"):
-                    continue
-
-                # Skip if already processed
-                if metric_name in processed_metrics:
                     continue
 
                 # Look for stderr (standard error) for confidence interval
@@ -502,8 +500,6 @@ class LightEvalAdapter(FrameworkAdapter):
                     metric_type = "int"
                 elif isinstance(metric_value, str):
                     metric_type = "string"
-                elif isinstance(metric_value, bool):
-                    metric_type = "bool"
 
                 clean_metric = self._normalise_metric_name(metric_name)
                 clean_task = self._normalise_task_name(task_name)
@@ -522,8 +518,6 @@ class LightEvalAdapter(FrameworkAdapter):
                         },
                     )
                 )
-
-                processed_metrics.add(metric_name)
 
         logger.info(f"Extracted {len(evaluation_results)} metrics from LightEval results")
         return evaluation_results
@@ -589,6 +583,108 @@ class LightEvalAdapter(FrameworkAdapter):
             return int(max_samples)
         return 0
 
+    @staticmethod
+    def _resolve_dataset_shas(config_tasks: dict[str, Any]) -> list[dict[str, Any]]:
+        repos: dict[str, dict] = {}
+        for task_cfg in config_tasks.values():
+            if not isinstance(task_cfg, dict):
+                continue
+            hf_repo = task_cfg.get("hf_repo")
+            if not hf_repo:
+                continue
+            if hf_repo not in repos:
+                repos[hf_repo] = {
+                    "revision": task_cfg.get("hf_revision"),
+                    "subsets": [],
+                }
+            hf_subset = task_cfg.get("hf_subset", "default")
+            if hf_subset not in repos[hf_repo]["subsets"]:
+                repos[hf_repo]["subsets"].append(hf_subset)
+
+        if not repos:
+            return []
+
+        from huggingface_hub import HfApi
+
+        hf_token = os.environ.get("HF_TOKEN") or read_model_auth_key("hf-token")
+        api = HfApi(token=hf_token or None)
+
+        for repo_id, repo in repos.items():
+            try:
+                info = api.dataset_info(repo_id, revision=repo["revision"] or "main")
+                repo["sha"] = info.sha
+            except Exception:
+                logger.warning("Failed to resolve SHA for %s", repo_id, exc_info=True)
+
+        dataset = []
+        for repo_id, repo in repos.items():
+            for subset in repo["subsets"]:
+                entry: dict[str, Any] = {"hf_repo": repo_id, "hf_subset": subset}
+                if "sha" in repo:
+                    entry["sha"] = repo["sha"]
+                dataset.append(entry)
+
+        return dataset
+
+    @staticmethod
+    def _fewshot_fields(num_fewshots: int, score) -> dict[str, Any]:
+        score = score if score is not None else ""
+        if num_fewshots == 0:
+            return {"zero_shot": score}
+        return {
+            "alt_prompting": score,
+            "alt_prompting_description": f"{num_fewshots}-Shot",
+        }
+
+    @staticmethod
+    def _extract_generation_parameters(
+        lighteval_results: dict[str, Any],
+    ) -> dict[str, Any]:
+        model_config = lighteval_results.get("config_general", {}).get("model_config", {})
+        gen_params = model_config.get("generation_parameters", {})
+        if not isinstance(gen_params, dict):
+            return {}
+        return {k: v for k, v in gen_params.items() if v is not None}
+
+    def _build_additional_info(
+        self,
+        overall_score: float | None,
+        lighteval_results: dict[str, Any] | None = None,
+        config_tasks: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        try:
+            config_tasks = config_tasks or {}
+            num_fewshots = 0
+            for task_cfg in config_tasks.values():
+                if isinstance(task_cfg, dict) and "num_fewshots" in task_cfg:
+                    num_fewshots = task_cfg["num_fewshots"]
+                    break
+
+            dataset = self._resolve_dataset_shas(config_tasks)
+            prompting_fields = self._fewshot_fields(num_fewshots, overall_score)
+
+            info: dict[str, Any] = {"dataset": dataset, **prompting_fields}
+
+            if lighteval_results is not None:
+                gen_params = self._extract_generation_parameters(lighteval_results)
+                if gen_params:
+                    info["generation_parameters"] = gen_params
+
+            return info
+        except Exception:
+            logger.warning("Failed to build additional_info", exc_info=True)
+            return None
+
+    def generate_additional_info(self, results: JobResults) -> dict[str, Any] | None:
+        try:
+            metadata = results.evaluation_metadata or {}
+            num_fewshots = metadata.get("num_few_shot", 0)
+            prompting_fields = self._fewshot_fields(num_fewshots, results.overall_score)
+            return {"dataset": [], **prompting_fields}
+        except Exception:
+            logger.warning("Failed to generate additional_info", exc_info=True)
+            return None
+
     def _save_detailed_results(
         self,
         job_id: str,
@@ -596,6 +692,7 @@ class LightEvalAdapter(FrameworkAdapter):
         model_name: str,
         lighteval_results: dict[str, Any],
         evaluation_results: list[EvaluationResult],
+        additional_info: dict[str, Any] | None = None,
     ) -> list[Path]:
         """Save detailed results to files for OCI artifact.
 
@@ -625,28 +722,27 @@ class LightEvalAdapter(FrameworkAdapter):
 
         # Save structured results
         structured_results_file = output_dir / "results.json"
-        with open(structured_results_file, "w") as f:
-            json.dump(
+        structured = {
+            "job_id": job_id,
+            "benchmark_id": benchmark_id,
+            "model_name": model_name,
+            "framework": "lighteval",
+            "results": [
                 {
-                    "job_id": job_id,
-                    "benchmark_id": benchmark_id,
-                    "model_name": model_name,
-                    "framework": "lighteval",
-                    "results": [
-                        {
-                            "metric_name": r.metric_name,
-                            "metric_value": r.metric_value,
-                            "metric_type": r.metric_type,
-                            "confidence_interval": r.confidence_interval,
-                            "num_samples": r.num_samples,
-                            "metadata": r.metadata,
-                        }
-                        for r in evaluation_results
-                    ],
-                },
-                f,
-                indent=2,
-            )
+                    "metric_name": r.metric_name,
+                    "metric_value": r.metric_value,
+                    "metric_type": r.metric_type,
+                    "confidence_interval": r.confidence_interval,
+                    "num_samples": r.num_samples,
+                    "metadata": r.metadata,
+                }
+                for r in evaluation_results
+            ],
+        }
+        if additional_info is not None:
+            structured["additional_info"] = additional_info
+        with open(structured_results_file, "w") as f:
+            json.dump(structured, f, indent=2)
         files.append(structured_results_file)
 
         # Save summary
@@ -675,9 +771,9 @@ class LightEvalAdapter(FrameworkAdapter):
             LightEval version string, or 'unknown' if not available
         """
         try:
-            import lighteval
-            return getattr(lighteval, "__version__", "unknown")
-        except (ImportError, AttributeError):
+            from importlib.metadata import version
+            return version("lighteval")
+        except Exception:
             return "unknown"
 
 
