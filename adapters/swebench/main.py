@@ -95,7 +95,11 @@ class SWEBenchAdapter(FrameworkAdapter):
             dataset_name = SUPPORTED_BENCHMARKS[benchmark_id]
             params = config.parameters or {}
 
-            predictions_path = params.get("predictions_path") or "gold"
+            predictions_path = params.get("predictions_path")
+            if predictions_path is None:
+                predictions_path = "gold"
+            elif not predictions_path:
+                raise ValueError('predictions_path must not be empty - pass a file path or "gold"')
             k8s_registry = params.get("k8s_registry", "docker.io/swebench")
             k8s_namespace = self._current_namespace()
             max_workers = int(params.get("max_workers", 10))
@@ -283,11 +287,6 @@ class SWEBenchAdapter(FrameworkAdapter):
                 }
                 for inst in dataset
             }
-
-        if not predictions_path:
-            raise ValueError(
-                'predictions_path is required - pass a file path or "gold"'
-            )
 
         path = Path(predictions_path)
         if path.is_dir():
