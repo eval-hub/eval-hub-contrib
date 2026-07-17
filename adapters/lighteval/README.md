@@ -341,7 +341,7 @@ This will run all tasks in the "commonsense_reasoning" category.
 LightEval writes a `results_*.json` file to the output directory. The adapter reads this file and extracts:
 
 - **Metrics** from `results` -- each `task|N` key maps to metric name/value pairs
-- **Task configuration** from `config_tasks` -- dataset repos, subsets, fewshot counts
+- **Task configuration** from `config_tasks` -- dataset repos, subsets, few-shot counts
 - **Generation parameters** from `config_general.model_config.generation_parameters`
 - **Sample count** from `config_general.max_samples`
 

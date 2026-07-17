@@ -7,10 +7,11 @@ returns parsed results inline, so no filesystem setup is needed.
 import copy
 import json
 import shutil
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, create_autospec, patch
+from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock, create_autospec
 
 import pytest
 
@@ -69,7 +70,7 @@ def mock_callbacks():
 
 
 @pytest.mark.integration
-def test_lighteval_happy_path(adapter, mock_callbacks, monkeypatch):
+def test_lighteval_happy_path(adapter, mock_callbacks, monkeypatch, mock_hf_api):
     """Full run_benchmark_job with mocked _run_lighteval returning canned results."""
 
     # Single patch -- _run_lighteval returns parsed results directly
@@ -108,7 +109,7 @@ def test_lighteval_happy_path(adapter, mock_callbacks, monkeypatch):
 
 
 @pytest.mark.integration
-def test_oci_export_persists_artifacts(tmp_path, mock_callbacks, monkeypatch):
+def test_oci_export_persists_artifacts(tmp_path, mock_callbacks, monkeypatch, mock_hf_api):
     """When exports.oci is configured, PERSISTING_ARTIFACTS is emitted and create_oci_artifact is called."""
     meta_dir = tmp_path / "meta"
     meta_dir.mkdir()
@@ -176,7 +177,7 @@ def test_results_use_local_jobs_base_path(adapter, tmp_path):
 
 
 @pytest.mark.integration
-def test_additional_info_zero_shot(adapter, mock_callbacks, monkeypatch):
+def test_additional_info_zero_shot(adapter, mock_callbacks, monkeypatch, mock_hf_api):
     """Zero-shot run populates zero_shot with the overall score."""
     monkeypatch.setattr(adapter, "_run_lighteval", lambda **kwargs: CANNED_RESULTS)
 
@@ -193,7 +194,7 @@ def test_additional_info_zero_shot(adapter, mock_callbacks, monkeypatch):
 
 
 @pytest.mark.integration
-def test_additional_info_few_shot(tmp_path, mock_callbacks, monkeypatch):
+def test_additional_info_few_shot(tmp_path, mock_callbacks, monkeypatch, mock_hf_api):
     """Few-shot run populates alt_prompting with the overall score and a description."""
     meta_dir = tmp_path / "meta"
     meta_dir.mkdir()
@@ -277,8 +278,23 @@ def test_generate_additional_info_fallback(adapter):
     assert info["dataset"] == []
 
 
+@pytest.fixture
+def mock_hf_api(monkeypatch):
+    """Stub huggingface_hub so _resolve_dataset_shas never hits the network.
+
+    Returns the mock HfApi instance; SHA-specific tests can reconfigure
+    mock_api.dataset_info to return custom metadata.
+    """
+    mock_api = MagicMock()
+    mock_api.dataset_info.return_value = SimpleNamespace(sha="deterministic-sha")
+    stub = ModuleType("huggingface_hub")
+    stub.HfApi = MagicMock(return_value=mock_api)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", stub)
+    return mock_api
+
+
 @pytest.mark.integration
-def test_resolve_dataset_shas_success():
+def test_resolve_dataset_shas_success(mock_hf_api):
     """_resolve_dataset_shas resolves SHAs via HfApi."""
     config_tasks = {
         "gsm8k|3": {
@@ -304,24 +320,55 @@ def test_resolve_dataset_shas_success():
         },
     }
 
-    mock_api = MagicMock()
-    mock_api.dataset_info.side_effect = lambda repo_id, revision="main": {
+    mock_hf_api.dataset_info.side_effect = lambda repo_id, revision="main": {
         "openai/gsm8k": SimpleNamespace(sha="aaa111"),
         "DigitalLearningGmbH/MATH-lighteval": SimpleNamespace(sha="bbb222"),
     }[repo_id]
 
-    with patch("huggingface_hub.HfApi", return_value=mock_api):
-        dataset = LightEvalAdapter._resolve_dataset_shas(config_tasks)
+    dataset = LightEvalAdapter._resolve_dataset_shas(config_tasks)
 
     assert len(dataset) == 3
     assert dataset[0] == {"hf_repo": "openai/gsm8k", "hf_subset": "main", "sha": "aaa111"}
     assert dataset[1] == {"hf_repo": "DigitalLearningGmbH/MATH-lighteval", "hf_subset": "algebra", "sha": "bbb222"}
     assert dataset[2] == {"hf_repo": "DigitalLearningGmbH/MATH-lighteval", "hf_subset": "counting_and_probability", "sha": "bbb222"}
-    assert mock_api.dataset_info.call_count == 2
+    assert mock_hf_api.dataset_info.call_count == 2
 
 
 @pytest.mark.integration
-def test_resolve_dataset_shas_fault_tolerant():
+def test_resolve_dataset_shas_different_revisions(mock_hf_api):
+    """Two tasks sharing a repo but with different revisions resolve independently."""
+    config_tasks = {
+        "task_a|0": {
+            "name": "task_a",
+            "hf_repo": "shared/repo",
+            "hf_subset": "default",
+            "hf_revision": "rev-aaa",
+            "num_fewshots": 0,
+        },
+        "task_b|0": {
+            "name": "task_b",
+            "hf_repo": "shared/repo",
+            "hf_subset": "default",
+            "hf_revision": "rev-bbb",
+            "num_fewshots": 0,
+        },
+    }
+
+    mock_hf_api.dataset_info.side_effect = lambda repo_id, revision="main": {
+        "rev-aaa": SimpleNamespace(sha="sha-aaa"),
+        "rev-bbb": SimpleNamespace(sha="sha-bbb"),
+    }[revision]
+
+    dataset = LightEvalAdapter._resolve_dataset_shas(config_tasks)
+
+    assert len(dataset) == 2
+    assert dataset[0] == {"hf_repo": "shared/repo", "hf_subset": "default", "sha": "sha-aaa"}
+    assert dataset[1] == {"hf_repo": "shared/repo", "hf_subset": "default", "sha": "sha-bbb"}
+    assert mock_hf_api.dataset_info.call_count == 2
+
+
+@pytest.mark.integration
+def test_resolve_dataset_shas_fault_tolerant(mock_hf_api):
     """_resolve_dataset_shas skips SHA on API failure without crashing."""
     config_tasks = {
         "gsm8k|0": {
@@ -332,11 +379,9 @@ def test_resolve_dataset_shas_fault_tolerant():
         }
     }
 
-    mock_api = MagicMock()
-    mock_api.dataset_info.side_effect = Exception("network error")
+    mock_hf_api.dataset_info.side_effect = Exception("network error")
 
-    with patch("huggingface_hub.HfApi", return_value=mock_api):
-        dataset = LightEvalAdapter._resolve_dataset_shas(config_tasks)
+    dataset = LightEvalAdapter._resolve_dataset_shas(config_tasks)
 
     assert len(dataset) == 1
     assert dataset[0] == {"hf_repo": "openai/gsm8k", "hf_subset": "main"}
@@ -344,15 +389,12 @@ def test_resolve_dataset_shas_fault_tolerant():
 
 
 @pytest.mark.integration
-def test_additional_info_includes_sha(adapter, mock_callbacks, monkeypatch):
+def test_additional_info_includes_sha(adapter, mock_callbacks, monkeypatch, mock_hf_api):
     """Full run_benchmark_job includes dataset SHA when HfApi succeeds."""
     monkeypatch.setattr(adapter, "_run_lighteval", lambda **kwargs: CANNED_RESULTS)
+    mock_hf_api.dataset_info.return_value = SimpleNamespace(sha="abc123def456")
 
-    mock_api = MagicMock()
-    mock_api.dataset_info.return_value = SimpleNamespace(sha="abc123def456")
-
-    with patch("huggingface_hub.HfApi", return_value=mock_api):
-        results = adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+    results = adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
 
     assert results.additional_info is not None
     ds = results.additional_info["dataset"]
@@ -362,7 +404,7 @@ def test_additional_info_includes_sha(adapter, mock_callbacks, monkeypatch):
 
 
 @pytest.mark.integration
-def test_additional_info_generation_parameters(adapter, mock_callbacks, monkeypatch):
+def test_additional_info_generation_parameters(adapter, mock_callbacks, monkeypatch, mock_hf_api):
     """generation_parameters includes only non-null values from config_general."""
     monkeypatch.setattr(adapter, "_run_lighteval", lambda **kwargs: CANNED_RESULTS)
 
@@ -376,7 +418,7 @@ def test_additional_info_generation_parameters(adapter, mock_callbacks, monkeypa
 
 
 @pytest.mark.integration
-def test_generation_parameters_all_null(adapter, mock_callbacks, monkeypatch):
+def test_generation_parameters_all_null(adapter, mock_callbacks, monkeypatch, mock_hf_api):
     """generation_parameters key is omitted when all values are null."""
     all_null_results = copy.deepcopy(CANNED_RESULTS)
     all_null_results["config_general"]["model_config"]["generation_parameters"] = {
@@ -393,7 +435,7 @@ def test_generation_parameters_all_null(adapter, mock_callbacks, monkeypatch):
 
 
 @pytest.mark.integration
-def test_generation_parameters_rich(adapter, mock_callbacks, monkeypatch):
+def test_generation_parameters_rich(adapter, mock_callbacks, monkeypatch, mock_hf_api):
     """generation_parameters preserves multiple non-null values."""
     rich_results = copy.deepcopy(CANNED_RESULTS)
     rich_results["config_general"]["model_config"]["generation_parameters"] = {

@@ -356,7 +356,9 @@ class LightEvalAdapter(FrameworkAdapter):
                     model_args += ",api_key=dummy"
 
             # Add additional parameters from benchmark_config
-            parameters = benchmark_config.get("parameters", {})
+            parameters = benchmark_config.get("parameters") or {}
+            if not isinstance(parameters, dict):
+                raise ValueError("parameters must be an object")
             for key, value in parameters.items():
                 model_args += f",{key}={value}"
 
@@ -585,21 +587,23 @@ class LightEvalAdapter(FrameworkAdapter):
 
     @staticmethod
     def _resolve_dataset_shas(config_tasks: dict[str, Any]) -> list[dict[str, Any]]:
-        repos: dict[str, dict] = {}
+        repos: dict[tuple[str, str | None], dict] = {}
         for task_cfg in config_tasks.values():
             if not isinstance(task_cfg, dict):
                 continue
             hf_repo = task_cfg.get("hf_repo")
             if not hf_repo:
                 continue
-            if hf_repo not in repos:
-                repos[hf_repo] = {
-                    "revision": task_cfg.get("hf_revision"),
+            hf_revision = task_cfg.get("hf_revision")
+            key = (hf_repo, hf_revision)
+            if key not in repos:
+                repos[key] = {
+                    "revision": hf_revision,
                     "subsets": [],
                 }
             hf_subset = task_cfg.get("hf_subset", "default")
-            if hf_subset not in repos[hf_repo]["subsets"]:
-                repos[hf_repo]["subsets"].append(hf_subset)
+            if hf_subset not in repos[key]["subsets"]:
+                repos[key]["subsets"].append(hf_subset)
 
         if not repos:
             return []
@@ -609,7 +613,7 @@ class LightEvalAdapter(FrameworkAdapter):
         hf_token = os.environ.get("HF_TOKEN") or read_model_auth_key("hf-token")
         api = HfApi(token=hf_token or None)
 
-        for repo_id, repo in repos.items():
+        for (repo_id, _revision), repo in repos.items():
             try:
                 info = api.dataset_info(repo_id, revision=repo["revision"] or "main")
                 repo["sha"] = info.sha
@@ -617,7 +621,7 @@ class LightEvalAdapter(FrameworkAdapter):
                 logger.warning("Failed to resolve SHA for %s", repo_id, exc_info=True)
 
         dataset = []
-        for repo_id, repo in repos.items():
+        for (repo_id, _revision), repo in repos.items():
             for subset in repo["subsets"]:
                 entry: dict[str, Any] = {"hf_repo": repo_id, "hf_subset": subset}
                 if "sha" in repo:
