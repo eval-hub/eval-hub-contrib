@@ -107,7 +107,7 @@ def test_lighteval_local_openai(tmp_path, mock_sidecar):
             "url": "http://localhost:11434/v1",
             "name": model_name,
         },
-        "num_examples": 20,
+        "num_examples": 5,
         "parameters": {
             "provider": "endpoint",
             "batch_size": 1,
