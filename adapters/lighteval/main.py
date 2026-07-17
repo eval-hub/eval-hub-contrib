@@ -632,7 +632,6 @@ class LightEvalAdapter(FrameworkAdapter):
 
     @staticmethod
     def _fewshot_fields(num_fewshots: int, score) -> dict[str, Any]:
-        score = score if score is not None else ""
         if num_fewshots == 0:
             return {"zero_shot": score}
         return {
