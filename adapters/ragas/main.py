@@ -26,6 +26,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from evalhub.adapter import (
     EvaluationResult,
@@ -451,6 +452,26 @@ class RagasAdapter(FrameworkAdapter):
             model_name = config.model.name
             embedding_model = bc.get("embedding_model") or model_name
             embedding_url = bc.get("embedding_url") or model_url
+
+            # In k8s mode the service rewrites model.url to the local credential-
+            # injection sidecar (http://localhost:…).  If a caller also supplies an
+            # explicit embedding_url that points at an external host, the embedding
+            # calls would bypass the sidecar and reach the model endpoint with the
+            # unresolved "api-key:ref" ref token, causing a 401.  Detect this and
+            # fall back to the sidecar URL so both LLM and embedding calls share the
+            # same credential-injection path.
+            _sidecar_hosts = {"localhost", "127.0.0.1", "::1"}
+            _model_is_local = urlparse(model_url).hostname in _sidecar_hosts
+            _embed_is_external = urlparse(embedding_url).hostname not in _sidecar_hosts
+            if _model_is_local and _embed_is_external and embedding_url != model_url:
+                logger.warning(
+                    "embedding_url %r is external but model.url points to the local "
+                    "sidecar (%r); falling back to the sidecar URL for embeddings so "
+                    "that credential injection applies to both LLM and embedding calls.",
+                    embedding_url,
+                    model_url,
+                )
+                embedding_url = model_url
 
             max_workers = min(max(int(bc.get("max_workers") or 1), 1), 10)
             run_config = RunConfig(max_workers=max_workers)
