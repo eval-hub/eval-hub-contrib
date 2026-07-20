@@ -26,6 +26,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from evalhub.adapter import (
     EvaluationResult,
@@ -459,9 +460,9 @@ class RagasAdapter(FrameworkAdapter):
             # unresolved "api-key:ref" ref token, causing a 401.  Detect this and
             # fall back to the sidecar URL so both LLM and embedding calls share the
             # same credential-injection path.
-            _sidecar_hosts = ("localhost", "127.0.0.1", "::1")
-            _model_is_local = any(h in model_url for h in _sidecar_hosts)
-            _embed_is_external = not any(h in embedding_url for h in _sidecar_hosts)
+            _sidecar_hosts = {"localhost", "127.0.0.1", "::1"}
+            _model_is_local = urlparse(model_url).hostname in _sidecar_hosts
+            _embed_is_external = urlparse(embedding_url).hostname not in _sidecar_hosts
             if _model_is_local and _embed_is_external and embedding_url != model_url:
                 logger.warning(
                     "embedding_url %r is external but model.url points to the local "
