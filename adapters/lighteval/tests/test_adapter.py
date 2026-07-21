@@ -453,3 +453,112 @@ def test_generation_parameters_rich(adapter, mock_callbacks, monkeypatch, mock_h
     assert results.additional_info is not None
     gen = results.additional_info["generation_parameters"]
     assert gen == {"temperature": 0.1, "max_new_tokens": 512, "seed": 42}
+
+
+# ---------------------------------------------------------------------------
+# _format_generation_parameters — dict-to-brace-notation conversion
+# ---------------------------------------------------------------------------
+
+
+def test_format_generation_parameters_dict():
+    """Dict is converted to brace notation string."""
+    result = LightEvalAdapter._format_generation_parameters(
+        {"temperature": 0.1, "max_new_tokens": 512}
+    )
+    assert result == "{temperature:0.1,max_new_tokens:512}"
+
+
+def test_format_generation_parameters_string_passthrough():
+    """String value passes through unchanged (backward compat)."""
+    result = LightEvalAdapter._format_generation_parameters(
+        "{temperature:0.1,max_new_tokens:512}"
+    )
+    assert result == "{temperature:0.1,max_new_tokens:512}"
+
+
+def test_format_generation_parameters_bool_values():
+    """Bool values in dict render as lowercase true/false."""
+    result = LightEvalAdapter._format_generation_parameters(
+        {"stream": True, "debug": False}
+    )
+    assert result == "{stream:true,debug:false}"
+
+
+def test_format_generation_parameters_empty_dict():
+    """Empty dict produces empty braces."""
+    result = LightEvalAdapter._format_generation_parameters({})
+    assert result == "{}"
+
+
+def test_format_generation_parameters_stop_tokens_list():
+    """List values (e.g. stop_tokens) are emitted as JSON arrays."""
+    result = LightEvalAdapter._format_generation_parameters(
+        {"temperature": 0.1, "stop_tokens": ["\n", "###"]}
+    )
+    assert result == '{temperature:0.1,stop_tokens:["\\n", "###"]}'
+
+
+def test_format_generation_parameters_string_value_in_dict():
+    """String values inside a dict are JSON-quoted for the parser."""
+    result = LightEvalAdapter._format_generation_parameters(
+        {"cache_implementation": "static"}
+    )
+    assert result == '{cache_implementation:"static"}'
+
+
+# ---------------------------------------------------------------------------
+# _run_lighteval — CLI command construction
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_run_lighteval_cmd_formats_generation_parameters(adapter, tmp_path, monkeypatch):
+    """generation_parameters dict (including list values like stop_tokens) is
+    serialized as brace notation in the CLI command, not Python str()."""
+    adapter.job_spec.parameters["parameters"] = {
+        "generation_parameters": {
+            "temperature": 0.1,
+            "max_new_tokens": 512,
+            "stop_tokens": ["\n", "###"],
+        },
+        "concurrent_requests": 7,
+        "system_prompt": "You are a helpful math tutor.",
+    }
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        output_idx = cmd.index("--output-dir") + 1
+        results_dir = Path(cmd[output_idx])
+        results_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "results_test.json").write_text(json.dumps(CANNED_RESULTS))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "main.resolve_model_credentials",
+        lambda: SimpleNamespace(api_key="test-key"),
+    )
+    monkeypatch.setenv("HF_TOKEN", "fake")
+
+    adapter._run_lighteval(
+        model_config=adapter.job_spec.model,
+        tasks=["boolq"],
+        output_dir=tmp_path / "output",
+        num_fewshot=0,
+        limit=5,
+        batch_size=1,
+        benchmark_config=adapter.job_spec.parameters,
+    )
+
+    model_args = captured["cmd"][3]
+
+    assert "generation_parameters={temperature:0.1,max_new_tokens:512" in model_args
+    assert 'stop_tokens:["\\n", "###"]' in model_args
+    # Must not contain Python repr — single-quoted dicts or unquoted list repr
+    assert "{'temperature'" not in model_args
+    assert "['\\n'" not in model_args
+    # Scalar parameters pass through directly
+    assert ",concurrent_requests=7" in model_args
+    assert ",system_prompt=You are a helpful math tutor." in model_args

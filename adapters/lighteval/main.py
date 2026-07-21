@@ -360,6 +360,8 @@ class LightEvalAdapter(FrameworkAdapter):
             if not isinstance(parameters, dict):
                 raise ValueError("parameters must be an object")
             for key, value in parameters.items():
+                if key == "generation_parameters":
+                    value = self._format_generation_parameters(value)
                 model_args += f",{key}={value}"
 
             cmd = ["lighteval", "endpoint", "litellm", model_args, tasks_arg]
@@ -638,6 +640,21 @@ class LightEvalAdapter(FrameworkAdapter):
             "alt_prompting": score,
             "alt_prompting_description": f"{num_fewshots}-Shot",
         }
+
+    @staticmethod
+    def _format_generation_parameters(value: Any) -> str:
+        """Convert a dict to lighteval's brace notation: ``{k1:v1,k2:v2}``.
+
+        This is NOT JSON. LightEval's ``ModelConfig._parse_args()`` uses a
+        custom regex to split model_args — keys are bare identifiers (quoted
+        keys would break the parser), while values must be JSON literals so
+        that types like bools (``true``/``false`` not Python's ``True``) and
+        lists (``["\\n","###"]`` not ``['\\n','###']``) are parsed correctly
+        by ``GenerationParameters.from_model_args()``.
+        """
+        if not isinstance(value, dict):
+            return str(value)
+        return "{" + ",".join(f"{k}:{json.dumps(v)}" for k, v in value.items()) + "}"
 
     @staticmethod
     def _extract_generation_parameters(
