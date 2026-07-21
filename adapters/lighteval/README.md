@@ -132,9 +132,16 @@ The following parameters can be specified in the `benchmark_config` section or a
 
 #### Endpoint/API Providers
 
-- **`parameters`** (object, optional): Additional parameters passed to the model API
-  - Example: `{"temperature": 0.7, "top_p": 0.9, "max_tokens": 100}`
-  - These are appended to the model arguments for LiteLLM
+- **`parameters`** (object, optional): Additional model configuration parameters passed through to LightEval's `model_args` string. Each key-value pair is appended as `key=value` to the model arguments used by LightEval's LiteLLM model config. This only applies to API-based providers (`endpoint`, `openai`, `anthropic`, `litellm`).
+
+For the full list of supported fields, see the [LiteLLMModelConfig reference](https://huggingface.co/docs/lighteval/v0.13.0/en/package_reference/models#lighteval.models.endpoints.litellm_model.LiteLLMModelConfig). Examples:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `system_prompt` | string | None | System prompt prepended to all requests |
+| `concurrent_requests` | int | 10 | Max parallel API requests |
+| `max_model_length` | int | None | Max context length |
+| `generation_parameters` | string or object | None | Generation settings. Accepts brace notation string `"{temperature:0.1,max_new_tokens:512}"` or a YAML/JSON object (converted to brace notation automatically) |
 
 ### Example Payloads
 
@@ -214,6 +221,47 @@ The following parameters can be specified in the `benchmark_config` section or a
   "timeout_minutes": 90,
   "retry_attempts": 1
 }
+```
+
+#### CLI with Job Config File
+
+To run an evaluation using `evalhub eval run --config job.yaml`, create a YAML config file with model arguments specified under `parameters.parameters`:
+
+```yaml
+# job.yaml
+model:
+  name: openai/meta-llama/Llama-3.2-3B-Instruct
+  url: http://vllm-server:8000/v1
+benchmarks:
+  - id: math
+    provider_id: lighteval
+    parameters:
+      provider: endpoint
+      num_examples: 5
+      num_few_shot: 3
+      parameters:
+        # Object format (recommended):
+        generation_parameters:
+          temperature: 0.1
+          max_new_tokens: 512
+          stop_tokens:
+          - "\n"
+          - "###"
+        concurrent_requests: 7
+        system_prompt: "You are a helpful math tutor."
+```
+
+The same configuration can also be expressed with `generation_parameters` as a pre-formatted brace notation string:
+
+```yaml
+      parameters:
+        generation_parameters: "{temperature:0.1,max_new_tokens:512,stop_tokens:[\"\\n\", \"###\"]}"
+        concurrent_requests: 7
+        system_prompt: "You are a helpful math tutor."
+```
+
+```bash
+evalhub eval run --config job.yaml
 ```
 
 ## Usage
