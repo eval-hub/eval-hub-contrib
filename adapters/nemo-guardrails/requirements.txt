@@ -1,0 +1,8 @@
+eval-hub-sdk[adapter]>=0.4.3
+nemoguardrails[all] @ git+https://github.com/trustyai-explainability/NeMo-Guardrails.git@develop
+datasets
+requests
+pyyaml
+scikit-learn
+tqdm
+jq

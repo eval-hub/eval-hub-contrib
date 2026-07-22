@@ -15,6 +15,7 @@ IMAGE_INSPECT = $(REGISTRY)/community-inspect:$(VERSION)
 IMAGE_DEEPEVAL = $(REGISTRY)/community-deepeval:$(VERSION)
 IMAGE_RAGAS = $(REGISTRY)/community-ragas:$(VERSION)
 IMAGE_SWEBENCH = $(REGISTRY)/community-swebench:$(VERSION)
+IMAGE_NEMO_GUARDRAILS = $(REGISTRY)/community-nemo-guardrails:$(VERSION)
 
 # Default target
 .PHONY: help
@@ -334,3 +335,35 @@ test-swebench:
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ SWE-bench tests passed"
+
+.PHONY: image-nemo-guardrails
+image-nemo-guardrails:
+	@echo "Building NeMo Guardrails adapter image..."
+	cd adapters/nemo-guardrails && \
+	$(BUILD_TOOL) build -t $(IMAGE_NEMO_GUARDRAILS) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_NEMO_GUARDRAILS)"
+
+.PHONY: push-nemo-guardrails
+push-nemo-guardrails:
+	@echo "Pushing NeMo Guardrails adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_NEMO_GUARDRAILS)
+	@echo "✅ Pushed: $(IMAGE_NEMO_GUARDRAILS)"
+
+.PHONY: clean-nemo-guardrails
+clean-nemo-guardrails:
+	@echo "Removing NeMo Guardrails adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_NEMO_GUARDRAILS) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_NEMO_GUARDRAILS)"
+
+.PHONY: build-and-push-nemo-guardrails
+build-and-push-nemo-guardrails: image-nemo-guardrails push-nemo-guardrails
+	@echo "✅ NeMo Guardrails adapter built and pushed"
+
+.PHONY: test-nemo-guardrails
+test-nemo-guardrails:
+	@echo "Running NeMo Guardrails adapter tests..."
+	cd adapters/nemo-guardrails && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ NeMo Guardrails tests passed"
