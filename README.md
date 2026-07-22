@@ -15,6 +15,7 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [MTEB](https://github.com/embeddings-benchmark/mteb) | `quay.io/evalhub/community-mteb:latest` | ✓ | Massive Text Embedding Benchmark for embedding models |
 | [IBM CLEAR](https://github.com/IBM/CLEAR) | `quay.io/evalhub/community-ibm-clear:latest` | ✓ | Agentic trace analysis (LLM-as-judge error reporting) |
 | [Inspect AI](https://inspect.aisi.org.uk/) | `quay.io/evalhub/community-inspect:latest` | ✓ | UK AISI framework — Petri/Bloom alignment auditing and 75 inspect-evals benchmarks |
+| [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) | `quay.io/eval-hub/community-nemo-guardrails:latest` | ✓ | Safety rail evaluation — prompt injection and toxicity detection benchmarks |
 
 ## Inspect AI Adapter
 
@@ -42,6 +43,7 @@ See [adapters/inspect/README.md](adapters/inspect/README.md) for full documentat
 | [MTEB](https://github.com/embeddings-benchmark/mteb) | `quay.io/evalhub/community-mteb:latest` | ✗ | ✓ | Massive Text Embedding Benchmark for embedding models |
 | [IBM CLEAR](https://github.com/IBM/CLEAR) | `quay.io/evalhub/community-ibm-clear:latest` | ✓ | ✓ | Agentic trace analysis (LLM-as-judge error reporting) |
 | [RAGAS](https://github.com/explodinggradients/ragas) | `quay.io/evalhub/community-ragas:latest` | ✗ | ✓ | RAG pipeline quality evaluation (faithfulness, relevancy, context precision/recall, and more) |
+| [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) | `quay.io/eval-hub/community-nemo-guardrails:latest` | ✓ | ✓ | Safety rail evaluation — prompt injection and toxicity detection benchmarks |
 | [SWE-bench](https://github.com/SWE-bench/SWE-bench) | `quay.io/evalhub/community-swebench:latest` | ✗ | ✓ | Software engineering benchmark for code patch evaluation |
 
 ## JobPhase Lifecycle
@@ -99,17 +101,20 @@ if oci_exports is not None and output_files:
 make image-lighteval
 make image-guidellm
 make image-inspect
+make image-nemo-guardrails
 
 # Build all adapters
 make images
 
 # Run adapter tests
 make test-inspect
+make test-nemo-guardrails
 make tests
 
 # Push to registry
 make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-lighteval REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-nemo-guardrails REGISTRY=quay.io/your-org VERSION=v1.0.0
 ```
 
 ## Contributing
