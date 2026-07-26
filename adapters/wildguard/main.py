@@ -136,11 +136,9 @@ def _build_env_card(model_url: str, model_name: str) -> EnvironmentCardMetadata:
         framework_version=_ADAPTER_VERSION,
         extra_packages=["datasets", "openai", "httpx"],
     )
-    # Layer 4: model identity
+    # Layer 4: model identity (set directly; server recomputes capture_completeness)
     env.model_id = model_name
     env.model_provider = "openai-compatible"
-    # Re-compute completeness after adding model identity fields
-    env.capture_completeness = env._compute_completeness()
     return env
 
 
@@ -194,9 +192,8 @@ class WildGuardAdapter(FrameworkAdapter):
             )
 
             split = config.parameters.get("split", "test")
-            num_examples_param = config.parameters.get("num_examples") or getattr(
-                config, "num_examples", None
-            )
+            _param_val = config.parameters.get("num_examples")
+            num_examples_param = _param_val if _param_val is not None else getattr(config, "num_examples", None)
             num_examples = int(num_examples_param) if num_examples_param is not None else None
             max_concurrent = int(config.parameters.get("max_concurrent", 4))
 
@@ -263,9 +260,7 @@ class WildGuardAdapter(FrameworkAdapter):
                     predicted = _parse_label(output)
                     if predicted is None:
                         logger.warning(
-                            "Could not parse model output as safe/unsafe; "
-                            "treating as incorrect. Output: %r",
-                            output[:120],
+                            "Could not parse model output as safe/unsafe; treating as incorrect."
                         )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("API call failed for row: %s", exc)
@@ -317,6 +312,19 @@ class WildGuardAdapter(FrameworkAdapter):
                 eval_card=eval_card,
                 env_card=env_card,
             )
+            # --- PERSISTING_ARTIFACTS ---
+            callbacks.report_status(
+                JobStatusUpdate(
+                    status=JobStatus.RUNNING,
+                    phase=JobPhase.PERSISTING_ARTIFACTS,
+                    progress=0.95,
+                    message=MessageInfo(
+                        message="Finalizing WildGuard evaluation artifacts",
+                        message_code="persisting_artifacts",
+                    ),
+                )
+            )
+
             logger.info(
                 "Done %s score=%.4f n=%d %.2fs",
                 config.id,

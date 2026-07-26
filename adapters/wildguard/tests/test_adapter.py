@@ -104,7 +104,7 @@ def test_compute_metrics_mixed():
         ("unsafe", "unsafe"),
         ("unsafe", "safe"),   # wrong
     ]
-    results, score = WildGuardAdapter._compute_metrics(outcomes)
+    results, _ = WildGuardAdapter._compute_metrics(outcomes)
     metric = {r.metric_name: r.metric_value for r in results}
     assert metric["accuracy"] == pytest.approx(3 / 5)
     assert metric["safe_recall"] == pytest.approx(2 / 3)
@@ -115,7 +115,7 @@ def test_compute_metrics_mixed():
 
 def test_compute_metrics_unknown_predictions_count_as_incorrect():
     outcomes = [("safe", None), ("unsafe", None)]
-    results, score = WildGuardAdapter._compute_metrics(outcomes)
+    results, _ = WildGuardAdapter._compute_metrics(outcomes)
     metric = {r.metric_name: r.metric_value for r in results}
     assert metric["accuracy"] == pytest.approx(0.0)
     assert metric["n_evaluated"] == 2
@@ -296,6 +296,7 @@ def test_wildguard_happy_path(monkeypatch):
     assert JobPhase.LOADING_DATA in phases
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
+    assert JobPhase.PERSISTING_ARTIFACTS in phases
 
 
 # ---------------------------------------------------------------------------
