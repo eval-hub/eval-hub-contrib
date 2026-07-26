@@ -221,6 +221,15 @@ def _inject_fake_datasets(monkeypatch, rows):
     return fake_dataset
 
 
+def _inject_fake_openai(monkeypatch):
+    """Inject a stub openai module so the deferred 'import openai' inside run_benchmark_job
+    does not require the real package to be installed in the test environment."""
+    if "openai" not in sys.modules:
+        fake_openai_mod = types.ModuleType("openai")
+        fake_openai_mod.OpenAI = MagicMock()
+        monkeypatch.setitem(sys.modules, "openai", fake_openai_mod)
+
+
 def _inject_perfect_call_model(monkeypatch):
     """Patch _call_model so the returned text always matches the ground-truth label."""
     import main as main_mod
@@ -250,6 +259,7 @@ def test_wildguard_happy_path(monkeypatch):
     config.parameters["max_concurrent"] = 2
 
     _inject_fake_datasets(monkeypatch, CANNED_ROWS)
+    _inject_fake_openai(monkeypatch)
     _inject_perfect_call_model(monkeypatch)
 
     results = adapter.run_benchmark_job(config, callbacks)
@@ -305,6 +315,7 @@ def test_wildguard_per_row_api_errors_are_nonfatal(monkeypatch):
     config.parameters["max_concurrent"] = 1
 
     _inject_fake_datasets(monkeypatch, CANNED_ROWS[:2])
+    _inject_fake_openai(monkeypatch)
 
     import main as main_mod
 
