@@ -25,13 +25,14 @@ runtime:
 benchmarks:
   - id: ragas_rag_default
     name: RAG Default Suite
-    description: Default RAG evaluation with answer relevancy, context precision, faithfulness, and context recall
+    description: Default RAG evaluation with answer relevancy, context precision, faithfulness, context recall, and answer correctness
     category: rag_evaluation
     metrics:
       - answer_relevancy
       - context_precision
       - faithfulness
       - context_recall
+      - answer_correctness
     tags:
       - ragas
       - rag

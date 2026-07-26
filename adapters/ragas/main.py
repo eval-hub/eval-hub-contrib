@@ -18,11 +18,14 @@ completions/embeddings endpoints.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
+import ssl
 import sys
 import time
+import urllib.request as _urlreq
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -67,12 +70,13 @@ _DATA_SUFFIXES = (".jsonl", ".json")
 # ---------------------------------------------------------------------------
 # RAGAS metrics — import singletons and class-based metrics
 # ---------------------------------------------------------------------------
-from ragas.metrics import (
+from ragas.metrics.collections import (
     AnswerAccuracy,
     ContextRelevance,
     FactualCorrectness,
     NoiseSensitivity,
     ResponseGroundedness,
+    answer_correctness,
     answer_relevancy,
     answer_similarity,
     context_entity_recall,
@@ -84,6 +88,7 @@ from ragas.metrics import (
 _SINGLETON_METRICS = [
     answer_relevancy,
     answer_similarity,
+    answer_correctness,
     context_precision,
     faithfulness,
     context_recall,
