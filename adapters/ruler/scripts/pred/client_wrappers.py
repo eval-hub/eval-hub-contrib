@@ -207,23 +207,22 @@ class OpenAIClient:
 
             # Azure
             'gpt-4-32k': 32768,
-            'gpt-4': 128000,
             'gpt-35-turbo-16k': 16384,
         }
-        self.openai_api_key = os.environ["OPENAI_API_KEY"]
-        self.azure_api_id = os.environ["AZURE_API_ID"]
-        self.azure_api_secret = os.environ["AZURE_API_SECRET"]
-        self.azure_api_endpoint = os.environ["AZURE_API_ENDPOINT"]
-        self.model_name = model_name    
-            
+        self.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+        self.azure_api_id = os.environ.get("AZURE_API_ID", "")
+        self.azure_api_secret = os.environ.get("AZURE_API_SECRET", "")
+        self.azure_api_endpoint = os.environ.get("AZURE_API_ENDPOINT", "")
+        self.model_name = model_name
+
         # Azure
         if self.azure_api_id and self.azure_api_secret:
             if 'gpt-3.5' in model_name: self.model_name = 'gpt-35-turbo-16k'
             if 'gpt-4' in model_name: self.model_name = 'gpt-4'
-        
+
         import tiktoken
         self.encoding = tiktoken.get_encoding("cl100k_base")
-        self.max_length = model2length[self.model_name]
+        self.max_length = model2length.get(self.model_name, 8192)
         self.generation_kwargs = generation_kwargs
         self._create_client()
         
@@ -263,6 +262,7 @@ class OpenAIClient:
         
     @retry(wait=wait_random_exponential(min=15, max=60), stop=stop_after_attempt(3))
     def _send_request(self, request):
+        response = None
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name,
@@ -275,10 +275,10 @@ class OpenAIClient:
             )
         except Exception as e:
             print(f"Error occurred while calling OpenAI: {e}")
-            if self.azure_api_id and self.azure_api_secret and e.status_code == 401:
+            if self.azure_api_id and self.azure_api_secret and getattr(e, 'status_code', None) == 401:
                 # token expired
                 self._create_client()
-            
+
         return response
         
     def __call__(

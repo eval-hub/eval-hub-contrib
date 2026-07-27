@@ -120,7 +120,7 @@ def sys_kwext(num_samples: int, max_seq_length: int, incremental: int = 10):
                                                     vocab_size=vocab_size,
                                                     incremental=input_max_len//32,
                                                     alpha=args.alpha)
-    logger.info('num_example_words:', num_example_words)
+    logger.info('num_example_words: %d', num_example_words)
     # Generate samples
     for index in tqdm(range(num_samples)):
 

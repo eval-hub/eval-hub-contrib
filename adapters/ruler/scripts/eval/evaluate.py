@@ -115,6 +115,9 @@ def run_evaluation_per_task(task_config: dict, predictions_file: str, verbose: i
 
 def write_evaluation(results: dict):
     tasks = list(results.keys())
+    if not tasks:
+        print("No evaluation results to write.")
+        return
     score = [results[task]['score'] for task in tasks]
     nulls = [results[task]['nulls'] for task in tasks]
     dfs = [
@@ -132,6 +135,10 @@ def write_evaluation(results: dict):
 
 
 def write_submission(results: dict):
+    tasks = list(results.keys())
+    if not tasks:
+        print("No evaluation results to write.")
+        return
     COLUMNS = ["Task", "ID", "Prediction"]
     dfs = pd.DataFrame(columns=COLUMNS, data=[])
     
@@ -171,8 +178,10 @@ def main():
     
     try:
         module = importlib.import_module(f"{args.benchmark}.constants")
-    except ImportError:
-        print(f"Module eval.{args.benchmark}.constants not found.")
+    except ImportError as exc:
+        raise ImportError(
+            f"Could not import required module '{args.benchmark}.constants': {exc}"
+        ) from exc
 
     tasks_base = module.TASKS
     with open(os.path.join(curr_folder, f"../{args.benchmark}.yaml"), "r") as f:

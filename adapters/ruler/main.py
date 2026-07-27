@@ -129,7 +129,7 @@ class RulerAdapter(FrameworkAdapter):
                 )
             )
             self._validate_config(config)
-            params = config.parameters
+            params = config.parameters or {}
             tasks = self._resolve_tasks(config.benchmark_id, params)
 
             # Use num_examples when explicitly > 0; fall back to parameter or default.
@@ -625,6 +625,7 @@ class RulerAdapter(FrameworkAdapter):
         predictions: list[dict] = []
         n_samples = len(samples)
         log_interval = max(1, batch_size)
+        failure_count = 0
 
         for i, sample in enumerate(samples):
             try:
@@ -648,6 +649,7 @@ class RulerAdapter(FrameworkAdapter):
                     f"Inference failed for sample {sample.get('index', '?')}: {exc}"
                 )
                 pred_text = ""
+                failure_count += 1
 
             predictions.append(
                 {
@@ -675,6 +677,12 @@ class RulerAdapter(FrameworkAdapter):
                             ),
                         )
                     )
+
+        if failure_count > 0 and failure_count == n_samples:
+            raise RuntimeError(
+                f"All {n_samples} inference calls failed. "
+                "Check that model.url is reachable and the model is loaded."
+            )
 
         pred_file.parent.mkdir(parents=True, exist_ok=True)
         with open(pred_file, "w") as fh:

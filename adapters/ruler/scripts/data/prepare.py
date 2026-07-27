@@ -70,8 +70,10 @@ def main():
     
     try:
         module = importlib.import_module(f"{args.benchmark}.constants")
-    except ImportError:
-        print(f"Module data.{args.benchmark}.constants not found.")
+    except ImportError as exc:
+        raise ImportError(
+            f"Could not import required module '{args.benchmark}.constants': {exc}"
+        ) from exc
 
     tasks_base = module.TASKS
     with open(os.path.join(curr_folder, f"../{args.benchmark}.yaml"), "r") as f:
