@@ -49,16 +49,16 @@ benchmarks:
     category: rag_evaluation
     metrics:
       - answer_relevancy
-      - answer_similarity
+      - semantic_similarity
       - context_precision
       - faithfulness
       - context_recall
       - context_entity_recall
-      - nv_accuracy
-      - nv_context_relevance
+      - answer_accuracy
+      - context_relevance
       - factual_correctness
       - noise_sensitivity
-      - nv_response_groundedness
+      - response_groundedness
     tags:
       - ragas
       - rag
@@ -75,10 +75,10 @@ parameters:
     default: null
     description: >
       List of RAGAS metric names to evaluate. Available: answer_relevancy,
-      answer_similarity, context_precision, faithfulness, context_recall,
-      context_entity_recall, nv_accuracy, nv_context_relevance,
-      factual_correctness, noise_sensitivity, nv_response_groundedness.
-      Defaults to the benchmark's metric list.
+      answer_correctness, context_precision, faithfulness, context_recall,
+      context_entity_recall, factual_correctness, noise_sensitivity,
+      context_relevance, answer_accuracy, response_groundedness,
+      semantic_similarity. Defaults to the benchmark's metric list.
 
   - name: embedding_model
     type: string

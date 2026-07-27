@@ -68,42 +68,56 @@ DEFAULT_DATASET_FILENAME = "dataset.jsonl"
 _DATA_SUFFIXES = (".jsonl", ".json")
 
 # ---------------------------------------------------------------------------
-# RAGAS metrics — import singletons and class-based metrics
+# RAGAS metrics — class-based API (ragas >= 0.4.x)
 # ---------------------------------------------------------------------------
+from dataclasses import dataclass
+from typing import Callable
+
 from ragas.metrics.collections import (
     AnswerAccuracy,
+    AnswerCorrectness,
+    AnswerRelevancy,
+    ContextEntityRecall,
+    ContextPrecision,
+    ContextRecall,
     ContextRelevance,
     FactualCorrectness,
+    Faithfulness,
     NoiseSensitivity,
     ResponseGroundedness,
-    answer_correctness,
-    answer_relevancy,
-    answer_similarity,
-    context_entity_recall,
-    context_precision,
-    context_recall,
-    faithfulness,
+    SemanticSimilarity,
 )
 
-_SINGLETON_METRICS = [
-    answer_relevancy,
-    answer_similarity,
-    answer_correctness,
-    context_precision,
-    faithfulness,
-    context_recall,
-    context_entity_recall,
-]
 
-_CLASS_METRICS = [
-    AnswerAccuracy(),
-    ContextRelevance(),
-    FactualCorrectness(),
-    NoiseSensitivity(),
-    ResponseGroundedness(),
-]
+@dataclass
+class _MetricDef:
+    """Canonical name and lazy factory for a RAGAS metric.
 
-METRIC_MAPPING = {m.name: m for m in _SINGLETON_METRICS + _CLASS_METRICS}
+    Metrics require an LLM (and sometimes embeddings) at instantiation time,
+    so they are created inside _run_ragas rather than at module import.
+    """
+
+    name: str
+    factory: Callable
+
+
+METRIC_MAPPING: dict[str, "_MetricDef"] = {
+    d.name: d
+    for d in [
+        _MetricDef("answer_relevancy", lambda llm, emb: AnswerRelevancy(llm=llm, embeddings=emb)),
+        _MetricDef("answer_correctness", lambda llm, emb: AnswerCorrectness(llm=llm)),
+        _MetricDef("context_precision", lambda llm, emb: ContextPrecision(llm=llm)),
+        _MetricDef("faithfulness", lambda llm, emb: Faithfulness(llm=llm)),
+        _MetricDef("context_recall", lambda llm, emb: ContextRecall(llm=llm)),
+        _MetricDef("context_entity_recall", lambda llm, emb: ContextEntityRecall(llm=llm)),
+        _MetricDef("factual_correctness", lambda llm, emb: FactualCorrectness(llm=llm)),
+        _MetricDef("noise_sensitivity", lambda llm, emb: NoiseSensitivity(llm=llm)),
+        _MetricDef("context_relevance", lambda llm, emb: ContextRelevance(llm=llm)),
+        _MetricDef("answer_accuracy", lambda llm, emb: AnswerAccuracy(llm=llm)),
+        _MetricDef("response_groundedness", lambda llm, emb: ResponseGroundedness(llm=llm)),
+        _MetricDef("semantic_similarity", lambda llm, emb: SemanticSimilarity(embeddings=emb)),
+    ]
+}
 
 DEFAULT_METRICS = [
     "answer_relevancy",
@@ -394,18 +408,18 @@ def _apply_column_map(
 class RagasAdapter(FrameworkAdapter):
     """EvalHub framework adapter that runs RAGAS evaluation."""
 
-    def _resolve_metrics(self, bc: dict[str, Any]) -> list:
+    def _resolve_metrics(self, bc: dict[str, Any]) -> list["_MetricDef"]:
         metric_names = (
             bc.get("metrics") or bc.get("scoring_functions") or DEFAULT_METRICS
         )
-        metrics = [METRIC_MAPPING[n] for n in metric_names if n in METRIC_MAPPING]
+        defs = [METRIC_MAPPING[n] for n in metric_names if n in METRIC_MAPPING]
         unknown = [n for n in metric_names if n not in METRIC_MAPPING]
         if unknown:
             logger.warning("Unknown metrics (skipped): %s", unknown)
-        if not metrics:
+        if not defs:
             logger.info("No valid metrics specified, using defaults")
-            metrics = [METRIC_MAPPING[m] for m in DEFAULT_METRICS]
-        return metrics
+            defs = [METRIC_MAPPING[m] for m in DEFAULT_METRICS]
+        return defs
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         start_time = time.time()
@@ -452,7 +466,7 @@ class RagasAdapter(FrameworkAdapter):
             )
 
             # --- RUNNING_EVALUATION ---
-            metrics = self._resolve_metrics(bc)
+            metric_defs = self._resolve_metrics(bc)
             model_url = config.model.url.strip().rstrip("/")
             model_name = config.model.name
             embedding_model = bc.get("embedding_model") or model_name
@@ -499,7 +513,7 @@ class RagasAdapter(FrameworkAdapter):
 
             ragas_result = self._run_ragas(
                 eval_dataset=eval_dataset,
-                metrics=metrics,
+                metric_defs=metric_defs,
                 llm=llm,
                 embeddings=embeddings,
                 run_config=run_config,
@@ -520,7 +534,7 @@ class RagasAdapter(FrameworkAdapter):
             evaluation_results: list[EvaluationResult] = []
             scores_for_overall: list[float] = []
 
-            for metric_name in [m.name for m in metrics]:
+            for metric_name in [d.name for d in metric_defs]:
                 # Some metrics (e.g. FactualCorrectness, NoiseSensitivity) report
                 # their score column with a mode suffix: "factual_correctness(mode=f1)".
                 column = metric_name
@@ -595,7 +609,7 @@ class RagasAdapter(FrameworkAdapter):
                 evaluation_metadata={
                     "framework": "ragas",
                     "data_path": str(data_path),
-                    "metrics": [m.name for m in metrics],
+                    "metrics": [d.name for d in metric_defs],
                 },
                 oci_artifact=oci_artifact,
             )
@@ -613,10 +627,11 @@ class RagasAdapter(FrameworkAdapter):
             )
             raise
 
-    def _run_ragas(self, *, eval_dataset, metrics, llm, embeddings, run_config):
+    def _run_ragas(self, *, eval_dataset, metric_defs, llm, embeddings, run_config):
+        metric_instances = [d.factory(llm, embeddings) for d in metric_defs]
         return ragas_evaluate(
             dataset=eval_dataset,
-            metrics=metrics,
+            metrics=metric_instances,
             llm=llm,
             embeddings=embeddings,
             run_config=run_config,
