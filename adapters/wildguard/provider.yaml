@@ -28,7 +28,7 @@ agent:
   recommended_when:
     - "User wants to measure a model's safety classification accuracy"
     - "Pre-deployment safety gate before serving a model in production"
-    - "Evaluating whether a model correctly refuses harmful requests"
+    - "Classifying prompt-response pairs as safe or unsafe using a safety benchmark"
     - "Comparing safe vs. unsafe recall to diagnose over-refusal or under-refusal"
     - "Benchmarking against a standardised safety dataset (WildGuard test split)"
   target_type: model
@@ -119,5 +119,12 @@ parameters:
   - name: max_concurrent
     type: integer
     default: 4
+
+  - name: request_timeout
+    type: integer
+    default: 120
+    description: >
+      Per-request timeout in seconds for the OpenAI-compatible API call. Default is 120.
+      Increase for slow endpoints or long-context models.
     description: >
       Maximum number of concurrent API calls to the model endpoint. Default is 4.

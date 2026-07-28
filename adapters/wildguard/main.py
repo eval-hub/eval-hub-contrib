@@ -245,7 +245,8 @@ class WildGuardAdapter(FrameworkAdapter):
 
             import openai  # noqa: PLC0415
 
-            client = openai.OpenAI(base_url=model_url, api_key=api_key)
+            request_timeout = int(config.parameters.get("request_timeout", 120))
+            client = openai.OpenAI(base_url=model_url, api_key=api_key, timeout=request_timeout)
 
             # Each item: (ground_truth_label, predicted_label_or_None)
             outcomes: list[tuple[str, Optional[str]]] = []
