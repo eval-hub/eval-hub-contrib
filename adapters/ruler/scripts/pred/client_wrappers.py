@@ -217,8 +217,10 @@ class OpenAIClient:
 
         # Azure
         if self.azure_api_id and self.azure_api_secret:
-            if 'gpt-3.5' in model_name: self.model_name = 'gpt-35-turbo-16k'
-            if 'gpt-4' in model_name: self.model_name = 'gpt-4'
+            if 'gpt-3.5' in model_name:
+                self.model_name = 'gpt-35-turbo-16k'
+            if 'gpt-4' in model_name:
+                self.model_name = 'gpt-4'
 
         import tiktoken
         self.encoding = tiktoken.get_encoding("cl100k_base")
