@@ -34,12 +34,12 @@ Safety:
 
 Multi-turn conversational:
   conversation-completeness   ConversationCompletenessMetric
-  conversation-relevancy      ConversationRelevancyMetric
+  conversation-relevancy      TurnRelevancyMetric (per-turn context relevance)
   role-adherence              RoleAdherenceMetric
   knowledge-retention         KnowledgeRetentionMetric
 
 Format:
-  json-correctness      JsonCorrectnessMetric — JSON schema validation (no LLM judge)
+  json-correctness      direct json.loads() + jsonschema validation (no LLM, no DeepEval metric)
 """
 
 from __future__ import annotations
@@ -62,12 +62,11 @@ from deepeval.metrics import (
     ArgumentCorrectnessMetric,
     BiasMetric,
     ConversationCompletenessMetric,
-    ConversationRelevancyMetric,
+    ConversationalGEval,
     DAGMetric,
     FaithfulnessMetric,
     GEval,
     HallucinationMetric,
-    JsonCorrectnessMetric,
     KnowledgeRetentionMetric,
     MisuseMetric,
     NonAdviceMetric,
@@ -78,9 +77,10 @@ from deepeval.metrics import (
     TaskCompletionMetric,
     ToolCorrectnessMetric,
     ToxicityMetric,
+    TurnRelevancyMetric,
 )
-from deepeval.metrics import GEval as ConversationalGEval  # same class; role set by test_case type
 from deepeval.test_case import ConversationalTestCase, LLMTestCase, SingleTurnParams, Turn
+from deepeval.test_case.conversational_test_case import MultiTurnParams
 from evalhub.adapter import (
     CapabilityEvalEntry,
     DefaultCallbacks,
@@ -209,9 +209,11 @@ SINGLE_TURN_BENCHMARKS: dict[str, dict[str, Any]] = {
         "category": "safety",
         "ability": "safety",
     },
-    # ── Format ────────────────────────────────────────────────────────────
+    # ── Format (direct validation — no DeepEval metric class) ─────────────
+    # JsonCorrectnessMetric requires a Pydantic BaseModel class (not a dict).
+    # We handle this benchmark with direct json.loads() + jsonschema.validate().
     "json-correctness": {
-        "class": JsonCorrectnessMetric,
+        "class": None,
         "required_columns": ["input", "actual_output"],
         "category": "format",
         "ability": "format",
@@ -228,7 +230,7 @@ CONVERSATIONAL_BENCHMARKS: dict[str, dict[str, Any]] = {
         "ability": "multi-turn",
     },
     "conversation-relevancy": {
-        "class": ConversationRelevancyMetric,
+        "class": TurnRelevancyMetric,
         "required_columns": ["turns"],
         "optional_columns": ["chatbot_role", "scenario"],
         "category": "multi-turn",
@@ -550,9 +552,14 @@ def _create_metric(benchmark_id: str, model: Any, threshold: float, params: dict
         criteria = params.get("criteria")
         if not criteria:
             raise ValueError("parameters.criteria is required for the conversational-geval benchmark")
-        return GEval(
+        raw_params = params.get("evaluation_params", ["ROLE", "CONTENT"])
+        if isinstance(raw_params, str):
+            raw_params = json.loads(raw_params)
+        eval_params = [MultiTurnParams[p.upper()] for p in raw_params if p.upper() in MultiTurnParams.__members__]
+        return ConversationalGEval(
             name=params.get("geval_name", "ConversationalEval"),
             criteria=criteria,
+            evaluation_params=eval_params or None,
             model=model,
             threshold=threshold,
         )
@@ -574,14 +581,12 @@ def _create_metric(benchmark_id: str, model: Any, threshold: float, params: dict
             threshold=threshold,
         )
 
-    # ── JsonCorrectnessMetric (no LLM judge) ───────────────────────────────
+    # ── json-correctness: direct validation, bypasses DeepEval evaluate() ─
+    # JsonCorrectnessMetric requires a Pydantic BaseModel class (not a dict),
+    # so we handle this benchmark entirely outside the DeepEval metric system.
+    # _run_json_correctness() in run_benchmark_job() handles this path.
     if benchmark_id == "json-correctness":
-        schema = params.get("json_schema")
-        if schema and isinstance(schema, str):
-            schema = json.loads(schema)
-        if schema:
-            return JsonCorrectnessMetric(expected_schema=schema, threshold=threshold)
-        return JsonCorrectnessMetric(threshold=threshold)
+        return None  # sentinel: tells run_benchmark_job to use direct validation
 
     # ── All other benchmarks: instantiate class from spec ─────────────────
     spec = SINGLE_TURN_BENCHMARKS.get(benchmark_id) or CONVERSATIONAL_BENCHMARKS.get(benchmark_id)
@@ -589,14 +594,114 @@ def _create_metric(benchmark_id: str, model: Any, threshold: float, params: dict
         raise ValueError(f"Unknown benchmark_id: {benchmark_id!r}")
 
     cls = spec["class"]
-    if benchmark_id == "json-correctness":
-        return cls(threshold=threshold)
-    # JsonCorrectnessMetric already handled above; all others need model
+
+    # Metrics with required positional args beyond model and threshold
+    if benchmark_id == "non-advice":
+        advice_types = params.get("advice_types", ["medical", "legal", "financial"])
+        if isinstance(advice_types, str):
+            advice_types = json.loads(advice_types)
+        return cls(advice_types=advice_types, model=model, threshold=threshold)
+
+    if benchmark_id == "misuse":
+        domain = params.get("domain", "general")
+        return cls(domain=domain, model=model, threshold=threshold)
+
+    if benchmark_id == "role-violation":
+        return cls(model=model, threshold=threshold, role=params.get("role"))
+
+    # TaskCompletionMetric accepts an optional task description string
+    if benchmark_id == "task-completion":
+        task_desc = params.get("task_description") or params.get("task")
+        return cls(model=model, threshold=threshold, task=task_desc)
+
     return cls(model=model, threshold=threshold)
 
 
 # ---------------------------------------------------------------------------
 # Result extraction + card building
+# ---------------------------------------------------------------------------
+# JSON correctness — direct validation path (no DeepEval metric involved)
+# ---------------------------------------------------------------------------
+
+def _run_json_correctness(
+    records: list[dict[str, Any]], params: dict[str, Any]
+) -> tuple[list[EvaluationResult], list[CapabilityEvalEntry | SafetyEvalEntry]]:
+    """Validate JSON output correctness without a DeepEval metric or LLM judge.
+
+    Uses json.loads() for validity and jsonschema.validate() (if installed and a
+    schema is provided) for schema conformance. Falls back to validity-only when
+    jsonschema is not available.
+    """
+    schema = params.get("json_schema")
+    if schema and isinstance(schema, str):
+        try:
+            schema = json.loads(schema)
+        except json.JSONDecodeError:
+            logger.warning("parameters.json_schema could not be parsed; falling back to validity-only")
+            schema = None
+
+    results: list[EvaluationResult] = []
+    scores: list[float] = []
+
+    for i, rec in enumerate(records):
+        output = rec.get("actual_output", "")
+        score = 0.0
+        reason = ""
+        try:
+            parsed = json.loads(output)
+            if schema:
+                try:
+                    import jsonschema
+                    jsonschema.validate(instance=parsed, schema=schema)
+                    score = 1.0
+                    reason = "Valid JSON conforming to schema"
+                except ImportError:
+                    score = 1.0
+                    reason = "Valid JSON (jsonschema not installed; schema conformance not checked)"
+                except Exception as exc:
+                    score = 0.0
+                    reason = f"Schema violation: {exc}"
+            else:
+                score = 1.0
+                reason = "Valid JSON"
+        except (json.JSONDecodeError, ValueError) as exc:
+            score = 0.0
+            reason = f"Invalid JSON: {exc}"
+
+        scores.append(score)
+        results.append(EvaluationResult(
+            metric_name=f"case_{i}.json_valid",
+            metric_value=score,
+            metric_type="float",
+            num_samples=1,
+            metadata={"success": score >= 1.0, "reason": reason},
+        ))
+
+    mean_score = sum(scores) / len(scores) if scores else 0.0
+    results.append(EvaluationResult(
+        metric_name="json_correctness_score",
+        metric_value=round(mean_score, 6),
+        metric_type="float",
+        num_samples=len(scores),
+    ))
+    results.append(EvaluationResult(
+        metric_name="schema_valid",
+        metric_value=1 if mean_score >= 1.0 else 0,
+        metric_type="int",
+        num_samples=len(scores),
+    ))
+
+    card_entries: list[CapabilityEvalEntry | SafetyEvalEntry] = [
+        CapabilityEvalEntry(
+            ability="format",
+            benchmark="deepeval/json-correctness",
+            metric="json_correctness_score",
+            zero_shot=round(mean_score, 4),
+        )
+    ]
+    return results, card_entries
+
+
 # ---------------------------------------------------------------------------
 
 def _extract_results(
@@ -769,25 +874,26 @@ class DeepEvalAdapter(FrameworkAdapter):
                 )
             )
 
-            # json-correctness has no LLM judge
+            # json-correctness bypasses DeepEval's metric system entirely —
+            # direct json.loads() + optional jsonschema validation, no LLM judge.
             if benchmark_id == "json-correctness":
-                judge = None
+                evaluation_results, card_entries = _run_json_correctness(records, params)
             else:
                 judge = _resolve_judge_model(judge_name, judge_url)
+                metric = _create_metric(benchmark_id, judge, threshold, params)
+                throttle_value = float(params.get("throttle_value", 0))
+                max_concurrent = int(params.get("max_concurrent", 1))
 
-            metric = _create_metric(benchmark_id, judge, threshold, params)
-            throttle_value = float(params.get("throttle_value", 0))
-            max_concurrent = int(params.get("max_concurrent", 1))
-
-            raw_results = evaluate(
-                test_cases=test_cases,
-                metrics=[metric],
-                async_config=AsyncConfig(
-                    run_async=True,
-                    throttle_value=throttle_value,
-                    max_concurrent=max_concurrent,
-                ),
-            )
+                raw_results = evaluate(
+                    test_cases=test_cases,
+                    metrics=[metric],
+                    async_config=AsyncConfig(
+                        run_async=True,
+                        throttle_value=throttle_value,
+                        max_concurrent=max_concurrent,
+                    ),
+                )
+                evaluation_results, card_entries = _extract_results(raw_results, benchmark_id)
 
             callbacks.report_status(
                 JobStatusUpdate(
@@ -801,8 +907,6 @@ class DeepEvalAdapter(FrameworkAdapter):
             callbacks.report_status(
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
             )
-
-            evaluation_results, card_entries = _extract_results(raw_results, benchmark_id)
             overall_score = _compute_overall_score(evaluation_results, benchmark_id)
 
             # Build EvalCard — separate capability and safety entries

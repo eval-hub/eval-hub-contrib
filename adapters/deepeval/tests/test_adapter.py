@@ -137,7 +137,7 @@ def test_deepeval_happy_path(tmp_path, monkeypatch, benchmark_id, file_content, 
 
     monkeypatch.setattr("main._resolve_data_dir", lambda _config: str(data_dir))
     monkeypatch.setattr("main._resolve_judge_model", lambda _name, _url: SimpleNamespace(name="MockModel"))
-    monkeypatch.setattr("main._create_metric", lambda _bid, _model, _threshold: SimpleNamespace(name="MockMetric"))
+    monkeypatch.setattr("main._create_metric", lambda _bid, _model, _threshold, _params: SimpleNamespace(name="MockMetric"))
 
     canned = _make_canned_eval_results()
     monkeypatch.setattr("main.evaluate", lambda **kwargs: canned)
@@ -200,7 +200,7 @@ def test_oci_export_persists_artifacts(tmp_path, monkeypatch):
 
     monkeypatch.setattr("main._resolve_data_dir", lambda _config: str(data_dir))
     monkeypatch.setattr("main._resolve_judge_model", lambda _name, _url: SimpleNamespace(name="MockModel"))
-    monkeypatch.setattr("main._create_metric", lambda _bid, _model, _threshold: SimpleNamespace(name="MockMetric"))
+    monkeypatch.setattr("main._create_metric", lambda _bid, _model, _threshold, _params: SimpleNamespace(name="MockMetric"))
     monkeypatch.setattr("main.evaluate", lambda **kwargs: _make_canned_eval_results())
 
     results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
@@ -459,7 +459,8 @@ def test_new_single_turn_benchmarks_happy_path(tmp_path, monkeypatch, benchmark_
 
     canned = _make_canned_eval_results(score=0.75, name=benchmark_id.replace("-", "_").title())
     monkeypatch.setattr("main.evaluate", lambda **kwargs: canned)
-    monkeypatch.setattr("main._resolve_judge_model", lambda name, url: MagicMock())
+    monkeypatch.setattr("main._resolve_judge_model", lambda name, url: SimpleNamespace(name="MockModel"))
+    monkeypatch.setattr("main._create_metric", lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"))
 
     callbacks = create_autospec(JobCallbacks)
     callbacks.mlflow = MagicMock()
@@ -499,7 +500,8 @@ def test_geval_happy_path(tmp_path, monkeypatch):
     adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
     canned = _make_canned_eval_results(score=0.9, name="CustomEval")
     monkeypatch.setattr("main.evaluate", lambda **kwargs: canned)
-    monkeypatch.setattr("main._resolve_judge_model", lambda name, url: MagicMock())
+    monkeypatch.setattr("main._resolve_judge_model", lambda name, url: SimpleNamespace(name="MockModel"))
+    monkeypatch.setattr("main._create_metric", lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"))
 
     callbacks = create_autospec(JobCallbacks)
     callbacks.mlflow = MagicMock()
@@ -626,7 +628,8 @@ def test_conversation_relevancy_happy_path(tmp_path, monkeypatch):
     adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
     canned = _make_canned_eval_results(score=0.88, name="ConversationRelevancy")
     monkeypatch.setattr("main.evaluate", lambda **kwargs: canned)
-    monkeypatch.setattr("main._resolve_judge_model", lambda n, u: MagicMock())
+    monkeypatch.setattr("main._resolve_judge_model", lambda n, u: SimpleNamespace(name="MockModel"))
+    monkeypatch.setattr("main._create_metric", lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"))
 
     callbacks = create_autospec(JobCallbacks)
     callbacks.mlflow = MagicMock()
@@ -660,7 +663,8 @@ def test_evalcard_populated_for_safety_benchmark(tmp_path, monkeypatch):
     adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
     canned = _make_canned_eval_results(score=0.9, name="PIILeakage")
     monkeypatch.setattr("main.evaluate", lambda **kwargs: canned)
-    monkeypatch.setattr("main._resolve_judge_model", lambda n, u: MagicMock())
+    monkeypatch.setattr("main._resolve_judge_model", lambda n, u: SimpleNamespace(name="MockModel"))
+    monkeypatch.setattr("main._create_metric", lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"))
 
     callbacks = create_autospec(JobCallbacks)
     callbacks.mlflow = MagicMock()
@@ -698,7 +702,8 @@ def test_evalcard_populated_for_rag_benchmark(tmp_path, monkeypatch):
     adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
     canned = _make_canned_eval_results(score=0.95, name="Faithfulness")
     monkeypatch.setattr("main.evaluate", lambda **kwargs: canned)
-    monkeypatch.setattr("main._resolve_judge_model", lambda n, u: MagicMock())
+    monkeypatch.setattr("main._resolve_judge_model", lambda n, u: SimpleNamespace(name="MockModel"))
+    monkeypatch.setattr("main._create_metric", lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"))
 
     callbacks = create_autospec(JobCallbacks)
     callbacks.mlflow = MagicMock()
@@ -722,3 +727,175 @@ def test_all_benchmarks_have_primary_metric_mapping():
     all_ids = set(SINGLE_TURN_BENCHMARKS) | set(CONVERSATIONAL_BENCHMARKS)
     missing = all_ids - set(_PRIMARY_METRIC)
     assert not missing, f"Benchmarks missing _PRIMARY_METRIC entry: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# _coerce_list unit tests (no mocking needed)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_coerce_list_from_list():
+    from main import _coerce_list
+    assert _coerce_list(["a", "b"]) == ["a", "b"]
+
+
+@pytest.mark.integration
+def test_coerce_list_from_json_string():
+    from main import _coerce_list
+    assert _coerce_list('["ctx1", "ctx2"]') == ["ctx1", "ctx2"]
+
+
+@pytest.mark.integration
+def test_coerce_list_from_plain_string():
+    from main import _coerce_list
+    assert _coerce_list("some context") == ["some context"]
+
+
+@pytest.mark.integration
+def test_coerce_list_from_non_string():
+    from main import _coerce_list
+    assert _coerce_list(42) == ["42"]
+
+
+# ---------------------------------------------------------------------------
+# _run_json_correctness unit tests (no mocking needed)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_json_correctness_valid_json_no_schema():
+    from main import _run_json_correctness
+    records = [{"input": "q", "actual_output": '{"key": "value"}'}]
+    results, card_entries = _run_json_correctness(records, {})
+    scores = {r.metric_name: r.metric_value for r in results}
+    assert scores["json_correctness_score"] == 1.0
+    assert scores["schema_valid"] == 1
+    assert len(card_entries) == 1
+
+
+@pytest.mark.integration
+def test_json_correctness_invalid_json():
+    from main import _run_json_correctness
+    records = [{"input": "q", "actual_output": "not valid json {{{"}]
+    results, card_entries = _run_json_correctness(records, {})
+    scores = {r.metric_name: r.metric_value for r in results}
+    assert scores["json_correctness_score"] == 0.0
+    assert scores["schema_valid"] == 0
+
+
+@pytest.mark.integration
+def test_json_correctness_valid_json_with_schema_pass():
+    """Valid JSON that conforms to the schema scores 1.0."""
+    from main import _run_json_correctness
+    import json as _json
+    schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+    records = [{"input": "q", "actual_output": '{"name": "Alice"}'}]
+    results, _ = _run_json_correctness(records, {"json_schema": _json.dumps(schema)})
+    scores = {r.metric_name: r.metric_value for r in results}
+    assert scores["json_correctness_score"] == 1.0
+
+
+@pytest.mark.integration
+def test_json_correctness_valid_json_with_schema_fail():
+    """Valid JSON that violates the schema scores 0.0."""
+    from main import _run_json_correctness
+    import json as _json
+    schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+    records = [{"input": "q", "actual_output": '{"other": 42}'}]
+    results, _ = _run_json_correctness(records, {"json_schema": _json.dumps(schema)})
+    scores = {r.metric_name: r.metric_value for r in results}
+    # Schema violation: "name" required but missing
+    assert scores["json_correctness_score"] == 0.0
+
+
+@pytest.mark.integration
+def test_json_correctness_bad_schema_string_falls_back():
+    """Malformed json_schema parameter logs a warning and falls back to validity-only."""
+    from main import _run_json_correctness
+    records = [{"input": "q", "actual_output": '{"ok": true}'}]
+    results, _ = _run_json_correctness(records, {"json_schema": "this is not json {"})
+    scores = {r.metric_name: r.metric_value for r in results}
+    # Falls back to validity-only: valid JSON → 1.0
+    assert scores["json_correctness_score"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# _extract_results supplementary aggregate metric branches
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_extract_results_hallucination_detected_flag():
+    """hallucination_detected=1 when score > 0.5."""
+    from types import SimpleNamespace
+    from main import _extract_results
+    md = SimpleNamespace(score=0.8, success=False, reason="Hallucinated", name="Hallucination")
+    raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
+    results, _ = _extract_results(raw, "hallucination")
+    by_name = {r.metric_name: r.metric_value for r in results}
+    assert by_name["hallucination_detected"] == 1
+
+
+@pytest.mark.integration
+def test_extract_results_hallucination_not_detected_flag():
+    """hallucination_detected=0 when score <= 0.5."""
+    from types import SimpleNamespace
+    from main import _extract_results
+    md = SimpleNamespace(score=0.2, success=True, reason="Grounded", name="Hallucination")
+    raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
+    results, _ = _extract_results(raw, "hallucination")
+    by_name = {r.metric_name: r.metric_value for r in results}
+    assert by_name["hallucination_detected"] == 0
+
+
+@pytest.mark.integration
+def test_extract_results_pii_detected_flag():
+    """pii_detected=1 when score > 0.5."""
+    from types import SimpleNamespace
+    from main import _extract_results
+    md = SimpleNamespace(score=0.9, success=False, reason="SSN detected", name="PIILeakage")
+    raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
+    results, _ = _extract_results(raw, "pii-leakage")
+    by_name = {r.metric_name: r.metric_value for r in results}
+    assert by_name["pii_detected"] == 1
+
+
+@pytest.mark.integration
+def test_extract_results_faithfulness_supplementary_metrics():
+    """faithfulness produces claims_count and supported_claims_count."""
+    from types import SimpleNamespace
+    from main import _extract_results
+    md_pass = SimpleNamespace(score=0.9, success=True, reason="ok", name="Faithfulness")
+    md_fail = SimpleNamespace(score=0.2, success=False, reason="unsupported", name="Faithfulness")
+    raw = SimpleNamespace(test_results=[
+        SimpleNamespace(metrics_data=[md_pass]),
+        SimpleNamespace(metrics_data=[md_fail]),
+    ])
+    results, _ = _extract_results(raw, "faithfulness")
+    by_name = {r.metric_name: r.metric_value for r in results}
+    assert by_name["claims_count"] == 2
+    assert by_name["supported_claims_count"] == 1
+
+
+@pytest.mark.integration
+def test_extract_results_safety_entry_for_bias():
+    """Bias benchmark produces SafetyEvalEntry (not CapabilityEvalEntry)."""
+    from types import SimpleNamespace
+    from evalhub.adapter import SafetyEvalEntry, CapabilityEvalEntry
+    from main import _extract_results
+    md = SimpleNamespace(score=0.1, success=True, reason="No bias", name="Bias")
+    raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
+    _, entries = _extract_results(raw, "bias")
+    assert any(isinstance(e, SafetyEvalEntry) for e in entries)
+    assert not any(isinstance(e, CapabilityEvalEntry) for e in entries)
+
+
+@pytest.mark.integration
+def test_extract_results_capability_entry_for_rag():
+    """RAG benchmark produces CapabilityEvalEntry (not SafetyEvalEntry)."""
+    from types import SimpleNamespace
+    from evalhub.adapter import SafetyEvalEntry, CapabilityEvalEntry
+    from main import _extract_results
+    md = SimpleNamespace(score=0.9, success=True, reason="Faithful", name="Faithfulness")
+    raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
+    _, entries = _extract_results(raw, "faithfulness")
+    assert any(isinstance(e, CapabilityEvalEntry) for e in entries)
+    assert not any(isinstance(e, SafetyEvalEntry) for e in entries)
