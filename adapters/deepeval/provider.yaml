@@ -1,13 +1,70 @@
-# DeepEval — provider definition (same shape as eval-hub config/providers/*.yaml).
-# Mount into eval-hub or sync via your operator's provider sync process.
-#
-# Discovery: eval-hub may surface `parameters` in UI. The adapter validates required
-# inputs early in run_benchmark_job. Benchmark-specific metrics are defined below.
-
 id: deepeval
 name: DeepEval
-description: LLM-as-judge evaluation framework with metrics for faithfulness, relevancy, hallucination, correctness, summarization, and multi-turn conversation evaluation
+description: >
+  LLM-as-judge evaluation framework (Confident AI) covering RAG quality, multi-turn
+  conversation, agent task/tool correctness, safety (bias, toxicity, PII, misuse),
+  and fully configurable custom criteria (GEval, DAGMetric). No code execution —
+  all evaluation is HTTP calls to an OpenAI-compatible judge endpoint.
 type: builtin
+
+# ---------------------------------------------------------------------------
+# Agent Discoverability — enables MCP and agentic clients to auto-select
+# this provider and interpret results without reading documentation.
+# See https://eval-hub.github.io/mcp/agent-discoverability/
+# ---------------------------------------------------------------------------
+agent:
+  evaluates:
+    - rag
+    - faithfulness
+    - hallucination
+    - relevancy
+    - multi-turn
+    - conversation
+    - agent
+    - tool-calling
+    - safety
+    - bias
+    - toxicity
+    - pii
+    - misuse
+    - custom-evaluation
+    - json-format
+  recommended_when:
+    - "User wants to evaluate RAG pipeline quality (faithfulness, relevancy, hallucination)"
+    - "User wants to check multi-turn conversation completeness, role adherence, or knowledge retention"
+    - "User wants to detect PII leakage, bias, or toxicity in model outputs"
+    - "User wants to verify agent task completion or tool call correctness"
+    - "User wants a custom LLM-as-judge evaluation with arbitrary natural-language criteria"
+    - "User wants to validate JSON output format against a schema (no LLM cost)"
+    - "Pre-deployment safety gate before serving a model in production"
+  target_type: model
+  summary: >-
+    LLM-as-judge: RAG, multi-turn, agentic, safety, PII, and custom GEval/DAG criteria.
+    Zero code execution — all evaluation via OpenAI-compatible HTTP calls to a judge endpoint.
+  complements:
+    - ragas
+    - wildguard
+    - guidellm
+    - inspect
+  hints:
+    - "The evaluated model endpoint must support OpenAI-compatible chat completions (POST /v1/chat/completions)"
+    - "Set parameters.eval_model_name and parameters.eval_model_url to use a dedicated judge model"
+    - "If eval_model_url is omitted, the same endpoint as the evaluated model is used as judge"
+    - "For geval and conversational-geval benchmarks, parameters.criteria (required) defines the evaluation rule"
+    - "For dag benchmark, parameters.dag_criteria_json (required) is a JSON-encoded DAGMetric criteria graph"
+    - "For json-correctness, no judge model is needed — set parameters.json_schema (optional) for schema validation"
+    - "Use parameters.max_concurrent (default 1) to tune parallelism; increase for fast judge endpoints"
+    - "Use parameters.per_attempt_timeout_seconds (default 300) for reasoning models with long chain-of-thought"
+    - "Use parameters.num_examples to cap the evaluation for fast smoke-testing"
+    - "Use parameters.threshold (default 0.5) to set the pass/fail cutoff for all benchmarks"
+  result_interpretation:
+    - "Scores range from 0.0 to 1.0"
+    - "Higher is better for all metrics EXCEPT hallucination, pii-leakage, bias, toxicity, non-advice, misuse, and role-violation"
+    - "For safety metrics (bias, toxicity, pii-leakage): 0.0 means no issue detected; 1.0 means strong signal"
+    - "Hallucination: 0.0 means fully grounded; 1.0 means fully hallucinated"
+    - "Faithfulness: 1.0 means all claims in the response are grounded in the retrieval context"
+    - "Task completion and tool correctness: 1.0 means fully correct execution"
+    - "GEval and DAG scores are normalised 0.0-1.0 against the user-defined criteria"
 
 runtime:
   k8s:
@@ -23,189 +80,582 @@ runtime:
   local: null
 
 benchmarks:
+  # ==========================================================================
+  # RAG Evaluation
+  # ==========================================================================
+
   - id: faithfulness
     name: Faithfulness
     description: >
-      Tests if LLM output is faithful to the provided context. Measures whether
-      claims in the output are supported by the retrieval context.
+      Tests if LLM output is faithful to the provided retrieval context. Measures
+      whether claims in the response are supported by the retrieved documents.
+      Required dataset columns: input, actual_output, retrieval_context (list or string).
     category: rag-evaluation
     metrics:
       - faithfulness_score
       - claims_count
       - supported_claims_count
-    tags:
-      - deepeval
-      - rag
-      - faithfulness
+    tags: [deepeval, rag, faithfulness]
+    agent:
+      result_interpretation: >-
+        faithfulness_score is the fraction of claims grounded in context. HIGHER is better.
+        1.0 = fully faithful; 0.0 = fully fabricated.
+      score_ranges:
+        - range: "0.0-0.4"
+          meaning: "High hallucination risk — most claims not grounded in context"
+        - range: "0.4-0.7"
+          meaning: "Partial grounding — review unsupported claims before deployment"
+        - range: "0.7-0.9"
+          meaning: "Good faithfulness — minor gaps may be acceptable"
+        - range: "0.9-1.0"
+          meaning: "Excellent faithfulness — nearly all claims grounded"
 
   - id: relevancy
     name: Answer Relevancy
     description: >
-      Tests if LLM output is relevant to the input query. Evaluates whether the
-      generated answer addresses the user's question.
+      Tests if LLM output is relevant to the input query.
+      Required columns: input, actual_output.
     category: rag-evaluation
     metrics:
       - relevancy_score
-    tags:
-      - deepeval
-      - rag
-      - relevancy
+    tags: [deepeval, rag, relevancy]
+    agent:
+      result_interpretation: >-
+        relevancy_score measures how well the response answers the query.
+        HIGHER is better. 1.0 = fully on-topic; 0.0 = completely irrelevant.
+      score_ranges:
+        - range: "0.0-0.5"
+          meaning: "Response does not address the query"
+        - range: "0.5-0.8"
+          meaning: "Partially relevant — may include off-topic content"
+        - range: "0.8-1.0"
+          meaning: "Highly relevant — response directly addresses the query"
 
   - id: hallucination
     name: Hallucination
     description: >
-      Tests for hallucinated content in LLM output. Detects statements that are
-      not grounded in the provided context.
+      Detects hallucinated content — statements not grounded in the provided context.
+      Required columns: input, actual_output, context (list or string).
     category: safety
     metrics:
       - hallucination_score
       - hallucination_detected
-    tags:
-      - deepeval
-      - safety
-      - hallucination
+    tags: [deepeval, safety, hallucination]
+    agent:
+      result_interpretation: >-
+        hallucination_score measures unsupported statement fraction. LOWER is better.
+        0.0 = no hallucination; 1.0 = fully hallucinated. hallucination_detected = 1 when score > 0.5.
+      score_ranges:
+        - range: "0.0-0.1"
+          meaning: "Minimal hallucination — strong grounding"
+        - range: "0.1-0.3"
+          meaning: "Low hallucination — review flagged statements"
+        - range: "0.3-0.6"
+          meaning: "Moderate hallucination — not suitable for high-stakes use"
+        - range: "0.6-1.0"
+          meaning: "High hallucination — output is largely fabricated"
 
   - id: correctness
     name: Correctness
     description: >
-      Tests factual correctness of LLM answers against expected output.
-      Compares generated answers to ground-truth references.
+      Tests factual correctness against expected output using fixed GEval criteria.
+      Required columns: input, actual_output, expected_output.
     category: accuracy
     metrics:
       - correctness_score
-    tags:
-      - deepeval
-      - accuracy
-      - correctness
+    tags: [deepeval, accuracy, correctness]
+    agent:
+      result_interpretation: >-
+        correctness_score measures factual accuracy vs. expected_output.
+        HIGHER is better. Use geval benchmark for custom accuracy definitions.
+      score_ranges:
+        - range: "0.0-0.5"
+          meaning: "Factually incorrect"
+        - range: "0.5-0.8"
+          meaning: "Partially correct — some inaccuracies present"
+        - range: "0.8-1.0"
+          meaning: "Factually correct"
 
   - id: summarization
     name: Summarization
     description: >
-      Tests summarization quality of LLM output. Evaluates alignment with
-      the source text and coverage of key information.
+      Tests summarization quality — alignment with source text and key information coverage.
+      Required columns: input (source text), actual_output (summary).
     category: nlp
     metrics:
       - summarization_score
-    tags:
-      - deepeval
-      - nlp
-      - summarization
+    tags: [deepeval, nlp, summarization]
+    agent:
+      result_interpretation: >-
+        summarization_score measures source coverage and alignment. HIGHER is better.
+
+  # ==========================================================================
+  # Custom LLM-as-Judge
+  # ==========================================================================
+
+  - id: geval
+    name: GEval (Custom Criteria)
+    description: >
+      Configurable LLM-as-judge using natural-language criteria. Evaluates any
+      quality dimension you can describe in plain text.
+      Required parameter: criteria (natural-language evaluation rule).
+      Optional parameters: geval_name, evaluation_params.
+      Required columns: input, actual_output. Optional: expected_output, retrieval_context.
+    category: custom
+    metrics:
+      - geval_score
+    tags: [deepeval, custom, geval, llm-as-judge]
+    agent:
+      result_interpretation: >-
+        geval_score is normalised 0.0-1.0 against parameters.criteria.
+        HIGHER is better. Score meaning is determined entirely by the criteria string.
+
+  - id: conversational-geval
+    name: Conversational GEval (Custom Criteria)
+    description: >
+      GEval for multi-turn conversations with user-defined criteria.
+      Required parameter: criteria (natural-language evaluation rule).
+      Required dataset columns: turns (list of {role, content} dicts).
+    category: custom
+    metrics:
+      - conversational_geval_score
+    tags: [deepeval, custom, geval, multi-turn]
+    agent:
+      result_interpretation: >-
+        Score is normalised 0.0-1.0 against parameters.criteria across all turns.
+        HIGHER is better.
+
+  - id: dag
+    name: DAGMetric (Directed Criteria Graph)
+    description: >
+      Evaluates output against a directed acyclic graph of sub-criteria, each with
+      independent pass/fail logic. Use for multi-condition correctness checks.
+      Required parameter: dag_criteria_json (JSON-encoded criteria graph).
+      Required columns: input, actual_output.
+    category: custom
+    metrics:
+      - dag_score
+    tags: [deepeval, custom, dag, llm-as-judge]
+    agent:
+      result_interpretation: >-
+        dag_score is the fraction of DAG criteria nodes that passed. HIGHER is better.
+
+  # ==========================================================================
+  # Agentic Evaluation
+  # ==========================================================================
+
+  - id: task-completion
+    name: Task Completion
+    description: >
+      Evaluates whether an AI agent completed the assigned task (LLM-as-judge).
+      Applies to any user-defined task — not a fixed benchmark dataset.
+      Required columns: input (task description), actual_output (agent response or trace).
+    category: agent
+    metrics:
+      - task_completion_score
+    tags: [deepeval, agent, task-completion]
+    agent:
+      result_interpretation: >-
+        task_completion_score: 1.0 = task completed; 0.0 = not completed. HIGHER is better.
+        Apply to your own agent trace data, not a fixed test dataset.
+      score_ranges:
+        - range: "0.0-0.4"
+          meaning: "Task not completed — agent failed to achieve the goal"
+        - range: "0.4-0.8"
+          meaning: "Partially completed — some task elements achieved"
+        - range: "0.8-1.0"
+          meaning: "Task completed"
+
+  - id: tool-correctness
+    name: Tool Correctness
+    description: >
+      Evaluates whether tool/function calls made by an agent are correct in name
+      and argument selection. Applies to any tool schemas — unlike BFCL (fixed dataset).
+      Required columns: input, actual_output, tools_called
+      (list of {name, input_parameters, output} dicts).
+      Optional columns: expected_tools (list of {name, input_parameters} dicts).
+    category: agent
+    metrics:
+      - tool_correctness_score
+    tags: [deepeval, agent, tool-correctness, function-calling]
+    agent:
+      result_interpretation: >-
+        tool_correctness_score: 1.0 = all tool calls correct; 0.0 = all wrong. HIGHER is better.
+        Use alongside BFCL (fixed dataset) for comprehensive tool-calling evaluation.
+      score_ranges:
+        - range: "0.0-0.5"
+          meaning: "Most tool calls incorrect"
+        - range: "0.5-0.8"
+          meaning: "Some tool call errors — review argument selection"
+        - range: "0.8-1.0"
+          meaning: "Tool calls mostly correct"
+
+  - id: argument-correctness
+    name: Argument Correctness
+    description: >
+      Evaluates argument-level correctness of tool calls independently of tool name.
+      Required columns: input, actual_output, tools_called
+      (list of {name, input_parameters, output} dicts).
+    category: agent
+    metrics:
+      - argument_correctness_score
+    tags: [deepeval, agent, argument-correctness]
+    agent:
+      result_interpretation: >-
+        argument_correctness_score: 1.0 = all arguments correct. HIGHER is better.
+        Use alongside tool-correctness for detailed agentic diagnosis.
+
+  # ==========================================================================
+  # Safety Evaluation
+  # ==========================================================================
+
+  - id: bias
+    name: Bias Detection
+    description: >
+      Detects demographic, political, or other bias in model outputs via LLM-as-judge.
+      Applies to arbitrary outputs — complements Inspect's BBQ/BOLD/StereoSet fixed datasets.
+      Required columns: input, actual_output.
+    category: safety
+    metrics:
+      - bias_score
+    tags: [deepeval, safety, bias, fairness]
+    agent:
+      result_interpretation: >-
+        bias_score measures detected bias. LOWER is better.
+        0.0 = no bias detected; 1.0 = strong bias signal.
+      score_ranges:
+        - range: "0.0-0.1"
+          meaning: "Minimal bias detected"
+        - range: "0.1-0.3"
+          meaning: "Low bias — review flagged outputs before deployment"
+        - range: "0.3-0.6"
+          meaning: "Moderate bias — not suitable for regulated applications"
+        - range: "0.6-1.0"
+          meaning: "High bias — exhibits strong discriminatory patterns"
+
+  - id: toxicity
+    name: Toxicity Detection
+    description: >
+      Detects harmful or toxic content via LLM-as-judge. Applies to arbitrary outputs —
+      complements WildGuard (fixed test split) for custom dataset coverage.
+      Required columns: input, actual_output.
+    category: safety
+    metrics:
+      - toxicity_score
+    tags: [deepeval, safety, toxicity]
+    agent:
+      result_interpretation: >-
+        toxicity_score: LOWER is better. 0.0 = no toxicity; 1.0 = highly toxic.
+        Complements WildGuard adapter for custom dataset paths.
+      score_ranges:
+        - range: "0.0-0.1"
+          meaning: "Safe output — no harmful content detected"
+        - range: "0.1-0.3"
+          meaning: "Low toxicity — borderline content, review context"
+        - range: "0.3-1.0"
+          meaning: "Toxic output — not suitable for production use"
+
+  - id: pii-leakage
+    name: PII Leakage Detection
+    description: >
+      Detects personally identifiable information (PII) in model outputs.
+      Critical for healthcare, financial, and regulated enterprise deployments.
+      The only PII detection benchmark in EvalHub — no equivalent exists in any
+      other adapter. Required columns: input, actual_output.
+    category: safety
+    metrics:
+      - pii_leakage_score
+      - pii_detected
+    tags: [deepeval, safety, pii, privacy, compliance, hipaa, gdpr]
+    agent:
+      evaluates:
+        - pii
+        - privacy
+        - compliance
+        - hipaa
+        - gdpr
+      recommended_when:
+        - "User evaluates a model handling patient data, financial records, or personal information"
+        - "User must demonstrate PII controls for HIPAA, GDPR, or FedRAMP compliance"
+        - "Pre-deployment safety check for models in regulated environments"
+      result_interpretation: >-
+        pii_leakage_score: LOWER is better. 0.0 = no PII leakage detected; 1.0 = significant PII.
+        pii_detected = 1 when score > 0.5. ONLY PII detection benchmark in EvalHub.
+      score_ranges:
+        - range: "0.0-0.1"
+          meaning: "No PII leakage — safe for regulated use"
+        - range: "0.1-0.5"
+          meaning: "Low PII risk — review flagged outputs"
+        - range: "0.5-1.0"
+          meaning: "PII leakage detected — not suitable for regulated environments"
+
+  - id: non-advice
+    name: Non-Advice Compliance
+    description: >
+      Detects whether the model provides unsolicited medical, legal, or financial advice —
+      a compliance risk in regulated deployments. Required columns: input, actual_output.
+    category: safety
+    metrics:
+      - non_advice_score
+    tags: [deepeval, safety, compliance, advice]
+    agent:
+      result_interpretation: >-
+        non_advice_score: LOWER is better. 0.0 = no inappropriate advice; 1.0 = strong advice signal.
+
+  - id: misuse
+    name: Misuse Detection
+    description: >
+      Detects misuse patterns — attempts to use the model for harmful, fraudulent, or
+      policy-violating purposes. Complements Garak (fixed probe library) with LLM-as-judge
+      assessment on arbitrary traces. Required columns: input, actual_output.
+    category: safety
+    metrics:
+      - misuse_score
+    tags: [deepeval, safety, misuse, red-teaming]
+    agent:
+      result_interpretation: >-
+        misuse_score: LOWER is better. 0.0 = no misuse; 1.0 = clear misuse pattern.
+
+  - id: role-violation
+    name: Role Violation Detection
+    description: >
+      Detects when a model breaks out of its assigned persona or role.
+      Required columns: input, actual_output.
+    category: safety
+    metrics:
+      - role_violation_score
+    tags: [deepeval, safety, role-playing, persona]
+    agent:
+      result_interpretation: >-
+        role_violation_score: LOWER is better. 0.0 = strict role adherence; 1.0 = clear violation.
+
+  # ==========================================================================
+  # Multi-Turn Conversational Evaluation
+  # ==========================================================================
 
   - id: conversation-completeness
     name: Conversation Completeness
     description: >
       Tests whether a chatbot adequately addresses all user needs across a multi-turn
-      conversation. Evaluates task completion turn by turn using an LLM judge.
+      conversation. Required columns: turns (list of {role, content} dicts).
+      Optional columns: chatbot_role, scenario, expected_outcome.
     category: multi-turn
     metrics:
       - conversation_completeness_score
-    tags:
-      - deepeval
-      - multi-turn
-      - completeness
+    tags: [deepeval, multi-turn, completeness]
+    agent:
+      result_interpretation: >-
+        conversation_completeness_score: HIGHER is better. 1.0 = all user goals addressed.
+      score_ranges:
+        - range: "0.0-0.5"
+          meaning: "Conversation failed to resolve user needs"
+        - range: "0.5-0.8"
+          meaning: "Partial task completion — some user needs unaddressed"
+        - range: "0.8-1.0"
+          meaning: "Conversation complete"
+
+  - id: conversation-relevancy
+    name: Conversation Relevancy
+    description: >
+      Tests whether each response in a multi-turn conversation is relevant to the
+      ongoing context. Required columns: turns (list of {role, content} dicts).
+    category: multi-turn
+    metrics:
+      - conversation_relevancy_score
+    tags: [deepeval, multi-turn, relevancy]
+    agent:
+      result_interpretation: >-
+        conversation_relevancy_score: HIGHER is better. 1.0 = all responses on-topic.
 
   - id: role-adherence
     name: Role Adherence
     description: >
-      Tests whether a chatbot adheres to its assigned persona or role throughout
-      a multi-turn conversation. Requires chatbot_role in the dataset or parameters.
+      Tests whether a chatbot maintains its assigned persona across all conversation turns.
+      Required columns: turns (list of {role, content} dicts), chatbot_role (string).
     category: multi-turn
     metrics:
       - role_adherence_score
-    tags:
-      - deepeval
-      - multi-turn
-      - role-adherence
+    tags: [deepeval, multi-turn, role-adherence]
+    agent:
+      result_interpretation: >-
+        role_adherence_score: HIGHER is better. 1.0 = strict role adherence throughout.
 
   - id: knowledge-retention
     name: Knowledge Retention
     description: >
-      Tests whether a chatbot retains and correctly uses information disclosed by
-      the user in earlier turns of a conversation.
+      Tests whether a chatbot retains and correctly uses information disclosed by the
+      user in earlier turns. Required columns: turns (list of {role, content} dicts).
     category: multi-turn
     metrics:
       - knowledge_retention_score
-    tags:
-      - deepeval
-      - multi-turn
-      - knowledge-retention
+    tags: [deepeval, multi-turn, knowledge-retention, memory]
+    agent:
+      result_interpretation: >-
+        knowledge_retention_score: HIGHER is better. 1.0 = perfect recall of user context.
+
+  # ==========================================================================
+  # Format Validation
+  # ==========================================================================
+
+  - id: json-correctness
+    name: JSON Schema Correctness
+    description: >
+      Validates that model output is valid JSON, optionally conforming to a
+      provided JSON Schema. No LLM judge — pure schema validation, zero model cost.
+      Required columns: input, actual_output.
+      Optional parameter: json_schema (JSON Schema dict or JSON-encoded string).
+    category: format
+    metrics:
+      - json_correctness_score
+      - schema_valid
+    tags: [deepeval, format, json, schema-validation]
+    agent:
+      evaluates:
+        - json-format
+        - structured-output
+        - schema-validation
+      recommended_when:
+        - "User wants to verify structured output compliance with a JSON Schema"
+        - "User evaluates models in JSON mode or function calling"
+        - "Zero LLM cost validation is preferred"
+      result_interpretation: >-
+        json_correctness_score: 1.0 = valid JSON and schema-conformant; 0.0 = invalid.
+        schema_valid = 1 when score = 1.0. No LLM judge — fast and free.
+      score_ranges:
+        - range: "0.0-0.0"
+          meaning: "Output is not valid JSON or violates the schema"
+        - range: "1.0-1.0"
+          meaning: "Output is valid JSON and conforms to the schema"
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
 
 parameters:
+  # ── Judge model ────────────────────────────────────────────────────────────
   - name: eval_model_name
     type: string
     default: null
     description: >
-      Judge model name used by DeepEval for LLM-as-judge evaluation.
-      Defaults to the evaluated model's name if not set.
+      Judge model name for LLM-as-judge evaluation.
+      Defaults to the evaluated model's name when not set.
 
   - name: eval_model_url
     type: string
     default: null
     description: >
       Base URL of the OpenAI-compatible judge endpoint (e.g. "http://judge-svc:8000/v1").
-      Defaults to the evaluated model's URL if not set.
+      Defaults to the evaluated model's URL when not set.
 
+  # ── Benchmark-specific ─────────────────────────────────────────────────────
+  - name: criteria
+    type: string
+    default: null
+    description: >
+      Required for geval and conversational-geval. Natural-language evaluation rule.
+      Example: "Determine whether the response avoids medical diagnosis claims."
+
+  - name: geval_name
+    type: string
+    default: CustomEval
+    description: Display name for the GEval metric in results.
+
+  - name: evaluation_params
+    type: array
+    default: ["INPUT", "ACTUAL_OUTPUT"]
+    description: >
+      For geval only. List of SingleTurnParams names to include in the evaluation context.
+      Valid values: INPUT, ACTUAL_OUTPUT, EXPECTED_OUTPUT, RETRIEVAL_CONTEXT, CONTEXT, TOOLS_CALLED.
+
+  - name: dag_criteria_json
+    type: string
+    default: null
+    description: Required for dag. JSON-encoded DAGMetric criteria graph.
+
+  - name: dag_name
+    type: string
+    default: DAGEval
+    description: Display name for the DAGMetric metric in results.
+
+  - name: json_schema
+    type: object
+    default: null
+    description: >
+      For json-correctness only. JSON Schema dict (or JSON string) the output must conform to.
+      When omitted, only JSON validity is checked.
+
+  # ── Evaluation controls ───────────────────────────────────────────────────
   - name: threshold
     type: float
     default: 0.5
     description: >
-      Minimum pass threshold for metric scores. Test cases scoring below
-      this value are marked as failed.
+      Minimum pass threshold for metric scores (0.0–1.0). Test cases scoring below
+      this value are marked failed.
 
   - name: dataset_format
     type: string
     default: csv
     description: >
-      Input dataset format. Supported values: csv, jsonl, json.
-      For multi-turn benchmarks, jsonl or json are recommended so the turns
-      field can be expressed as a native array.
+      Input dataset format. Supported: csv, jsonl, json.
+      Use jsonl or json for multi-turn benchmarks (turns field as native array).
+
+  - name: data_dir
+    type: string
+    default: null
+    description: >
+      Path to directory containing test data files.
+      Falls back to /test_data then /data (standard EvalHub mount paths).
 
   - name: chatbot_role
     type: string
     default: null
     description: >
-      Chatbot persona description used by the Role Adherence benchmark
-      (e.g. "helpful customer support agent"). Can also be provided per-record
-      in the dataset as the chatbot_role column.
+      Chatbot persona for role-adherence benchmark.
+      Can also be provided per-record as the chatbot_role column.
 
+  # ── Concurrency and retry ─────────────────────────────────────────────────
   - name: max_concurrent
     type: int
     default: 1
     description: >
-      Maximum number of test cases evaluated concurrently. Lower values reduce
-      burst load on the judge endpoint. Defaults to 1 (serial evaluation).
+      Maximum concurrent API calls to the judge endpoint.
+      Increase for fast endpoints; keep at 1 for rate-limited endpoints.
 
   - name: throttle_value
     type: float
     default: 0
-    description: >
-      Seconds to wait between test case evaluations. Use together with
-      max_concurrent to pace requests to a rate-limited judge endpoint.
+    description: Seconds to wait between test case evaluations.
 
   - name: per_attempt_timeout_seconds
     type: float
     default: 300.0
     description: >
-      Per-attempt timeout (seconds) for each LLM call made by the DeepEval judge.
-      Overrides DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE. Setting this also
-      causes DeepEval to auto-compute the outer per-task deadline as
-      attempts × per_attempt_timeout + expected_backoff, giving retries enough
-      headroom. The default of 300 s accommodates reasoning models (e.g. DeepSeek-R1,
-      Phi-4) that emit long chain-of-thought sequences before the first response token.
-      Reduce for fast non-reasoning judge models if tighter failure detection is needed.
+      Per-attempt timeout (seconds) for each LLM call. 300s default accommodates
+      reasoning models (DeepSeek-R1, Phi-4) with long chain-of-thought output.
+      Reduce for fast non-reasoning judge models.
 
   - name: retry_max_attempts
     type: int
     default: 2
-    description: >
-      Total number of attempts per LLM call (first attempt + retries).
-      Increase when the judge endpoint is intermittently slow or rate-limited.
-      Overrides DEEPEVAL_RETRY_MAX_ATTEMPTS.
+    description: Total attempts per LLM call (first attempt + retries).
 
   - name: retry_cap_seconds
     type: float
     default: 5.0
-    description: >
-      Maximum backoff sleep (seconds) between retry attempts.
-      Increase to give a loaded judge endpoint more time to recover between retries.
-      Overrides DEEPEVAL_RETRY_CAP_SECONDS.
+    description: Maximum backoff sleep (seconds) between retry attempts.
+
+  # ── Metadata ──────────────────────────────────────────────────────────────
+  - name: languages
+    type: array
+    default: ["en"]
+    description: ISO 639 language codes for EvalCard metadata.
+
+  - name: languages_count
+    type: integer
+    default: 1
+    description: Number of languages in the evaluation dataset.
+
+  - name: mlflow_experiment_name
+    type: string
+    default: null
+    description: Fallback MLflow experiment name if JobSpec.experiment_name is unset.
