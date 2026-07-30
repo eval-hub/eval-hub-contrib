@@ -11,8 +11,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, create_autospec
 
 import pytest
-
 from evalhub.adapter import JobCallbacks, JobPhase, OCIArtifactResult
+
 from main import (
     CONVERSATIONAL_BENCHMARKS,
     SINGLE_TURN_BENCHMARKS,
@@ -25,9 +25,13 @@ from main import (
 )
 
 
-def _make_canned_eval_results(score=0.85, name="Faithfulness", reason="All claims supported"):
+def _make_canned_eval_results(
+    score=0.85, name="Faithfulness", reason="All claims supported"
+):
     """Build a fake object matching deepeval.evaluate()'s return shape."""
-    metric_data = SimpleNamespace(score=score, success=score >= 0.5, reason=reason, name=name)
+    metric_data = SimpleNamespace(
+        score=score, success=score >= 0.5, reason=reason, name=name
+    )
     test_result = SimpleNamespace(metrics_data=[metric_data])
     return SimpleNamespace(test_results=[test_result])
 
@@ -72,39 +76,48 @@ BENCHMARK_CASES = [
     # Multi-turn benchmarks — JSONL format
     pytest.param(
         "conversation-completeness",
-        json.dumps({
-            "turns": [
-                {"role": "user", "content": "How do I reset my password?"},
-                {"role": "assistant", "content": "Click on 'Forgot password' on the login page."},
-            ]
-        }),
+        json.dumps(
+            {
+                "turns": [
+                    {"role": "user", "content": "How do I reset my password?"},
+                    {
+                        "role": "assistant",
+                        "content": "Click on 'Forgot password' on the login page.",
+                    },
+                ]
+            }
+        ),
         "jsonl",
         ["conversation_completeness_score"],
         id="conversation-completeness",
     ),
     pytest.param(
         "role-adherence",
-        json.dumps({
-            "turns": [
-                {"role": "user", "content": "Hello, I need help."},
-                {"role": "assistant", "content": "Hi! I'm here to help you."},
-            ],
-            "chatbot_role": "friendly customer support agent",
-        }),
+        json.dumps(
+            {
+                "turns": [
+                    {"role": "user", "content": "Hello, I need help."},
+                    {"role": "assistant", "content": "Hi! I'm here to help you."},
+                ],
+                "chatbot_role": "friendly customer support agent",
+            }
+        ),
         "jsonl",
         ["role_adherence_score"],
         id="role-adherence",
     ),
     pytest.param(
         "knowledge-retention",
-        json.dumps({
-            "turns": [
-                {"role": "user", "content": "My name is Alice."},
-                {"role": "assistant", "content": "Nice to meet you, Alice!"},
-                {"role": "user", "content": "What's my name?"},
-                {"role": "assistant", "content": "Your name is Alice."},
-            ]
-        }),
+        json.dumps(
+            {
+                "turns": [
+                    {"role": "user", "content": "My name is Alice."},
+                    {"role": "assistant", "content": "Nice to meet you, Alice!"},
+                    {"role": "user", "content": "What's my name?"},
+                    {"role": "assistant", "content": "Your name is Alice."},
+                ]
+            }
+        ),
         "jsonl",
         ["knowledge_retention_score"],
         id="knowledge-retention",
@@ -113,8 +126,12 @@ BENCHMARK_CASES = [
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("benchmark_id,file_content,dataset_format,expected_metrics", BENCHMARK_CASES)
-def test_deepeval_happy_path(tmp_path, monkeypatch, benchmark_id, file_content, dataset_format, expected_metrics):
+@pytest.mark.parametrize(
+    "benchmark_id,file_content,dataset_format,expected_metrics", BENCHMARK_CASES
+)
+def test_deepeval_happy_path(
+    tmp_path, monkeypatch, benchmark_id, file_content, dataset_format, expected_metrics
+):
     """Full run_benchmark_job with mocked evaluate() and canned data."""
     meta_dir = tmp_path / "meta"
     meta_dir.mkdir()
@@ -136,8 +153,14 @@ def test_deepeval_happy_path(tmp_path, monkeypatch, benchmark_id, file_content, 
         (data_dir / "data.jsonl").write_text(file_content)
 
     monkeypatch.setattr("main._resolve_data_dir", lambda _config: str(data_dir))
-    monkeypatch.setattr("main._resolve_judge_model", lambda _name, _url: SimpleNamespace(name="MockModel"))
-    monkeypatch.setattr("main._create_metric", lambda _bid, _model, _threshold, _params: SimpleNamespace(name="MockMetric"))
+    monkeypatch.setattr(
+        "main._resolve_judge_model",
+        lambda _name, _url: SimpleNamespace(name="MockModel"),
+    )
+    monkeypatch.setattr(
+        "main._create_metric",
+        lambda _bid, _model, _threshold, _params: SimpleNamespace(name="MockMetric"),
+    )
 
     canned = _make_canned_eval_results()
     monkeypatch.setattr("main.evaluate", lambda **kwargs: canned)
@@ -191,16 +214,25 @@ def test_oci_export_persists_artifacts(tmp_path, monkeypatch):
     adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
     callbacks = create_autospec(JobCallbacks)
     callbacks.create_oci_artifact.return_value = OCIArtifactResult(
-        digest="sha256:fake", reference="fake:latest",
+        digest="sha256:fake",
+        reference="fake:latest",
     )
 
     data_dir = tmp_path / "test_data"
     data_dir.mkdir()
-    (data_dir / "data.csv").write_text("input,actual_output,retrieval_context\nq,a,ctx\n")
+    (data_dir / "data.csv").write_text(
+        "input,actual_output,retrieval_context\nq,a,ctx\n"
+    )
 
     monkeypatch.setattr("main._resolve_data_dir", lambda _config: str(data_dir))
-    monkeypatch.setattr("main._resolve_judge_model", lambda _name, _url: SimpleNamespace(name="MockModel"))
-    monkeypatch.setattr("main._create_metric", lambda _bid, _model, _threshold, _params: SimpleNamespace(name="MockMetric"))
+    monkeypatch.setattr(
+        "main._resolve_judge_model",
+        lambda _name, _url: SimpleNamespace(name="MockModel"),
+    )
+    monkeypatch.setattr(
+        "main._create_metric",
+        lambda _bid, _model, _threshold, _params: SimpleNamespace(name="MockMetric"),
+    )
     monkeypatch.setattr("main.evaluate", lambda **kwargs: _make_canned_eval_results())
 
     results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
@@ -275,8 +307,10 @@ def test_load_dataset_jsonl(tmp_path):
     """_load_dataset reads JSONL files correctly."""
     jsonl_file = tmp_path / "data.jsonl"
     jsonl_file.write_text(
-        json.dumps({"input": "q1", "actual_output": "a1"}) + "\n"
-        + json.dumps({"input": "q2", "actual_output": "a2"}) + "\n"
+        json.dumps({"input": "q1", "actual_output": "a1"})
+        + "\n"
+        + json.dumps({"input": "q2", "actual_output": "a2"})
+        + "\n"
     )
     records = _load_dataset(str(tmp_path), "jsonl")
     assert len(records) == 2
@@ -318,11 +352,13 @@ def test_build_conversational_test_cases_json_string_turns():
 @pytest.mark.integration
 def test_build_conversational_test_cases_optional_fields():
     """chatbot_role and scenario are forwarded to the test case."""
-    records = [{
-        "turns": _SAMPLE_TURNS,
-        "chatbot_role": "support agent",
-        "scenario": "password reset",
-    }]
+    records = [
+        {
+            "turns": _SAMPLE_TURNS,
+            "chatbot_role": "support agent",
+            "scenario": "password reset",
+        }
+    ]
     cases = _build_conversational_test_cases(records, "conversation-completeness")
     assert cases[0].chatbot_role == "support agent"
     assert cases[0].scenario == "password reset"
@@ -382,11 +418,21 @@ NEW_SINGLE_TURN_CASES = [
     ),
     pytest.param(
         "argument-correctness",
-        json.dumps([{
-            "input": "search for hotels",
-            "actual_output": "Calling search_hotels(city='Paris')",
-            "tools_called": [{"name": "search_hotels", "input_parameters": {"city": "Paris"}, "output": "3 results"}],
-        }]),
+        json.dumps(
+            [
+                {
+                    "input": "search for hotels",
+                    "actual_output": "Calling search_hotels(city='Paris')",
+                    "tools_called": [
+                        {
+                            "name": "search_hotels",
+                            "input_parameters": {"city": "Paris"},
+                            "output": "3 results",
+                        }
+                    ],
+                }
+            ]
+        ),
         "json",
         ["argument_correctness_score"],
         id="argument-correctness",
@@ -438,8 +484,12 @@ NEW_SINGLE_TURN_CASES = [
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("benchmark_id,file_content,dataset_format,expected_metrics", NEW_SINGLE_TURN_CASES)
-def test_new_single_turn_benchmarks_happy_path(tmp_path, monkeypatch, benchmark_id, file_content, dataset_format, expected_metrics):
+@pytest.mark.parametrize(
+    "benchmark_id,file_content,dataset_format,expected_metrics", NEW_SINGLE_TURN_CASES
+)
+def test_new_single_turn_benchmarks_happy_path(
+    tmp_path, monkeypatch, benchmark_id, file_content, dataset_format, expected_metrics
+):
     """Full run_benchmark_job for new single-turn benchmarks with mocked evaluate()."""
     meta_dir = tmp_path / "meta"
     meta_dir.mkdir()
@@ -457,10 +507,17 @@ def test_new_single_turn_benchmarks_happy_path(tmp_path, monkeypatch, benchmark_
     (meta_dir / "job.json").write_text(json.dumps(job))
     adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
 
-    canned = _make_canned_eval_results(score=0.75, name=benchmark_id.replace("-", "_").title())
+    canned = _make_canned_eval_results(
+        score=0.75, name=benchmark_id.replace("-", "_").title()
+    )
     monkeypatch.setattr("main.evaluate", lambda **kwargs: canned)
-    monkeypatch.setattr("main._resolve_judge_model", lambda name, url: SimpleNamespace(name="MockModel"))
-    monkeypatch.setattr("main._create_metric", lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"))
+    monkeypatch.setattr(
+        "main._resolve_judge_model", lambda name, url: SimpleNamespace(name="MockModel")
+    )
+    monkeypatch.setattr(
+        "main._create_metric",
+        lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"),
+    )
 
     callbacks = create_autospec(JobCallbacks)
     callbacks.mlflow = MagicMock()
@@ -480,6 +537,7 @@ def test_new_single_turn_benchmarks_happy_path(tmp_path, monkeypatch, benchmark_
 # GEval — configurable criteria tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_geval_happy_path(tmp_path, monkeypatch):
     """geval benchmark with user-supplied criteria produces geval_score."""
@@ -493,15 +551,22 @@ def test_geval_happy_path(tmp_path, monkeypatch):
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    (data_dir / "data.csv").write_text("input,actual_output\nI have a headache.,Drink water and rest.\n")
+    (data_dir / "data.csv").write_text(
+        "input,actual_output\nI have a headache.,Drink water and rest.\n"
+    )
     job["parameters"]["data_dir"] = str(data_dir)
     (meta_dir / "job.json").write_text(json.dumps(job))
 
     adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
     canned = _make_canned_eval_results(score=0.9, name="CustomEval")
     monkeypatch.setattr("main.evaluate", lambda **kwargs: canned)
-    monkeypatch.setattr("main._resolve_judge_model", lambda name, url: SimpleNamespace(name="MockModel"))
-    monkeypatch.setattr("main._create_metric", lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"))
+    monkeypatch.setattr(
+        "main._resolve_judge_model", lambda name, url: SimpleNamespace(name="MockModel")
+    )
+    monkeypatch.setattr(
+        "main._create_metric",
+        lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"),
+    )
 
     callbacks = create_autospec(JobCallbacks)
     callbacks.mlflow = MagicMock()
@@ -547,6 +612,7 @@ def test_dag_missing_criteria_raises(tmp_path):
 # JSON correctness — no LLM judge path
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_json_correctness_happy_path(tmp_path, monkeypatch):
     """json-correctness benchmark passes without a judge model."""
@@ -559,7 +625,9 @@ def test_json_correctness_happy_path(tmp_path, monkeypatch):
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    (data_dir / "data.csv").write_text('input,actual_output\ngenerate json,"{""key"": ""value""}"\n')
+    (data_dir / "data.csv").write_text(
+        'input,actual_output\ngenerate json,"{""key"": ""value""}"\n'
+    )
     job["parameters"]["data_dir"] = str(data_dir)
     (meta_dir / "job.json").write_text(json.dumps(job))
 
@@ -568,7 +636,10 @@ def test_json_correctness_happy_path(tmp_path, monkeypatch):
     monkeypatch.setattr("main.evaluate", lambda **kwargs: canned)
     # json-correctness should not call _resolve_judge_model; assert it is NOT called
     judge_called = []
-    monkeypatch.setattr("main._resolve_judge_model", lambda n, u: judge_called.append(True) or MagicMock())
+    monkeypatch.setattr(
+        "main._resolve_judge_model",
+        lambda n, u: judge_called.append(True) or MagicMock(),
+    )
 
     callbacks = create_autospec(JobCallbacks)
     callbacks.mlflow = MagicMock()
@@ -585,16 +656,25 @@ def test_json_correctness_happy_path(tmp_path, monkeypatch):
 # Tool correctness — tools_called column handling
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_build_single_turn_test_cases_with_tools_called():
     """tools_called list is forwarded to LLMTestCase when provided."""
-    records = [{
-        "input": "search for flights",
-        "actual_output": "Calling search_flights(origin='JFK', destination='LAX')",
-        "tools_called": json.dumps([
-            {"name": "search_flights", "input_parameters": {"origin": "JFK", "destination": "LAX"}, "output": "5 results"},
-        ]),
-    }]
+    records = [
+        {
+            "input": "search for flights",
+            "actual_output": "Calling search_flights(origin='JFK', destination='LAX')",
+            "tools_called": json.dumps(
+                [
+                    {
+                        "name": "search_flights",
+                        "input_parameters": {"origin": "JFK", "destination": "LAX"},
+                        "output": "5 results",
+                    },
+                ]
+            ),
+        }
+    ]
     cases = _build_single_turn_test_cases(records, "tool-correctness")
     assert len(cases) == 1
     assert cases[0].tools_called is not None
@@ -603,6 +683,7 @@ def test_build_single_turn_test_cases_with_tools_called():
 # ---------------------------------------------------------------------------
 # New multi-turn benchmark
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_conversation_relevancy_happy_path(tmp_path, monkeypatch):
@@ -617,10 +698,15 @@ def test_conversation_relevancy_happy_path(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     (data_dir / "data.jsonl").write_text(
-        json.dumps({"turns": [
-            {"role": "user", "content": "What is the weather?"},
-            {"role": "assistant", "content": "It is sunny today."},
-        ]}) + "\n"
+        json.dumps(
+            {
+                "turns": [
+                    {"role": "user", "content": "What is the weather?"},
+                    {"role": "assistant", "content": "It is sunny today."},
+                ]
+            }
+        )
+        + "\n"
     )
     job["parameters"]["data_dir"] = str(data_dir)
     (meta_dir / "job.json").write_text(json.dumps(job))
@@ -628,8 +714,13 @@ def test_conversation_relevancy_happy_path(tmp_path, monkeypatch):
     adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
     canned = _make_canned_eval_results(score=0.88, name="ConversationRelevancy")
     monkeypatch.setattr("main.evaluate", lambda **kwargs: canned)
-    monkeypatch.setattr("main._resolve_judge_model", lambda n, u: SimpleNamespace(name="MockModel"))
-    monkeypatch.setattr("main._create_metric", lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"))
+    monkeypatch.setattr(
+        "main._resolve_judge_model", lambda n, u: SimpleNamespace(name="MockModel")
+    )
+    monkeypatch.setattr(
+        "main._create_metric",
+        lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"),
+    )
 
     callbacks = create_autospec(JobCallbacks)
     callbacks.mlflow = MagicMock()
@@ -644,6 +735,7 @@ def test_conversation_relevancy_happy_path(tmp_path, monkeypatch):
 # EvalCard and EnvironmentCard population
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_evalcard_populated_for_safety_benchmark(tmp_path, monkeypatch):
     """Safety benchmarks produce SafetyEvalEntry (not CapabilityEvalEntry) in EvalCard."""
@@ -656,15 +748,22 @@ def test_evalcard_populated_for_safety_benchmark(tmp_path, monkeypatch):
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    (data_dir / "data.csv").write_text("input,actual_output\nPatient name?,The patient is John Doe.\n")
+    (data_dir / "data.csv").write_text(
+        "input,actual_output\nPatient name?,The patient is John Doe.\n"
+    )
     job["parameters"]["data_dir"] = str(data_dir)
     (meta_dir / "job.json").write_text(json.dumps(job))
 
     adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
     canned = _make_canned_eval_results(score=0.9, name="PIILeakage")
     monkeypatch.setattr("main.evaluate", lambda **kwargs: canned)
-    monkeypatch.setattr("main._resolve_judge_model", lambda n, u: SimpleNamespace(name="MockModel"))
-    monkeypatch.setattr("main._create_metric", lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"))
+    monkeypatch.setattr(
+        "main._resolve_judge_model", lambda n, u: SimpleNamespace(name="MockModel")
+    )
+    monkeypatch.setattr(
+        "main._create_metric",
+        lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"),
+    )
 
     callbacks = create_autospec(JobCallbacks)
     callbacks.mlflow = MagicMock()
@@ -673,8 +772,12 @@ def test_evalcard_populated_for_safety_benchmark(tmp_path, monkeypatch):
     results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
 
     assert results.eval_card is not None
-    assert results.eval_card.safety_evaluations, "Safety benchmarks must produce SafetyEvalEntry"
-    assert not results.eval_card.capability_evaluations, "Safety benchmarks must not produce CapabilityEvalEntry"
+    assert results.eval_card.safety_evaluations, (
+        "Safety benchmarks must produce SafetyEvalEntry"
+    )
+    assert not results.eval_card.capability_evaluations, (
+        "Safety benchmarks must not produce CapabilityEvalEntry"
+    )
 
     assert results.env_card is not None
     assert results.env_card.framework_name == "deepeval"
@@ -702,8 +805,13 @@ def test_evalcard_populated_for_rag_benchmark(tmp_path, monkeypatch):
     adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
     canned = _make_canned_eval_results(score=0.95, name="Faithfulness")
     monkeypatch.setattr("main.evaluate", lambda **kwargs: canned)
-    monkeypatch.setattr("main._resolve_judge_model", lambda n, u: SimpleNamespace(name="MockModel"))
-    monkeypatch.setattr("main._create_metric", lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"))
+    monkeypatch.setattr(
+        "main._resolve_judge_model", lambda n, u: SimpleNamespace(name="MockModel")
+    )
+    monkeypatch.setattr(
+        "main._create_metric",
+        lambda bid, model, threshold, params: SimpleNamespace(name="MockMetric"),
+    )
 
     callbacks = create_autospec(JobCallbacks)
     callbacks.mlflow = MagicMock()
@@ -712,7 +820,9 @@ def test_evalcard_populated_for_rag_benchmark(tmp_path, monkeypatch):
     results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
 
     assert results.eval_card is not None
-    assert results.eval_card.capability_evaluations, "RAG benchmarks must produce CapabilityEvalEntry"
+    assert results.eval_card.capability_evaluations, (
+        "RAG benchmarks must produce CapabilityEvalEntry"
+    )
     assert results.eval_card.capability_evaluations[0].ability == "rag"
 
 
@@ -720,10 +830,12 @@ def test_evalcard_populated_for_rag_benchmark(tmp_path, monkeypatch):
 # Benchmark coverage completeness
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_all_benchmarks_have_primary_metric_mapping():
     """Every benchmark_id in the registry must have a _PRIMARY_METRIC entry."""
-    from main import SINGLE_TURN_BENCHMARKS, CONVERSATIONAL_BENCHMARKS, _PRIMARY_METRIC
+    from main import _PRIMARY_METRIC
+
     all_ids = set(SINGLE_TURN_BENCHMARKS) | set(CONVERSATIONAL_BENCHMARKS)
     missing = all_ids - set(_PRIMARY_METRIC)
     assert not missing, f"Benchmarks missing _PRIMARY_METRIC entry: {missing}"
@@ -733,27 +845,32 @@ def test_all_benchmarks_have_primary_metric_mapping():
 # _coerce_list unit tests (no mocking needed)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_coerce_list_from_list():
     from main import _coerce_list
+
     assert _coerce_list(["a", "b"]) == ["a", "b"]
 
 
 @pytest.mark.integration
 def test_coerce_list_from_json_string():
     from main import _coerce_list
+
     assert _coerce_list('["ctx1", "ctx2"]') == ["ctx1", "ctx2"]
 
 
 @pytest.mark.integration
 def test_coerce_list_from_plain_string():
     from main import _coerce_list
+
     assert _coerce_list("some context") == ["some context"]
 
 
 @pytest.mark.integration
 def test_coerce_list_from_non_string():
     from main import _coerce_list
+
     assert _coerce_list(42) == ["42"]
 
 
@@ -761,9 +878,11 @@ def test_coerce_list_from_non_string():
 # _run_json_correctness unit tests (no mocking needed)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_json_correctness_valid_json_no_schema():
     from main import _run_json_correctness
+
     records = [{"input": "q", "actual_output": '{"key": "value"}'}]
     results, card_entries = _run_json_correctness(records, {})
     scores = {r.metric_name: r.metric_value for r in results}
@@ -775,8 +894,9 @@ def test_json_correctness_valid_json_no_schema():
 @pytest.mark.integration
 def test_json_correctness_invalid_json():
     from main import _run_json_correctness
+
     records = [{"input": "q", "actual_output": "not valid json {{{"}]
-    results, card_entries = _run_json_correctness(records, {})
+    results, _card_entries = _run_json_correctness(records, {})
     scores = {r.metric_name: r.metric_value for r in results}
     assert scores["json_correctness_score"] == 0.0
     assert scores["schema_valid"] == 0
@@ -785,9 +905,15 @@ def test_json_correctness_invalid_json():
 @pytest.mark.integration
 def test_json_correctness_valid_json_with_schema_pass():
     """Valid JSON that conforms to the schema scores 1.0."""
-    from main import _run_json_correctness
     import json as _json
-    schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+
+    from main import _run_json_correctness
+
+    schema = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+    }
     records = [{"input": "q", "actual_output": '{"name": "Alice"}'}]
     results, _ = _run_json_correctness(records, {"json_schema": _json.dumps(schema)})
     scores = {r.metric_name: r.metric_value for r in results}
@@ -797,9 +923,15 @@ def test_json_correctness_valid_json_with_schema_pass():
 @pytest.mark.integration
 def test_json_correctness_valid_json_with_schema_fail():
     """Valid JSON that violates the schema scores 0.0."""
-    from main import _run_json_correctness
     import json as _json
-    schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+
+    from main import _run_json_correctness
+
+    schema = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+    }
     records = [{"input": "q", "actual_output": '{"other": 42}'}]
     results, _ = _run_json_correctness(records, {"json_schema": _json.dumps(schema)})
     scores = {r.metric_name: r.metric_value for r in results}
@@ -811,6 +943,7 @@ def test_json_correctness_valid_json_with_schema_fail():
 def test_json_correctness_bad_schema_string_falls_back():
     """Malformed json_schema parameter logs a warning and falls back to validity-only."""
     from main import _run_json_correctness
+
     records = [{"input": "q", "actual_output": '{"ok": true}'}]
     results, _ = _run_json_correctness(records, {"json_schema": "this is not json {"})
     scores = {r.metric_name: r.metric_value for r in results}
@@ -822,12 +955,15 @@ def test_json_correctness_bad_schema_string_falls_back():
 # _extract_results supplementary aggregate metric branches
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_extract_results_hallucination_detected_flag():
     """hallucination_detected=1 when score > 0.5."""
     from types import SimpleNamespace
-    from main import _extract_results
-    md = SimpleNamespace(score=0.8, success=False, reason="Hallucinated", name="Hallucination")
+
+    md = SimpleNamespace(
+        score=0.8, success=False, reason="Hallucinated", name="Hallucination"
+    )
     raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
     results, _ = _extract_results(raw, "hallucination")
     by_name = {r.metric_name: r.metric_value for r in results}
@@ -838,8 +974,10 @@ def test_extract_results_hallucination_detected_flag():
 def test_extract_results_hallucination_not_detected_flag():
     """hallucination_detected=0 when score <= 0.5."""
     from types import SimpleNamespace
-    from main import _extract_results
-    md = SimpleNamespace(score=0.2, success=True, reason="Grounded", name="Hallucination")
+
+    md = SimpleNamespace(
+        score=0.2, success=True, reason="Grounded", name="Hallucination"
+    )
     raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
     results, _ = _extract_results(raw, "hallucination")
     by_name = {r.metric_name: r.metric_value for r in results}
@@ -850,8 +988,10 @@ def test_extract_results_hallucination_not_detected_flag():
 def test_extract_results_pii_detected_flag():
     """pii_detected=1 when score > 0.5."""
     from types import SimpleNamespace
-    from main import _extract_results
-    md = SimpleNamespace(score=0.9, success=False, reason="SSN detected", name="PIILeakage")
+
+    md = SimpleNamespace(
+        score=0.9, success=False, reason="SSN detected", name="PIILeakage"
+    )
     raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
     results, _ = _extract_results(raw, "pii-leakage")
     by_name = {r.metric_name: r.metric_value for r in results}
@@ -862,13 +1002,17 @@ def test_extract_results_pii_detected_flag():
 def test_extract_results_faithfulness_supplementary_metrics():
     """faithfulness produces claims_count and supported_claims_count."""
     from types import SimpleNamespace
-    from main import _extract_results
+
     md_pass = SimpleNamespace(score=0.9, success=True, reason="ok", name="Faithfulness")
-    md_fail = SimpleNamespace(score=0.2, success=False, reason="unsupported", name="Faithfulness")
-    raw = SimpleNamespace(test_results=[
-        SimpleNamespace(metrics_data=[md_pass]),
-        SimpleNamespace(metrics_data=[md_fail]),
-    ])
+    md_fail = SimpleNamespace(
+        score=0.2, success=False, reason="unsupported", name="Faithfulness"
+    )
+    raw = SimpleNamespace(
+        test_results=[
+            SimpleNamespace(metrics_data=[md_pass]),
+            SimpleNamespace(metrics_data=[md_fail]),
+        ]
+    )
     results, _ = _extract_results(raw, "faithfulness")
     by_name = {r.metric_name: r.metric_value for r in results}
     assert by_name["claims_count"] == 2
@@ -879,8 +1023,9 @@ def test_extract_results_faithfulness_supplementary_metrics():
 def test_extract_results_safety_entry_for_bias():
     """Bias benchmark produces SafetyEvalEntry (not CapabilityEvalEntry)."""
     from types import SimpleNamespace
-    from evalhub.adapter import SafetyEvalEntry, CapabilityEvalEntry
-    from main import _extract_results
+
+    from evalhub.adapter import CapabilityEvalEntry, SafetyEvalEntry
+
     md = SimpleNamespace(score=0.1, success=True, reason="No bias", name="Bias")
     raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
     _, entries = _extract_results(raw, "bias")
@@ -892,9 +1037,12 @@ def test_extract_results_safety_entry_for_bias():
 def test_extract_results_capability_entry_for_rag():
     """RAG benchmark produces CapabilityEvalEntry (not SafetyEvalEntry)."""
     from types import SimpleNamespace
-    from evalhub.adapter import SafetyEvalEntry, CapabilityEvalEntry
-    from main import _extract_results
-    md = SimpleNamespace(score=0.9, success=True, reason="Faithful", name="Faithfulness")
+
+    from evalhub.adapter import CapabilityEvalEntry, SafetyEvalEntry
+
+    md = SimpleNamespace(
+        score=0.9, success=True, reason="Faithful", name="Faithfulness"
+    )
     raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
     _, entries = _extract_results(raw, "faithfulness")
     assert any(isinstance(e, CapabilityEvalEntry) for e in entries)
