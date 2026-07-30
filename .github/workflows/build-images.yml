@@ -2,7 +2,7 @@ name: Build and push adapter images
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'v*']
     paths: ['adapters/**']
   workflow_dispatch:
     inputs:
@@ -53,10 +53,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve image name
+      - name: Resolve image name and tag
         id: image
         env:
           ADAPTER: ${{ matrix.adapter }}
+          BRANCH: ${{ github.ref_name }}
         run: |
           # Validate adapter name: directory names are lowercase letters, digits, and hyphens only.
           if [[ ! "$ADAPTER" =~ ^[a-z0-9-]+$ ]]; then
@@ -70,24 +71,32 @@ jobs:
           )
           suffix="${IMAGE_MAP[$ADAPTER]:-$ADAPTER}"
           echo "name=community-${suffix}" >> "$GITHUB_OUTPUT"
+          # main -> latest; v* branches -> branch name (e.g. v0.5)
+          if [[ "$BRANCH" == "main" ]]; then
+            echo "channel=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=${BRANCH}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build image
         env:
           ADAPTER: ${{ matrix.adapter }}
           IMAGE_NAME: ${{ steps.image.outputs.name }}
+          CHANNEL: ${{ steps.image.outputs.channel }}
           GIT_SHA: ${{ github.sha }}
         run: |
           docker build \
             -f "adapters/${ADAPTER}/Containerfile" \
             -t "${REGISTRY}/${IMAGE_NAME}:${GIT_SHA}" \
-            -t "${REGISTRY}/${IMAGE_NAME}:latest" \
+            -t "${REGISTRY}/${IMAGE_NAME}:${CHANNEL}" \
             "adapters/${ADAPTER}"
 
       - name: Push image
         env:
           IMAGE_NAME: ${{ steps.image.outputs.name }}
+          CHANNEL: ${{ steps.image.outputs.channel }}
           GIT_SHA: ${{ github.sha }}
         run: |
           echo "${{ secrets.QUAY_TOKEN }}" | docker login quay.io -u "${{ secrets.QUAY_USER }}" --password-stdin
           docker push "${REGISTRY}/${IMAGE_NAME}:${GIT_SHA}"
-          docker push "${REGISTRY}/${IMAGE_NAME}:latest"
+          docker push "${REGISTRY}/${IMAGE_NAME}:${CHANNEL}"
