@@ -57,6 +57,7 @@ agent:
     - "Use parameters.per_attempt_timeout_seconds (default 300) for reasoning models with long chain-of-thought"
     - "Use parameters.num_examples to cap the evaluation for fast smoke-testing"
     - "Use parameters.threshold (default 0.5) to set the pass/fail cutoff for all benchmarks"
+    - "role-violation requires parameters.role — the expected role string the model must maintain"
   result_interpretation:
     - "Scores range from 0.0 to 1.0"
     - "Higher is better for all metrics EXCEPT hallucination, pii-leakage, bias, toxicity, non-advice, misuse, and role-violation"
@@ -93,13 +94,14 @@ benchmarks:
     category: rag-evaluation
     metrics:
       - faithfulness_score
-      - claims_count
-      - supported_claims_count
+      - cases_count
+      - passing_cases_count
     tags: [deepeval, rag, faithfulness]
     agent:
       result_interpretation: >-
         faithfulness_score is the fraction of claims grounded in context. HIGHER is better.
         1.0 = fully faithful; 0.0 = fully fabricated.
+        cases_count = total evaluated records; passing_cases_count = records scoring >= 0.5.
       score_ranges:
         - range: "0.0-0.4"
           meaning: "High hallucination risk — most claims not grounded in context"
@@ -136,11 +138,11 @@ benchmarks:
     description: >
       Detects hallucinated content — statements not grounded in the provided context.
       Required columns: input, actual_output, context (list or string).
-    category: safety
+    category: rag-evaluation
     metrics:
       - hallucination_score
       - hallucination_detected
-    tags: [deepeval, safety, hallucination]
+    tags: [deepeval, rag, hallucination]
     agent:
       result_interpretation: >-
         hallucination_score measures unsupported statement fraction. LOWER is better.
@@ -231,6 +233,8 @@ benchmarks:
       Evaluates output against a directed acyclic graph of sub-criteria, each with
       independent pass/fail logic. Use for multi-condition correctness checks.
       Required parameter: dag_criteria_json (JSON-encoded criteria graph).
+      Supported formats: {"root_nodes": [...]} with BinaryJudgementNode/VerdictNode specs,
+      or shorthand {"criteria": "..."} for a single BinaryJudgementNode.
       Required columns: input, actual_output.
     category: custom
     metrics:
@@ -249,6 +253,7 @@ benchmarks:
     description: >
       Evaluates whether an AI agent completed the assigned task (LLM-as-judge).
       Applies to any user-defined task — not a fixed benchmark dataset.
+      Optional parameter: task_description (context for the judge).
       Required columns: input (task description), actual_output (agent response or trace).
     category: agent
     metrics:
@@ -393,7 +398,9 @@ benchmarks:
     name: Non-Advice Compliance
     description: >
       Detects whether the model provides unsolicited medical, legal, or financial advice —
-      a compliance risk in regulated deployments. Required columns: input, actual_output.
+      a compliance risk in regulated deployments.
+      Optional parameter: advice_types (default: ["medical", "legal", "financial"]).
+      Required columns: input, actual_output.
     category: safety
     metrics:
       - non_advice_score
@@ -407,7 +414,9 @@ benchmarks:
     description: >
       Detects misuse patterns — attempts to use the model for harmful, fraudulent, or
       policy-violating purposes. Complements Garak (fixed probe library) with LLM-as-judge
-      assessment on arbitrary traces. Required columns: input, actual_output.
+      assessment on arbitrary traces.
+      Optional parameter: domain (default: "general").
+      Required columns: input, actual_output.
     category: safety
     metrics:
       - misuse_score
@@ -420,6 +429,7 @@ benchmarks:
     name: Role Violation Detection
     description: >
       Detects when a model breaks out of its assigned persona or role.
+      Required parameter: role (the expected role string, e.g. "friendly customer support agent").
       Required columns: input, actual_output.
     category: safety
     metrics:
@@ -564,13 +574,21 @@ parameters:
     type: array
     default: ["INPUT", "ACTUAL_OUTPUT"]
     description: >
-      For geval only. List of SingleTurnParams names to include in the evaluation context.
+      For geval: list of SingleTurnParams names to include in the evaluation context.
       Valid values: INPUT, ACTUAL_OUTPUT, EXPECTED_OUTPUT, RETRIEVAL_CONTEXT, CONTEXT, TOOLS_CALLED.
+      For conversational-geval: list of MultiTurnParams names.
+      Valid values: ROLE, CONTENT, EXPECTED_ACTION.
+      Defaults to ["INPUT", "ACTUAL_OUTPUT"] for geval and ["ROLE", "CONTENT"] for conversational-geval.
 
   - name: dag_criteria_json
     type: string
     default: null
-    description: Required for dag. JSON-encoded DAGMetric criteria graph.
+    description: >
+      Required for dag. JSON-encoded DAGMetric criteria graph.
+      Two formats are supported:
+      (1) Node graph: {"root_nodes": [{"type": "BinaryJudgementNode", "criteria": "...",
+          "children": [{"type": "VerdictNode", "verdict": true, "score": 1.0}]}]}
+      (2) Shorthand: {"criteria": "Is the response accurate and helpful?"}
 
   - name: dag_name
     type: string
@@ -583,6 +601,34 @@ parameters:
     description: >
       For json-correctness only. JSON Schema dict (or JSON string) the output must conform to.
       When omitted, only JSON validity is checked.
+
+  - name: advice_types
+    type: array
+    default: ["medical", "legal", "financial"]
+    description: >
+      For non-advice only. Categories of advice to detect.
+      Defaults to medical, legal, and financial advice detection.
+
+  - name: domain
+    type: string
+    default: general
+    description: >
+      For misuse only. Domain context for misuse pattern detection.
+      Examples: "general", "healthcare", "finance", "legal".
+
+  - name: role
+    type: string
+    default: null
+    description: >
+      Required for role-violation. The expected role or persona the model must maintain.
+      Example: "friendly customer support agent" or "medical information assistant".
+
+  - name: task_description
+    type: string
+    default: null
+    description: >
+      For task-completion only. Optional description of the task the agent should complete.
+      Provides context to the LLM judge for more accurate completion assessment.
 
   # ── Evaluation controls ───────────────────────────────────────────────────
   - name: threshold
@@ -612,6 +658,13 @@ parameters:
     description: >
       Chatbot persona for role-adherence benchmark.
       Can also be provided per-record as the chatbot_role column.
+
+  - name: num_examples
+    type: integer
+    default: null
+    description: >
+      Maximum number of dataset records to evaluate. When set, records are truncated
+      after loading. Use for smoke-testing or cost control on large datasets.
 
   # ── Concurrency and retry ─────────────────────────────────────────────────
   - name: max_concurrent
