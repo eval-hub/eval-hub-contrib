@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import jsonschema
 import logging
 import os
 import sys
@@ -78,6 +79,7 @@ from deepeval.metrics import (
     ToxicityMetric,
     TurnRelevancyMetric,
 )
+from deepeval.metrics.dag import BinaryJudgementNode, DeepAcyclicGraph, VerdictNode
 from deepeval.test_case import (
     ConversationalTestCase,
     LLMTestCase,
@@ -534,6 +536,49 @@ def _resolve_judge_model(judge_name: str, judge_url: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _build_dag_from_json(dag_spec: dict) -> Any:
+    """Convert a serialisable dag_criteria_json structure into a DeepAcyclicGraph.
+
+    Supported formats:
+      {"root_nodes": [{"type": "BinaryJudgementNode", "criteria": "...",
+                       "children": [{"type": "VerdictNode", "verdict": true, "score": 1.0}]}]}
+      {"criteria": "Is the response accurate?"} — shorthand for a single BinaryJudgementNode
+    """
+
+    def _build_node(spec: dict) -> Any:
+        node_type = spec.get("type", "BinaryJudgementNode")
+        if node_type == "VerdictNode":
+            return VerdictNode(
+                verdict=bool(spec.get("verdict", True)),
+                score=float(spec.get("score", 1.0)),
+            )
+        if node_type == "BinaryJudgementNode":
+            children = [_build_node(c) for c in spec.get("children", [])]
+            return BinaryJudgementNode(
+                criteria=spec.get("criteria", ""),
+                children=children or None,
+            )
+        raise ValueError(f"Unsupported DAG node type: {node_type!r}")
+
+    if "root_nodes" in dag_spec:
+        root_nodes = [_build_node(n) for n in dag_spec["root_nodes"]]
+    elif "criteria" in dag_spec:
+        # Shorthand: single BinaryJudgementNode with a pass VerdictNode
+        root_nodes = [
+            BinaryJudgementNode(
+                criteria=dag_spec["criteria"],
+                children=[VerdictNode(verdict=True, score=1.0)],
+            )
+        ]
+    else:
+        raise ValueError(
+            "dag_criteria_json must contain 'root_nodes' (list of node specs) "
+            "or 'criteria' (shorthand for a single BinaryJudgementNode)"
+        )
+
+    return DeepAcyclicGraph(root_nodes=root_nodes)
+
+
 def _create_metric(
     benchmark_id: str, model: Any, threshold: float, params: dict[str, Any]
 ) -> Any:
@@ -606,9 +651,10 @@ def _create_metric(
             )
         if isinstance(dag_json, str):
             dag_json = json.loads(dag_json)
+        dag_graph = _build_dag_from_json(dag_json)
         return DAGMetric(
             name=params.get("dag_name", "DAGEval"),
-            criteria=dag_json,
+            dag=dag_graph,
             model=model,
             threshold=threshold,
         )
@@ -663,9 +709,8 @@ def _run_json_correctness(
 ) -> tuple[list[EvaluationResult], list[CapabilityEvalEntry | SafetyEvalEntry]]:
     """Validate JSON output correctness without a DeepEval metric or LLM judge.
 
-    Uses json.loads() for validity and jsonschema.validate() (if installed and a
-    schema is provided) for schema conformance. Falls back to validity-only when
-    jsonschema is not available.
+    Uses json.loads() for validity and jsonschema.validate() (if a schema is
+    provided) for schema conformance.
     """
     schema = params.get("json_schema")
     if schema and isinstance(schema, str):
@@ -690,14 +735,9 @@ def _run_json_correctness(
             parsed = json.loads(str(output) if not isinstance(output, str) else output)
             if schema:
                 try:
-                    import jsonschema
-
                     jsonschema.validate(instance=parsed, schema=schema)
                     score = 1.0
                     reason = "Valid JSON conforming to schema"
-                except ImportError:
-                    score = 1.0
-                    reason = "Valid JSON (jsonschema not installed; schema conformance not checked)"
                 except Exception as exc:  # noqa: BLE001
                     score = 0.0
                     reason = f"Schema violation: {exc}"
@@ -794,12 +834,12 @@ def _extract_results(
     if benchmark_id == "faithfulness":
         results.append(
             EvaluationResult(
-                metric_name="claims_count", metric_value=len(scores), metric_type="int"
+                metric_name="cases_count", metric_value=len(scores), metric_type="int"
             )
         )
         results.append(
             EvaluationResult(
-                metric_name="supported_claims_count",
+                metric_name="passing_cases_count",
                 metric_value=sum(1 for s in scores if s >= 0.5),
                 metric_type="int",
             )
@@ -919,6 +959,10 @@ class DeepEvalAdapter(FrameworkAdapter):
 
             data_dir = _resolve_data_dir(config)
             records = _load_dataset(data_dir, dataset_format)
+            limit = config.num_examples or params.get("num_examples")
+            if limit and int(limit) > 0:
+                records = records[: int(limit)]
+                logger.info("Capped dataset to %d records", len(records))
 
             is_conversational = benchmark_id in CONVERSATIONAL_BENCHMARKS
             if is_conversational:
@@ -1183,6 +1227,10 @@ class DeepEvalAdapter(FrameworkAdapter):
         if (config.benchmark_id == "dag") and (not config.parameters.get("dag_criteria_json")):
             raise ValueError(
                 "parameters.dag_criteria_json is required for benchmark_id='dag'"
+            )
+        if config.benchmark_id == "role-violation" and not config.parameters.get("role"):
+            raise ValueError(
+                "parameters.role is required for benchmark_id='role-violation'"
             )
 
 
