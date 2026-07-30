@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """DeepEval adapter for eval-hub.
 
 Loads a JobSpec, reads test data (CSV/JSONL/JSON), builds DeepEval TestCase
@@ -52,7 +51,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 from deepeval import evaluate
@@ -61,8 +60,8 @@ from deepeval.metrics import (
     AnswerRelevancyMetric,
     ArgumentCorrectnessMetric,
     BiasMetric,
-    ConversationCompletenessMetric,
     ConversationalGEval,
+    ConversationCompletenessMetric,
     DAGMetric,
     FaithfulnessMetric,
     GEval,
@@ -79,7 +78,12 @@ from deepeval.metrics import (
     ToxicityMetric,
     TurnRelevancyMetric,
 )
-from deepeval.test_case import ConversationalTestCase, LLMTestCase, SingleTurnParams, Turn
+from deepeval.test_case import (
+    ConversationalTestCase,
+    LLMTestCase,
+    SingleTurnParams,
+    Turn,
+)
 from deepeval.test_case.conversational_test_case import MultiTurnParams
 from evalhub.adapter import (
     CapabilityEvalEntry,
@@ -129,7 +133,7 @@ SINGLE_TURN_BENCHMARKS: dict[str, dict[str, Any]] = {
         "ability": "rag",
     },
     "correctness": {
-        "class": GEval,          # fixed-criteria GEval
+        "class": GEval,  # fixed-criteria GEval
         "required_columns": ["input", "actual_output", "expected_output"],
         "category": "accuracy",
         "ability": "accuracy",
@@ -142,7 +146,7 @@ SINGLE_TURN_BENCHMARKS: dict[str, dict[str, Any]] = {
     },
     # ── Custom LLM-as-judge ────────────────────────────────────────────────
     "geval": {
-        "class": GEval,          # user-configured at runtime via parameters.criteria
+        "class": GEval,  # user-configured at runtime via parameters.criteria
         "required_columns": ["input", "actual_output"],
         "category": "custom",
         "ability": "custom",
@@ -259,10 +263,10 @@ CONVERSATIONAL_BENCHMARKS: dict[str, dict[str, Any]] = {
     },
 }
 
-# Safety benchmarks that use SafetyEvalEntry (not CapabilityEvalEntry)
-_SAFETY_BENCHMARKS = frozenset({
-    "bias", "toxicity", "pii-leakage", "non-advice", "misuse", "role-violation",
-})
+# Safety benchmarks — derived from spec dict category to avoid dual-maintenance.
+_SAFETY_BENCHMARKS = frozenset(
+    k for k, v in SINGLE_TURN_BENCHMARKS.items() if v.get("category") == "safety"
+)
 
 # Primary aggregate metric per benchmark_id
 _PRIMARY_METRIC: dict[str, str] = {
@@ -294,6 +298,7 @@ _PRIMARY_METRIC: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
+
 
 def _load_dataset(data_dir: str, fmt: str) -> list[dict[str, Any]]:
     """Load test data from the given directory in the specified format."""
@@ -329,7 +334,9 @@ def _load_dataset(data_dir: str, fmt: str) -> list[dict[str, Any]]:
                 else:
                     records.append(data)
     else:
-        raise ValueError(f"Unsupported dataset_format: {fmt!r}. Use csv, jsonl, or json.")
+        raise ValueError(
+            f"Unsupported dataset_format: {fmt!r}. Use csv, jsonl, or json."
+        )
 
     if not records:
         raise ValueError(f"No records loaded from {data_dir} (format={fmt})")
@@ -361,6 +368,7 @@ def _resolve_data_dir(config: JobSpec) -> str:
 # Test case builders
 # ---------------------------------------------------------------------------
 
+
 def _coerce_list(value: Any) -> list[str]:
     """Parse a string-encoded or native list into list[str]."""
     if isinstance(value, list):
@@ -384,7 +392,9 @@ def _build_single_turn_test_cases(
     test_cases: list[LLMTestCase] = []
 
     for i, rec in enumerate(records):
-        missing = [c for c in spec["required_columns"] if c not in rec or rec[c] is None]
+        missing = [
+            c for c in spec["required_columns"] if c not in rec or rec[c] is None
+        ]
         if missing:
             logger.warning("Skipping record %d: missing columns %s", i, missing)
             continue
@@ -404,10 +414,11 @@ def _build_single_turn_test_cases(
         # Agentic tool calls: expect a list of {name, input_parameters} dicts
         if "tools_called" in rec and rec["tools_called"] is not None:
             raw = rec["tools_called"]
-            if isinstance(raw, str):
-                raw = json.loads(raw)
             try:
+                if isinstance(raw, str):
+                    raw = json.loads(raw)
                 from deepeval.test_case import ToolCall
+
                 kwargs["tools_called"] = [
                     ToolCall(
                         name=t.get("name", ""),
@@ -416,22 +427,27 @@ def _build_single_turn_test_cases(
                     )
                     for t in raw
                 ]
-            except (ImportError, Exception) as exc:
-                logger.warning("ToolCall import failed, passing raw: %s", exc)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("tools_called parsing failed, passing raw: %s", exc)
                 kwargs["tools_called"] = raw
 
         if "expected_tools" in rec and rec["expected_tools"] is not None:
             raw = rec["expected_tools"]
-            if isinstance(raw, str):
-                raw = json.loads(raw)
             try:
+                if isinstance(raw, str):
+                    raw = json.loads(raw)
                 from deepeval.test_case import ToolCall
+
                 kwargs["expected_tools"] = [
-                    ToolCall(name=t.get("name", ""), input_parameters=t.get("input_parameters", {}))
+                    ToolCall(
+                        name=t.get("name", ""),
+                        input_parameters=t.get("input_parameters", {}),
+                    )
                     for t in raw
                 ]
-            except (ImportError, Exception) as exc:
-                logger.warning("ToolCall import for expected_tools failed: %s", exc)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("expected_tools parsing failed, passing raw: %s", exc)
+                kwargs["expected_tools"] = raw
 
         test_cases.append(LLMTestCase(**kwargs))
 
@@ -450,7 +466,9 @@ def _build_conversational_test_cases(
     test_cases: list[ConversationalTestCase] = []
 
     for i, rec in enumerate(records):
-        missing = [c for c in spec["required_columns"] if c not in rec or rec[c] is None]
+        missing = [
+            c for c in spec["required_columns"] if c not in rec or rec[c] is None
+        ]
         if missing:
             logger.warning("Skipping record %d: missing columns %s", i, missing)
             continue
@@ -469,15 +487,20 @@ def _build_conversational_test_cases(
         test_cases.append(ConversationalTestCase(**kwargs))
 
     if not test_cases:
-        raise ValueError(f"No valid conversational test cases built from {len(records)} records")
+        raise ValueError(
+            f"No valid conversational test cases built from {len(records)} records"
+        )
 
-    logger.info("Built %d conversational test cases for %s", len(test_cases), benchmark_id)
+    logger.info(
+        "Built %d conversational test cases for %s", len(test_cases), benchmark_id
+    )
     return test_cases
 
 
 # ---------------------------------------------------------------------------
 # Judge model resolution
 # ---------------------------------------------------------------------------
+
 
 def _resolve_judge_model(judge_name: str, judge_url: str) -> Any:
     """Return a GPTModel pointed at an OpenAI-compatible endpoint.
@@ -510,7 +533,10 @@ def _resolve_judge_model(judge_name: str, judge_url: str) -> Any:
 # Metric instantiation
 # ---------------------------------------------------------------------------
 
-def _create_metric(benchmark_id: str, model: Any, threshold: float, params: dict[str, Any]) -> Any:
+
+def _create_metric(
+    benchmark_id: str, model: Any, threshold: float, params: dict[str, Any]
+) -> Any:
     """Instantiate the DeepEval metric for the given benchmark."""
 
     # ── Fixed-criteria GEval (correctness) ─────────────────────────────────
@@ -551,11 +577,17 @@ def _create_metric(benchmark_id: str, model: Any, threshold: float, params: dict
     if benchmark_id == "conversational-geval":
         criteria = params.get("criteria")
         if not criteria:
-            raise ValueError("parameters.criteria is required for the conversational-geval benchmark")
+            raise ValueError(
+                "parameters.criteria is required for the conversational-geval benchmark"
+            )
         raw_params = params.get("evaluation_params", ["ROLE", "CONTENT"])
         if isinstance(raw_params, str):
             raw_params = json.loads(raw_params)
-        eval_params = [MultiTurnParams[p.upper()] for p in raw_params if p.upper() in MultiTurnParams.__members__]
+        eval_params = [
+            MultiTurnParams[p.upper()]
+            for p in raw_params
+            if p.upper() in MultiTurnParams.__members__
+        ]
         return ConversationalGEval(
             name=params.get("geval_name", "ConversationalEval"),
             criteria=criteria,
@@ -589,7 +621,9 @@ def _create_metric(benchmark_id: str, model: Any, threshold: float, params: dict
         return None  # sentinel: tells run_benchmark_job to use direct validation
 
     # ── All other benchmarks: instantiate class from spec ─────────────────
-    spec = SINGLE_TURN_BENCHMARKS.get(benchmark_id) or CONVERSATIONAL_BENCHMARKS.get(benchmark_id)
+    spec = SINGLE_TURN_BENCHMARKS.get(benchmark_id) or CONVERSATIONAL_BENCHMARKS.get(
+        benchmark_id
+    )
     if not spec:
         raise ValueError(f"Unknown benchmark_id: {benchmark_id!r}")
 
@@ -623,6 +657,7 @@ def _create_metric(benchmark_id: str, model: Any, threshold: float, params: dict
 # JSON correctness — direct validation path (no DeepEval metric involved)
 # ---------------------------------------------------------------------------
 
+
 def _run_json_correctness(
     records: list[dict[str, Any]], params: dict[str, Any]
 ) -> tuple[list[EvaluationResult], list[CapabilityEvalEntry | SafetyEvalEntry]]:
@@ -637,28 +672,33 @@ def _run_json_correctness(
         try:
             schema = json.loads(schema)
         except json.JSONDecodeError:
-            logger.warning("parameters.json_schema could not be parsed; falling back to validity-only")
+            logger.warning(
+                "parameters.json_schema could not be parsed; falling back to validity-only"
+            )
             schema = None
 
     results: list[EvaluationResult] = []
     scores: list[float] = []
 
     for i, rec in enumerate(records):
-        output = rec.get("actual_output", "")
+        output = rec.get("actual_output")
         score = 0.0
         reason = ""
         try:
-            parsed = json.loads(output)
+            if output is None:
+                raise ValueError("actual_output is null")
+            parsed = json.loads(str(output) if not isinstance(output, str) else output)
             if schema:
                 try:
                     import jsonschema
+
                     jsonschema.validate(instance=parsed, schema=schema)
                     score = 1.0
                     reason = "Valid JSON conforming to schema"
                 except ImportError:
                     score = 1.0
                     reason = "Valid JSON (jsonschema not installed; schema conformance not checked)"
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     score = 0.0
                     reason = f"Schema violation: {exc}"
             else:
@@ -669,27 +709,33 @@ def _run_json_correctness(
             reason = f"Invalid JSON: {exc}"
 
         scores.append(score)
-        results.append(EvaluationResult(
-            metric_name=f"case_{i}.json_valid",
-            metric_value=score,
-            metric_type="float",
-            num_samples=1,
-            metadata={"success": score >= 1.0, "reason": reason},
-        ))
+        results.append(
+            EvaluationResult(
+                metric_name=f"case_{i}.json_valid",
+                metric_value=score,
+                metric_type="float",
+                num_samples=1,
+                metadata={"success": score >= 1.0, "reason": reason},
+            )
+        )
 
     mean_score = sum(scores) / len(scores) if scores else 0.0
-    results.append(EvaluationResult(
-        metric_name="json_correctness_score",
-        metric_value=round(mean_score, 6),
-        metric_type="float",
-        num_samples=len(scores),
-    ))
-    results.append(EvaluationResult(
-        metric_name="schema_valid",
-        metric_value=1 if mean_score >= 1.0 else 0,
-        metric_type="int",
-        num_samples=len(scores),
-    ))
+    results.append(
+        EvaluationResult(
+            metric_name="json_correctness_score",
+            metric_value=round(mean_score, 6),
+            metric_type="float",
+            num_samples=len(scores),
+        )
+    )
+    results.append(
+        EvaluationResult(
+            metric_name="schema_valid",
+            metric_value=1 if mean_score >= 1.0 else 0,
+            metric_type="int",
+            num_samples=len(scores),
+        )
+    )
 
     card_entries: list[CapabilityEvalEntry | SafetyEvalEntry] = [
         CapabilityEvalEntry(
@@ -703,6 +749,7 @@ def _run_json_correctness(
 
 
 # ---------------------------------------------------------------------------
+
 
 def _extract_results(
     eval_results: Any,
@@ -745,49 +792,60 @@ def _extract_results(
 
     # Supplementary aggregate metrics per benchmark
     if benchmark_id == "faithfulness":
-        results.append(EvaluationResult(metric_name="claims_count", metric_value=len(scores), metric_type="int"))
-        results.append(EvaluationResult(
-            metric_name="supported_claims_count",
-            metric_value=sum(1 for s in scores if s >= 0.5),
-            metric_type="int",
-        ))
+        results.append(
+            EvaluationResult(
+                metric_name="claims_count", metric_value=len(scores), metric_type="int"
+            )
+        )
+        results.append(
+            EvaluationResult(
+                metric_name="supported_claims_count",
+                metric_value=sum(1 for s in scores if s >= 0.5),
+                metric_type="int",
+            )
+        )
     elif benchmark_id == "hallucination":
-        results.append(EvaluationResult(
-            metric_name="hallucination_detected",
-            metric_value=1 if mean_score > 0.5 else 0,
-            metric_type="int",
-        ))
+        results.append(
+            EvaluationResult(
+                metric_name="hallucination_detected",
+                metric_value=1 if mean_score > 0.5 else 0,
+                metric_type="int",
+            )
+        )
     elif benchmark_id == "pii-leakage":
-        results.append(EvaluationResult(
-            metric_name="pii_detected",
-            metric_value=1 if mean_score > 0.5 else 0,
-            metric_type="int",
-        ))
-    elif benchmark_id == "json-correctness":
-        results.append(EvaluationResult(
-            metric_name="schema_valid",
-            metric_value=1 if mean_score >= 1.0 else 0,
-            metric_type="int",
-        ))
-
+        results.append(
+            EvaluationResult(
+                metric_name="pii_detected",
+                metric_value=1 if mean_score > 0.5 else 0,
+                metric_type="int",
+            )
+        )
     # EvalCard entry
-    spec = SINGLE_TURN_BENCHMARKS.get(benchmark_id) or CONVERSATIONAL_BENCHMARKS.get(benchmark_id) or {}
+    spec = (
+        SINGLE_TURN_BENCHMARKS.get(benchmark_id)
+        or CONVERSATIONAL_BENCHMARKS.get(benchmark_id)
+        or {}
+    )
     ability = spec.get("ability", benchmark_id)
 
     if is_safety:
-        card_entries.append(SafetyEvalEntry(
-            feature=ability,
-            benchmark=f"deepeval/{benchmark_id}",
-            metric=primary_key,
-            zero_shot=round(mean_score, 4),
-        ))
+        card_entries.append(
+            SafetyEvalEntry(
+                feature=ability,
+                benchmark=f"deepeval/{benchmark_id}",
+                metric=primary_key,
+                zero_shot=round(mean_score, 4),
+            )
+        )
     else:
-        card_entries.append(CapabilityEvalEntry(
-            ability=ability,
-            benchmark=f"deepeval/{benchmark_id}",
-            metric=primary_key,
-            zero_shot=round(mean_score, 4),
-        ))
+        card_entries.append(
+            CapabilityEvalEntry(
+                ability=ability,
+                benchmark=f"deepeval/{benchmark_id}",
+                metric=primary_key,
+                zero_shot=round(mean_score, 4),
+            )
+        )
 
     return results, card_entries
 
@@ -796,10 +854,11 @@ def _extract_results(
 # Adapter
 # ---------------------------------------------------------------------------
 
+
 class DeepEvalAdapter(FrameworkAdapter):
     """eval-hub FrameworkAdapter that runs DeepEval metrics and returns JobResults."""
 
-    def __init__(self, job_spec_path: Optional[str] = None) -> None:
+    def __init__(self, job_spec_path: str | None = None) -> None:
         super().__init__(job_spec_path=job_spec_path)
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
@@ -807,7 +866,9 @@ class DeepEvalAdapter(FrameworkAdapter):
         start_time = time.time()
         logger.info(
             "Starting DeepEval job %s | benchmark=%s | model=%s",
-            config.id, config.benchmark_id, config.model.name,
+            config.id,
+            config.benchmark_id,
+            config.model.name,
         )
 
         try:
@@ -816,10 +877,13 @@ class DeepEvalAdapter(FrameworkAdapter):
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
             )
 
+            # Cache version once per job — avoids 4 separate importlib.metadata calls.
+            deepeval_ver = _deepeval_version()
+
             # Capture environment at the earliest possible moment
             env_card = EnvironmentCardMetadata.capture(
                 framework_name="deepeval",
-                framework_version=_deepeval_version(),
+                framework_version=deepeval_ver,
                 extra_packages=["deepeval", "litellm", "pandas"],
             )
 
@@ -838,7 +902,9 @@ class DeepEvalAdapter(FrameworkAdapter):
             # that emit long chain-of-thought before the first token.
             per_attempt_timeout = params.get("per_attempt_timeout_seconds", 300.0)
             if per_attempt_timeout is not None:
-                os.environ["DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE"] = str(float(per_attempt_timeout))
+                os.environ["DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE"] = str(
+                    float(per_attempt_timeout)
+                )
             retry_max = params.get("retry_max_attempts")
             if retry_max is not None:
                 os.environ["DEEPEVAL_RETRY_MAX_ATTEMPTS"] = str(int(retry_max))
@@ -862,7 +928,9 @@ class DeepEvalAdapter(FrameworkAdapter):
 
             logger.info(
                 "Loaded %d test cases | benchmark=%s | is_conversational=%s",
-                len(test_cases), benchmark_id, is_conversational,
+                len(test_cases),
+                benchmark_id,
+                is_conversational,
             )
 
             # ── Phase: RUNNING_EVALUATION ────────────────────────────────────
@@ -877,7 +945,9 @@ class DeepEvalAdapter(FrameworkAdapter):
             # json-correctness bypasses DeepEval's metric system entirely —
             # direct json.loads() + optional jsonschema validation, no LLM judge.
             if benchmark_id == "json-correctness":
-                evaluation_results, card_entries = _run_json_correctness(records, params)
+                evaluation_results, card_entries = _run_json_correctness(
+                    records, params
+                )
             else:
                 judge = _resolve_judge_model(judge_name, judge_url)
                 metric = _create_metric(benchmark_id, judge, threshold, params)
@@ -893,7 +963,9 @@ class DeepEvalAdapter(FrameworkAdapter):
                         max_concurrent=max_concurrent,
                     ),
                 )
-                evaluation_results, card_entries = _extract_results(raw_results, benchmark_id)
+                evaluation_results, card_entries = _extract_results(
+                    raw_results, benchmark_id
+                )
 
             callbacks.report_status(
                 JobStatusUpdate(
@@ -905,12 +977,16 @@ class DeepEvalAdapter(FrameworkAdapter):
 
             # ── Phase: POST_PROCESSING ───────────────────────────────────────
             callbacks.report_status(
-                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
+                JobStatusUpdate(
+                    status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING
+                )
             )
             overall_score = _compute_overall_score(evaluation_results, benchmark_id)
 
             # Build EvalCard — separate capability and safety entries
-            capability_entries = [e for e in card_entries if isinstance(e, CapabilityEvalEntry)]
+            capability_entries = [
+                e for e in card_entries if isinstance(e, CapabilityEvalEntry)
+            ]
             safety_entries = [e for e in card_entries if isinstance(e, SafetyEvalEntry)]
 
             eval_card = EvalCardMetadata(
@@ -921,7 +997,7 @@ class DeepEvalAdapter(FrameworkAdapter):
                 capability_evaluations=capability_entries,
                 safety_evaluations=safety_entries,
                 developer_footnotes=(
-                    f"DeepEval {_deepeval_version()} | "
+                    f"DeepEval {deepeval_ver} | "
                     f"benchmark={benchmark_id} | "
                     f"judge={judge_name} | "
                     f"samples={len(test_cases)} | "
@@ -934,7 +1010,9 @@ class DeepEvalAdapter(FrameworkAdapter):
                 {
                     "benchmark_id": benchmark_id,
                     "overall_score": overall_score,
-                    "num_examples_evaluated": len(test_cases),
+                    "num_examples_evaluated": len(records)
+                    if benchmark_id == "json-correctness"
+                    else len(test_cases),
                     "results": [
                         {"metric_name": r.metric_name, "metric_value": r.metric_value}
                         for r in evaluation_results
@@ -949,7 +1027,9 @@ class DeepEvalAdapter(FrameworkAdapter):
             oci_exports = config.exports.oci if config.exports else None
             if oci_exports is not None:
                 callbacks.report_status(
-                    JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
+                    JobStatusUpdate(
+                        status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS
+                    )
                 )
                 if self.local_jobs_base_path is not None:
                     results_dir = self.local_jobs_base_path / "results"
@@ -959,14 +1039,18 @@ class DeepEvalAdapter(FrameworkAdapter):
                 (results_dir / "results_summary.json").write_bytes(summary_bytes)
 
                 coords = oci_exports.coordinates.model_copy(deep=True)
-                coords.annotations.update({
-                    "org.opencontainers.image.created": datetime.now(UTC).isoformat(),
-                    "io.github.eval-hub.benchmark": config.benchmark_id,
-                    "io.github.eval-hub.model": config.model.name,
-                    "io.github.eval-hub.job_id": config.id,
-                    "io.github.eval-hub.framework": "deepeval",
-                    "io.github.eval-hub.deepeval.version": _deepeval_version(),
-                })
+                coords.annotations.update(
+                    {
+                        "org.opencontainers.image.created": datetime.now(
+                            UTC
+                        ).isoformat(),
+                        "io.github.eval-hub.benchmark": config.benchmark_id,
+                        "io.github.eval-hub.model": config.model.name,
+                        "io.github.eval-hub.job_id": config.id,
+                        "io.github.eval-hub.framework": "deepeval",
+                        "io.github.eval-hub.deepeval.version": deepeval_ver,
+                    }
+                )
                 oci_artifact = callbacks.create_oci_artifact(
                     OCIArtifactSpec(files_path=results_dir, coordinates=coords)
                 )
@@ -984,12 +1068,15 @@ class DeepEvalAdapter(FrameworkAdapter):
                 model_name=config.model.name,
                 results=evaluation_results,
                 overall_score=overall_score,
-                num_examples_evaluated=len(test_cases),
+                # json-correctness evaluates all records directly; all others use filtered test_cases.
+                num_examples_evaluated=len(records)
+                if benchmark_id == "json-correctness"
+                else len(test_cases),
                 duration_seconds=duration,
                 completed_at=datetime.now(UTC),
                 evaluation_metadata={
                     "framework": "deepeval",
-                    "framework_version": _deepeval_version(),
+                    "framework_version": deepeval_ver,
                     "benchmark_id": benchmark_id,
                     "eval_model_name": judge_name,
                     "threshold": threshold,
@@ -1011,18 +1098,26 @@ class DeepEvalAdapter(FrameworkAdapter):
 
             if experiment_name:
                 try:
-                    spec = config.model_copy(update={"experiment_name": experiment_name})
+                    spec = config.model_copy(
+                        update={"experiment_name": experiment_name}
+                    )
                     rid = callbacks.mlflow.save(
                         job_results,
                         spec,
                         artifacts=[
-                            MlflowArtifact("results_summary.json", summary_bytes, "application/json")
+                            MlflowArtifact(
+                                "results_summary.json",
+                                summary_bytes,
+                                "application/json",
+                            )
                         ],
                     )
                     if rid:
                         job_results.mlflow_run_id = rid
-                        logger.info("MLflow run saved: %s (experiment=%s)", rid, experiment_name)
-                except Exception as exc:
+                        logger.info(
+                            "MLflow run saved: %s (experiment=%s)", rid, experiment_name
+                        )
+                except Exception as exc:  # noqa: BLE001
                     logger.warning("MLflow save failed (job still completes): %s", exc)
 
             # Do NOT call report_status(COMPLETED) here — report_results() sends
@@ -1048,13 +1143,18 @@ class DeepEvalAdapter(FrameworkAdapter):
         metadata = results.evaluation_metadata or {}
         benchmark_id = metadata.get("benchmark_id", results.benchmark_id)
         try:
+            is_direct = benchmark_id == "json-correctness"
             return {
                 "zero_shot": results.overall_score,
-                "prompting_strategy": "zero-shot LLM-as-judge",
+                "prompting_strategy": "direct-validation"
+                if is_direct
+                else "zero-shot LLM-as-judge",
                 "framework": "deepeval",
-                "framework_version": metadata.get("framework_version", _deepeval_version()),
+                "framework_version": metadata.get(
+                    "framework_version", _deepeval_version()
+                ),
                 "benchmark_id": benchmark_id,
-                "eval_model": metadata.get("eval_model_name"),
+                "eval_model": None if is_direct else metadata.get("eval_model_name"),
                 "threshold": metadata.get("threshold"),
                 "num_samples": results.num_examples_evaluated,
             }
@@ -1076,25 +1176,24 @@ class DeepEvalAdapter(FrameworkAdapter):
             )
 
         # Validate that required parameters for parameterized metrics are present
-        if config.benchmark_id in ("geval", "conversational-geval"):
-            if not config.parameters.get("criteria"):
-                raise ValueError(
-                    f"parameters.criteria is required for benchmark_id={config.benchmark_id!r}"
-                )
-        if config.benchmark_id == "dag":
-            if not config.parameters.get("dag_criteria_json"):
-                raise ValueError(
-                    "parameters.dag_criteria_json is required for benchmark_id='dag'"
-                )
+        if (config.benchmark_id in ("geval", "conversational-geval")) and (not config.parameters.get("criteria")):
+            raise ValueError(
+                f"parameters.criteria is required for benchmark_id={config.benchmark_id!r}"
+            )
+        if (config.benchmark_id == "dag") and (not config.parameters.get("dag_criteria_json")):
+            raise ValueError(
+                "parameters.dag_criteria_json is required for benchmark_id='dag'"
+            )
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _compute_overall_score(
     results: list[EvaluationResult], benchmark_id: str
-) -> Optional[float]:
+) -> float | None:
     primary = _PRIMARY_METRIC.get(benchmark_id)
     if primary:
         for r in results:
@@ -1117,6 +1216,7 @@ def _deepeval_version() -> str:
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     """Load JobSpec, run DeepEvalAdapter, emit JobResults via DefaultCallbacks."""
