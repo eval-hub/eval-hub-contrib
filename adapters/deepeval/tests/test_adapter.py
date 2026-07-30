@@ -5,6 +5,7 @@ the data-loading layer so no real API calls or test data files are needed.
 """
 
 import json
+import re
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -42,7 +43,7 @@ BENCHMARK_CASES = [
         "faithfulness",
         "input,actual_output,retrieval_context\nq,a,ctx\n",
         "csv",
-        ["faithfulness_score", "claims_count", "supported_claims_count"],
+        ["faithfulness_score", "cases_count", "passing_cases_count"],
         id="faithfulness",
     ),
     pytest.param(
@@ -497,6 +498,8 @@ def test_new_single_turn_benchmarks_happy_path(
         job = json.load(f)
     job["benchmark_id"] = benchmark_id
     job["parameters"]["dataset_format"] = dataset_format
+    if benchmark_id == "role-violation":
+        job["parameters"]["role"] = "customer support agent"
 
     ext = {"csv": ".csv", "jsonl": ".jsonl", "json": ".json"}[dataset_format]
     data_dir = tmp_path / "data"
@@ -589,7 +592,7 @@ def test_geval_missing_criteria_raises(tmp_path):
     (meta_dir / "job.json").write_text(json.dumps(job))
     adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
 
-    with pytest.raises(ValueError, match="parameters.criteria is required"):
+    with pytest.raises(ValueError, match=re.escape("parameters.criteria is required")):
         adapter._validate_config(adapter.job_spec)
 
 
@@ -1000,7 +1003,7 @@ def test_extract_results_pii_detected_flag():
 
 @pytest.mark.integration
 def test_extract_results_faithfulness_supplementary_metrics():
-    """faithfulness produces claims_count and supported_claims_count."""
+    """faithfulness produces cases_count and passing_cases_count."""
     from types import SimpleNamespace
 
     md_pass = SimpleNamespace(score=0.9, success=True, reason="ok", name="Faithfulness")
@@ -1015,8 +1018,8 @@ def test_extract_results_faithfulness_supplementary_metrics():
     )
     results, _ = _extract_results(raw, "faithfulness")
     by_name = {r.metric_name: r.metric_value for r in results}
-    assert by_name["claims_count"] == 2
-    assert by_name["supported_claims_count"] == 1
+    assert by_name["cases_count"] == 2
+    assert by_name["passing_cases_count"] == 1
 
 
 @pytest.mark.integration
