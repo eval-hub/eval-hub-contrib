@@ -162,6 +162,7 @@ def main():
                 print(result.stderr)
         except subprocess.CalledProcessError as e:
             print("Error output:", e.stderr)
+            raise
 
         print(f"Prepare {args.task} with lines: {args.num_samples} to {save_file}")
         print(f"Used time: {round((time.time() - start_time) / 60, 1)} minutes")

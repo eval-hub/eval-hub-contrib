@@ -639,8 +639,8 @@ class RulerAdapter(FrameworkAdapter):
             except Exception as exc:
                 # Re-raise auth/connection errors immediately; swallow only per-sample
                 # transient errors (e.g., timeout on a single long prompt).
-                exc_type = type(exc).__name__
-                if exc_type in ("AuthenticationError", "PermissionDeniedError"):
+                import openai as _openai  # noqa: PLC0415
+                if isinstance(exc, (_openai.AuthenticationError, _openai.PermissionDeniedError)):
                     raise RuntimeError(
                         f"API authentication failed for {model_name}: {exc}. "
                         "Check MODEL_API_KEY."
@@ -650,6 +650,15 @@ class RulerAdapter(FrameworkAdapter):
                 )
                 pred_text = ""
                 failure_count += 1
+                # Abort early if more than half the samples have failed — a dead
+                # endpoint would otherwise run to completion with a 0.0 score.
+                failure_threshold = max(5, n_samples // 2)
+                if failure_count >= failure_threshold:
+                    raise RuntimeError(
+                        f"{failure_count}/{n_samples} inference calls failed "
+                        f"(threshold={failure_threshold}). "
+                        "Check that model.url is reachable and the model is loaded."
+                    ) from exc
 
             predictions.append(
                 {

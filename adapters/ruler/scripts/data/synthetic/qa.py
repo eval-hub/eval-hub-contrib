@@ -201,14 +201,14 @@ def generate_samples(num_samples: int, max_seq_length: int, save_dir: str, incre
                 length = len(TOKENIZER.text_to_tokens(input_text)) + tokens_to_generate
                 assert length <= max_seq_length, f"{length} exceeds max_seq_length."
                 break
-            except Exception:
+            except Exception as exc:
                 if used_docs > incremental:
                     used_docs -= incremental
                 else:
                     raise RuntimeError(
                         f"Cannot generate sample within {max_seq_length} tokens: "
                         f"used_docs={used_docs} cannot be reduced further."
-                    )
+                    ) from exc
 
         if args.remove_newline_tab:
             input_text = ' '.join(input_text.replace('\n', ' ').replace('\t', ' ').strip().split())
