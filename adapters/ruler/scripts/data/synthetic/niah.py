@@ -268,9 +268,14 @@ def generate_samples(num_samples: int, max_seq_length: int, save_dir: str, incre
                 length = len(TOKENIZER.text_to_tokens(input_text)) + tokens_to_generate
                 assert length <= max_seq_length, f"{length} exceeds max_seq_length."
                 break
-            except:
+            except Exception:
                 if used_haystack > incremental:
                     used_haystack -= incremental
+                else:
+                    raise RuntimeError(
+                        f"Cannot generate sample within {max_seq_length} tokens: "
+                        f"used_haystack={used_haystack} cannot be reduced further."
+                    )
 
         if args.remove_newline_tab:
             input_text = ' '.join(input_text.replace('\n', ' ').replace('\t', ' ').strip().split())

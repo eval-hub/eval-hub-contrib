@@ -31,6 +31,7 @@ python prepare.py \
     --num_samples 10 \
 """
 import os
+import sys
 import argparse
 import importlib
 import subprocess
@@ -122,32 +123,36 @@ def main():
     if not file_exists:
         try:
             script = os.path.join(curr_folder, args.benchmark, f"{config['task']}.py")
-            additional_args = " ".join([f"--{k} {v}" for k, v in config['args'].items()])
-            command = f"""python {script} \
-            --save_dir  {args.save_dir} \
-            --save_name {args.task} \
-            --subset {args.subset} \
-            --tokenizer_path {args.tokenizer_path} \
-            --tokenizer_type {args.tokenizer_type} \
-            --max_seq_length {args.max_seq_length} \
-            --tokens_to_generate {config['tokens_to_generate']} \
-            --num_samples {num_samples} \
-            --random_seed {random_seed} \
-            {additional_args} \
-            {f"--remove_newline_tab" if args.remove_newline_tab else ""} \
-            {f"--pre_samples {pre_samples}" if config['task'] == 'qa' else ""} \
-            --template "{config['template']}" \
-            """
+            cmd_args = [
+                sys.executable, script,
+                "--save_dir", str(args.save_dir),
+                "--save_name", args.task,
+                "--subset", args.subset,
+                "--tokenizer_path", str(args.tokenizer_path),
+                "--tokenizer_type", args.tokenizer_type,
+                "--max_seq_length", str(args.max_seq_length),
+                "--tokens_to_generate", str(config['tokens_to_generate']),
+                "--num_samples", str(num_samples),
+                "--random_seed", str(random_seed),
+                "--template", config['template'],
+            ]
+            for k, v in config['args'].items():
+                cmd_args.extend([f"--{k}", str(v)])
+            if args.remove_newline_tab:
+                cmd_args.append("--remove_newline_tab")
+            if config['task'] == 'qa':
+                cmd_args.extend(["--pre_samples", str(pre_samples)])
             if args.prepare_for_ns:
-                command += f""" --model_template_token {model_template_token}"""
-            
-            print(command)
-            result = subprocess.run(command, 
-                                    shell=True, 
-                                    check=True, 
-                                    stdout=subprocess.PIPE, 
-                                    stderr=subprocess.PIPE, 
-                                    text=True)
+                cmd_args.extend(["--model_template_token", str(model_template_token)])
+
+            print(cmd_args)
+            result = subprocess.run(
+                cmd_args,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
             
             if result.returncode == 0:
                 print("Output:")

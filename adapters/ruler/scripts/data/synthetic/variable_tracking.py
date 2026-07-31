@@ -268,9 +268,14 @@ def sys_vartrack_w_noise_random(num_samples: int, max_seq_length: int, increment
                 length = len(TOKENIZER.text_to_tokens(input_text)) + tokens_to_generate
                 assert length <= max_seq_length, f"{length} exceeds max_seq_length."
                 break
-            except:
+            except Exception:
                 if used_noises > incremental:
                     used_noises -= incremental
+                else:
+                    raise RuntimeError(
+                        f"Cannot generate sample within {max_seq_length} tokens: "
+                        f"used_noises={used_noises} cannot be reduced further."
+                    )
 
         if final_output:
             answer_prefix_index = input_text.rfind(TASKS['variable_tracking']['answer_prefix'][:10]) # use first 10 char of answer prefix to locate it

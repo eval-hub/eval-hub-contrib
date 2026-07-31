@@ -179,9 +179,14 @@ def sys_word_pair_random(num_samples: int, max_seq_length: int, save_dir: str, i
                 length = len(TOKENIZER.text_to_tokens(input_text)) + tokens_to_generate
                 assert length <= max_seq_length, f"{length} exceeds max_seq_length."
                 break
-            except:
+            except Exception:
                 if used_words > incremental:
                     used_words -= incremental
+                else:
+                    raise RuntimeError(
+                        f"Cannot generate sample within {max_seq_length} tokens: "
+                        f"used_words={used_words} cannot be reduced further."
+                    )
 
         if args.remove_newline_tab:
             input_text = ' '.join(input_text.replace('\n', ' ').replace('\t', ' ').strip().split())

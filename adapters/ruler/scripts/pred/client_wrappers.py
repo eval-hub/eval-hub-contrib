@@ -264,9 +264,8 @@ class OpenAIClient:
         
     @retry(wait=wait_random_exponential(min=15, max=60), stop=stop_after_attempt(3))
     def _send_request(self, request):
-        response = None
         try:
-            response = self.client.chat.completions.create(
+            return self.client.chat.completions.create(
                 model=self.model_name,
                 messages=request['msgs'],
                 max_tokens=request['tokens_to_generate'],
@@ -278,10 +277,9 @@ class OpenAIClient:
         except Exception as e:
             print(f"Error occurred while calling OpenAI: {e}")
             if self.azure_api_id and self.azure_api_secret and getattr(e, 'status_code', None) == 401:
-                # token expired
+                # token expired — refresh and let @retry re-attempt
                 self._create_client()
-
-        return response
+            raise
         
     def __call__(
         self,
@@ -292,13 +290,13 @@ class OpenAIClient:
         user_assistant_msgs = [{"role": "user", "content": prompt}]
         msgs = system_msg + user_assistant_msgs
         openai_length = self._count_tokens(msgs)
-        request = self.generation_kwargs
-        
+        request = dict(self.generation_kwargs)  # copy to avoid mutating shared state across threads
+
         tokens_to_generate_new = self.max_length - openai_length
         if tokens_to_generate_new < request['tokens_to_generate']:
             print(f"Reduce generate tokens from {request['tokens_to_generate']} to {tokens_to_generate_new}")
             request['tokens_to_generate'] = tokens_to_generate_new
-    
+
         request["msgs"] = msgs
         outputs = self._send_request(request)
         response = {'text': [outputs.choices[0].message.content]}
