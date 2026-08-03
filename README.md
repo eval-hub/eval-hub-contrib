@@ -46,7 +46,7 @@ The DeepEval adapter integrates [DeepEval](https://github.com/confident-ai/deepe
 **8 benchmarks** across two categories:
 
 - **5 single-turn** — faithfulness (retrieval grounding), answer relevancy, hallucination detection, factual correctness, and summarization quality.
-- **3 multi-turn** — conversation completeness (all user needs addressed), role adherence (chatbot stays in persona), and knowledge retention (chatbot recalls user-disclosed information across turns).
+- **3 multi-turn** — conversation completeness (all user needs are addressed), role adherence (chatbot stays in persona), and knowledge retention (chatbot recalls user-disclosed information across turns).
 
 **Judge model configuration** — the adapter accepts an independent judge model separate from the evaluated model:
 
