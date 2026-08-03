@@ -133,6 +133,7 @@ make tests
 
 # Push to registry
 make push-lighteval REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-mteb REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-deepeval REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-ragas REGISTRY=quay.io/your-org VERSION=v1.0.0
