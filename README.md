@@ -14,17 +14,20 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [GuideLLM](https://github.com/vllm-project/guidellm) | `quay.io/evalhub/community-guidellm:latest` | ✓ | Performance benchmarking for LLM inference servers |
 | [MTEB](https://github.com/embeddings-benchmark/mteb) | `quay.io/evalhub/community-mteb:latest` | ✓ | Massive Text Embedding Benchmark for embedding models |
 | [IBM CLEAR](https://github.com/IBM/CLEAR) | `quay.io/evalhub/community-ibm-clear:latest` | ✓ | Agentic trace analysis (LLM-as-judge error reporting) |
-| [Inspect AI](https://inspect.aisi.org.uk/) | `quay.io/evalhub/community-inspect:latest` | ✓ | UK AISI framework — Petri/Bloom alignment auditing and 75 inspect-evals benchmarks |
+| [Inspect AI](https://inspect.aisi.org.uk/) | `quay.io/evalhub/community-inspect:latest` | ✓ | UK AISI framework — 75 benchmarks total: 36 Petri alignment audits, 2 Bloom suites, and 37 inspect-evals benchmarks |
+| [RAGAS](https://github.com/explodinggradients/ragas) | `quay.io/evalhub/community-ragas:latest` | ✓ | RAG pipeline quality evaluation (faithfulness, relevancy, context precision/recall, and more) |
+| [SWE-bench](https://github.com/SWE-bench/SWE-bench) | `quay.io/evalhub/community-swebench:latest` | ✓ | Software engineering benchmark for code patch evaluation |
+| [DeepEval](https://github.com/confident-ai/deepeval) | `quay.io/evalhub/community-deepeval:latest` | ✓ | LLM-as-judge evaluation: faithfulness, relevancy, hallucination, correctness, summarization, and multi-turn conversation metrics |
 
 ## Inspect AI Adapter
 
-The Inspect AI adapter exposes alignment auditing and safety evaluation through the [Petri](https://meridianlabs-ai.github.io/inspect_petri/) and [Bloom](https://meridianlabs-ai.github.io/inspect_petri/extensions/petri-bloom.html) tools from Meridian Labs, as well as 35 curated benchmarks from the [inspect-evals](https://github.com/UKGovernmentBEIS/inspect_evals) community library.
+The Inspect AI adapter exposes alignment auditing and safety evaluation through the [Petri](https://meridianlabs-ai.github.io/inspect_petri/) and [Bloom](https://meridianlabs-ai.github.io/inspect_petri/extensions/petri-bloom.html) tools from Meridian Labs, as well as curated benchmarks from the [inspect-evals](https://github.com/UKGovernmentBEIS/inspect_evals) community library.
 
 **75 benchmarks** across three categories:
 
 - **36 Petri alignment audits** — covers all 40 built-in seed tag categories including sycophancy, deception, alignment faking, jailbreak, harmful cooperation, self-preservation, power seeking, oversight subversion, and more.
 - **2 Bloom behavioral suites** — automated scenario generation from high-level behavior descriptions.
-- **36 inspect-evals** — safety (AgentHarm, WMDP, StrongREJECT, MASK), scheming (agentic misalignment, GDM self-proliferation, GDM stealth), cybersecurity (Cybench, CyberSecEval), coding (HumanEval, SWE-bench), math (GSM8K, MATH, AIME), knowledge (MMLU, GPQA), and agent capabilities (GAIA, TheAgentCompany).
+- **37 inspect-evals** — safety (AgentHarm, WMDP, StrongREJECT, MASK), scheming (agentic misalignment, GDM self-proliferation, GDM stealth), cybersecurity (Cybench, CyberSecEval), coding (HumanEval, SWE-bench), math (GSM8K, MATH, AIME), knowledge (MMLU, GPQA), and agent capabilities (GAIA, TheAgentCompany).
 
 **Model configuration** — no provider prefixes required in job specs. The adapter detects the correct API from environment variables:
 
@@ -35,14 +38,26 @@ The Inspect AI adapter exposes alignment auditing and safety evaluation through 
 | `ANTHROPIC_API_KEY` | Anthropic Messages API |
 
 See [adapters/inspect/README.md](adapters/inspect/README.md) for full documentation, deployment examples, and benchmark catalog.
-| Framework | Container Image | Local | Kubernetes | Notes |
-|-----------|----------------|-------|------------|-------|
-| [LightEval](https://github.com/huggingface/lighteval) | `quay.io/evalhub/community-lighteval:latest` | ✗ | ✓ | Lightweight evaluation framework for language models |
-| [GuideLLM](https://github.com/vllm-project/guidellm) | `quay.io/evalhub/community-guidellm:latest` | ✗ | ✓ | Performance benchmarking platform for LLM inference servers |
-| [MTEB](https://github.com/embeddings-benchmark/mteb) | `quay.io/evalhub/community-mteb:latest` | ✗ | ✓ | Massive Text Embedding Benchmark for embedding models |
-| [IBM CLEAR](https://github.com/IBM/CLEAR) | `quay.io/evalhub/community-ibm-clear:latest` | ✓ | ✓ | Agentic trace analysis (LLM-as-judge error reporting) |
-| [RAGAS](https://github.com/explodinggradients/ragas) | `quay.io/evalhub/community-ragas:latest` | ✗ | ✓ | RAG pipeline quality evaluation (faithfulness, relevancy, context precision/recall, and more) |
-| [SWE-bench](https://github.com/SWE-bench/SWE-bench) | `quay.io/evalhub/community-swebench:latest` | ✗ | ✓ | Software engineering benchmark for code patch evaluation |
+
+## DeepEval Adapter
+
+The DeepEval adapter integrates [DeepEval](https://github.com/confident-ai/deepeval) into eval-hub using an LLM-as-judge approach. A separate judge model scores outputs against configurable thresholds. Test data is loaded from CSV, JSONL, or JSON files and mapped to either single-turn or multi-turn DeepEval test cases.
+
+**8 benchmarks** across two categories:
+
+- **5 single-turn** — faithfulness (retrieval grounding), answer relevancy, hallucination detection, factual correctness, and summarization quality.
+- **3 multi-turn** — conversation completeness (all user needs are addressed), role adherence (chatbot stays in persona), and knowledge retention (chatbot recalls user-disclosed information across turns).
+
+**Judge model configuration** — the adapter accepts an independent judge model separate from the evaluated model:
+
+| Parameter | Description |
+|---|---|
+| `eval_model_name` | Judge model name (defaults to the evaluated model) |
+| `eval_model_url` | OpenAI-compatible base URL for the judge endpoint |
+| `threshold` | Minimum pass score (default `0.5`) |
+| `dataset_format` | Input format: `csv`, `jsonl`, or `json` (default `csv`) |
+
+See [adapters/deepeval/README.md](adapters/deepeval/README.md) for full documentation, dataset column requirements, and multi-turn conversation format.
 
 ## JobPhase Lifecycle
 
@@ -95,21 +110,34 @@ if oci_exports is not None and output_files:
 ## Building Adapters
 
 ```bash
-# Build specific adapter
+# Build a specific adapter
 make image-lighteval
 make image-guidellm
+make image-mteb
 make image-inspect
+make image-deepeval
+make image-ragas
+make image-swebench
 
 # Build all adapters
 make images
 
 # Run adapter tests
+make test-lighteval
 make test-inspect
+make test-deepeval
+make test-ragas
+make test-swebench
+make test-clear
 make tests
 
 # Push to registry
-make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-lighteval REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-mteb REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-deepeval REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-ragas REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-swebench REGISTRY=quay.io/your-org VERSION=v1.0.0
 ```
 
 ## Contributing
