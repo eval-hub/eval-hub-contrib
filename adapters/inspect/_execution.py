@@ -111,9 +111,12 @@ def build_command(
     if max_tasks:
         cmd += ["--max-tasks", str(max_tasks)]
 
-    max_samples = config.parameters.get("max_samples")
-    if max_samples is not None:
-        cmd += ["--limit", str(max_samples)]
+    # Sample limit precedence: JobSpec.num_examples > parameters.max_samples > unlimited.
+    # num_examples is lifted from benchmarks[].parameters by eval-hub's jobspec builder
+    # (same contract as LightEval / GuideLLM).
+    limit = _sample_limit(config)
+    if limit is not None:
+        cmd += ["--limit", str(limit)]
 
     epochs = config.parameters.get("epochs")
     if epochs and epochs > 1:
@@ -121,10 +124,31 @@ def build_command(
 
     cmd += ["--log-level", config.parameters.get("log_level", "info")]
 
-    for key, value in config.parameters.get("task_args", {}).items():
+    for key, value in _task_args(config).items():
+        if isinstance(value, bool):
+            value = str(value).lower()
         cmd += ["-T", f"{key}={value}"]
 
     return cmd
+
+
+def _sample_limit(config: JobSpec) -> int | None:
+    """Resolve --limit from num_examples (preferred) or max_samples."""
+    if config.num_examples is not None:
+        return int(config.num_examples)
+    max_samples = config.parameters.get("max_samples")
+    if max_samples is not None:
+        return int(max_samples)
+    return None
+
+
+def _task_args(config: JobSpec) -> dict:
+    """Merge job task_args with benchmark defaults (TeleMath always uses full dataset)."""
+    args = dict(config.parameters.get("task_args") or {})
+    # TeleMath: always evaluate against GSMA/ot-full; cap size via --limit / num_examples.
+    if config.benchmark_id == "inspect/telemath" and "full" not in args:
+        args["full"] = True
+    return args
 
 
 def _petri_model_role_flags(config: JobSpec, env: dict[str, str]) -> list[str]:

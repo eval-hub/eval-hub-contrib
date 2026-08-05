@@ -63,6 +63,12 @@ def test_resolve_task_standard_gsm8k(job_spec_path):
     assert adapter._resolve_task(adapter.job_spec, "standard", None) == "inspect_evals/gsm8k"
 
 
+def test_resolve_task_standard_telemath(job_spec_path):
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/telemath"
+    assert adapter._resolve_task(adapter.job_spec, "standard", None) == "evals/telemath"
+
+
 def test_resolve_task_explicit_override(job_spec_path):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.parameters["task"] = "inspect_evals/mmlu"
@@ -198,6 +204,48 @@ def test_standard_command_no_model_flag(job_spec_path, tmp_path, monkeypatch):
     # Env var is set and preserves user-supplied model name
     assert "INSPECT_EVAL_MODEL" in env
     assert "ibm-granite/granite-3.3-8b-instruct" in env["INSPECT_EVAL_MODEL"]
+
+
+def test_sample_limit_prefers_num_examples_over_max_samples(job_spec_path, tmp_path, monkeypatch):
+    """--limit uses JobSpec.num_examples when set, even if max_samples differs."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/gsm8k"
+    adapter.job_spec.num_examples = 7
+    adapter.job_spec.parameters["max_samples"] = 99
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(adapter.job_spec, "standard", "inspect_evals/gsm8k", tmp_path, None, env)
+    assert "--limit" in cmd
+    assert cmd[cmd.index("--limit") + 1] == "7"
+
+
+def test_sample_limit_falls_back_to_max_samples(job_spec_path, tmp_path, monkeypatch):
+    """--limit uses max_samples when num_examples is unset."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/gsm8k"
+    adapter.job_spec.num_examples = None
+    adapter.job_spec.parameters["max_samples"] = 12
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(adapter.job_spec, "standard", "inspect_evals/gsm8k", tmp_path, None, env)
+    assert cmd[cmd.index("--limit") + 1] == "12"
+
+
+def test_telemath_command_defaults_full_dataset(job_spec_path, tmp_path, monkeypatch):
+    """TeleMath always passes -T full=true and maps to evals/telemath."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/telemath"
+    adapter.job_spec.num_examples = 50
+    adapter.job_spec.parameters.pop("max_samples", None)
+    adapter.job_spec.parameters.pop("task_args", None)
+    env = adapter._build_env(adapter.job_spec, "standard")
+    task = adapter._resolve_task(adapter.job_spec, "standard", None)
+    assert task == "evals/telemath"
+    cmd = adapter._build_command(adapter.job_spec, "standard", task, tmp_path, None, env)
+    assert cmd[cmd.index("--limit") + 1] == "50"
+    assert "-T" in cmd
+    assert "full=True" in cmd or "full=true" in cmd
 
 
 def test_client_selection_url_beats_anthropic_key(job_spec_path):

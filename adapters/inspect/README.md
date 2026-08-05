@@ -17,7 +17,8 @@ are also supported.
 
 ## Benchmarks
 
-**75 benchmarks total** — 36 Petri alignment audits, 2 Bloom suites, 37 inspect-evals + custom.
+**76 benchmarks total** — 36 Petri alignment audits, 2 Bloom suites, 37 inspect-evals +
+Open-Telco TeleMath + custom.
 
 ### Petri alignment audits (`inspect/petri-*`)
 
@@ -78,6 +79,12 @@ All 38 Petri judge dimensions are captured as individual metrics.
 
 `inspect/gsm8k` · `inspect/math` · `inspect/aime2024` · `inspect/aime2025`
 
+### Telecom (GSMA Open-Telco)
+
+| Benchmark ID | Description |
+|---|---|
+| `inspect/telemath` | Telecom numerical math reasoning (500 Q&A; full `GSMA/ot-full` telemath split). |
+
 ### Knowledge & Reasoning
 
 `inspect/mmlu` · `inspect/mmlu-pro` · `inspect/gpqa` · `inspect/bbh` · `inspect/arc` · `inspect/hellaswag` · `inspect/winogrande` · `inspect/truthfulqa` · `inspect/simpleqa`
@@ -109,10 +116,22 @@ Petri and Bloom modes do not use a sandbox.
 
 ### HuggingFace datasets
 
-Some inspect-evals benchmarks (e.g. `humaneval`, `mmlu`) download datasets from the
-HuggingFace Hub. The adapter reads an `hf-token` secret mounted at
-`/var/run/secrets/model/hf-token` and injects it as `HF_TOKEN` automatically. Mount
-the secret in your EvalHub provider configuration if gated datasets are required.
+Some inspect-evals benchmarks (e.g. `humaneval`, `mmlu`) and Open-Telco tasks
+(`inspect/telemath`) download datasets from the HuggingFace Hub. The adapter reads an
+`hf-token` secret mounted at `/var/run/secrets/model/hf-token` and injects it as
+`HF_TOKEN` automatically. In EvalHub jobs, set `model.auth.secret_ref` to a Kubernetes
+Secret that includes the `hf-token` key (alongside `api-key` if needed).
+
+### Sample limits
+
+Precedence for Inspect `--limit`:
+
+1. `benchmarks[].parameters.num_examples` (lifted to JobSpec `num_examples` by eval-hub)
+2. `parameters.max_samples`
+3. unlimited (full task)
+
+TeleMath always passes `-T full=true` so the dataset is `GSMA/ot-full` telemath; use
+`num_examples` to cap how many of those 500 items run.
 
 ---
 
@@ -316,7 +335,7 @@ Environment: `ANTHROPIC_API_KEY=sk-ant-...` (for auditor), `OPENAI_BASE_URL` set
 | `max_turns` | `30` | Max auditor turns per scenario |
 | `enable_rollback` | `true` | Allow auditor to backtrack and retry approaches |
 | `realism_filter` | `false` | Filter unrealistic auditor outputs (experimental) |
-| `max_samples` | `null` | Limit scenarios per run — recommended for cost control |
+| `max_samples` | `null` | Limit scenarios/samples when `num_examples` is unset (`num_examples` > `max_samples`) |
 | `seed_instructions` | *(from benchmark_id)* | Override seed selection (`tags:deception`, `id:seed_name`, inline text) |
 | `judge_dimensions` | *(all 38)* | Filter judge dimensions (`tags:safety` or custom directory) |
 | `task_args` | `{}` | Pass-through to `inspect eval` (`{"dish_scaffold": "claude-code"}` enables Dish) |
