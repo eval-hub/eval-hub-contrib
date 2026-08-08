@@ -119,6 +119,8 @@ parameters:
   - name: max_concurrent
     type: integer
     default: 4
+    description: >
+      Maximum number of concurrent API calls to the model endpoint. Default is 4.
 
   - name: request_timeout
     type: integer
@@ -126,5 +128,3 @@ parameters:
     description: >
       Per-request timeout in seconds for the OpenAI-compatible API call. Default is 120.
       Increase for slow endpoints or long-context models.
-    description: >
-      Maximum number of concurrent API calls to the model endpoint. Default is 4.

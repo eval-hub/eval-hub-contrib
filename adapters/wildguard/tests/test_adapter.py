@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, create_autospec
 
 import pytest
 
-from evalhub.adapter import JobCallbacks, JobPhase
+from evalhub.adapter import JobCallbacks, JobPhase, JobStatus
 from evalhub.adapter.models.cards import EvalCardMetadata, EnvironmentCardMetadata
 from main import WildGuardAdapter, _build_env_card, _build_eval_card, _parse_label, _resolve_api_key
 
@@ -339,6 +339,6 @@ def test_wildguard_per_row_api_errors_are_nonfatal(monkeypatch):
     # No FAILED status report — per-row errors are warnings, not job failures
     failed_statuses = [
         c for c in callbacks.report_status.call_args_list
-        if "FAILED" in str(c.args[0].status)
+        if c.args[0].status == JobStatus.FAILED
     ]
     assert len(failed_statuses) == 0
