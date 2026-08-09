@@ -37,7 +37,6 @@ import random
 import string
 from constants import TASKS
 import sys
-import pdb
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from tokenizer import select_tokenizer
 from manifest_utils import write_manifest
