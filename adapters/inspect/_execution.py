@@ -111,12 +111,9 @@ def build_command(
     if max_tasks:
         cmd += ["--max-tasks", str(max_tasks)]
 
-    # Sample limit precedence: JobSpec.num_examples > parameters.max_samples > unlimited.
-    # num_examples is lifted from benchmarks[].parameters by eval-hub's jobspec builder
-    # (same contract as LightEval / GuideLLM).
-    limit = _sample_limit(config)
-    if limit is not None:
-        cmd += ["--limit", str(limit)]
+    # Sample limit from JobSpec.num_examples (lifted from benchmarks[].parameters.num_examples).
+    if config.num_examples is not None:
+        cmd += ["--limit", str(int(config.num_examples))]
 
     epochs = config.parameters.get("epochs")
     if epochs and epochs > 1:
@@ -132,22 +129,26 @@ def build_command(
     return cmd
 
 
-def _sample_limit(config: JobSpec) -> int | None:
-    """Resolve --limit from num_examples (preferred) or max_samples."""
-    if config.num_examples is not None:
-        return int(config.num_examples)
-    max_samples = config.parameters.get("max_samples")
-    if max_samples is not None:
-        return int(max_samples)
-    return None
+# Open-Telco (and similar) first-class -T parameters — keep flat under parameters, not task_args.
+_FIRST_CLASS_TASK_PARAMS = ("full", "subject", "eval_type")
 
 
 def _task_args(config: JobSpec) -> dict:
-    """Merge job task_args with benchmark defaults (TeleMath always uses full dataset)."""
-    args = dict(config.parameters.get("task_args") or {})
-    # TeleMath: always evaluate against GSMA/ot-full; cap size via --limit / num_examples.
-    if config.benchmark_id == "inspect/telemath" and "full" not in args:
-        args["full"] = True
+    """Build Inspect -T args from first-class parameters and optional task_args escape hatch.
+
+    First-class keys are the supported API surface for Open-Telco and similar tasks.
+    parameters.task_args remains for Dish / ad-hoc Inspect flags only; it must not
+    redefine first-class keys.
+    """
+    args: dict = {}
+    for key in _FIRST_CLASS_TASK_PARAMS:
+        if key in config.parameters:
+            args[key] = config.parameters[key]
+    # Escape hatch last so unknown -T flags still work; first-class keys win on conflict.
+    for key, value in (config.parameters.get("task_args") or {}).items():
+        if key in args:
+            continue
+        args[key] = value
     return args
 
 

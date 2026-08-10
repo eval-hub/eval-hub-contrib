@@ -101,6 +101,9 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     "inspect/aime2025":               "inspect_evals/aime2025",
     # Telecom (GSMA Open-Telco / gsma-labs/evals)
     "inspect/telemath":               "evals/telemath",
+    "inspect/teleqna":                "evals/teleqna",
+    "inspect/telelogs":               "evals/telelogs",
+    "inspect/3gpp-tsg":               "evals/three_gpp",
     # Knowledge & reasoning
     "inspect/mmlu":                   "inspect_evals/mmlu",
     "inspect/mmlu-pro":               "inspect_evals/mmlu_pro",

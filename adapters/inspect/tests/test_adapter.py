@@ -69,6 +69,24 @@ def test_resolve_task_standard_telemath(job_spec_path):
     assert adapter._resolve_task(adapter.job_spec, "standard", None) == "evals/telemath"
 
 
+def test_resolve_task_standard_teleqna(job_spec_path):
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/teleqna"
+    assert adapter._resolve_task(adapter.job_spec, "standard", None) == "evals/teleqna"
+
+
+def test_resolve_task_standard_telelogs(job_spec_path):
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/telelogs"
+    assert adapter._resolve_task(adapter.job_spec, "standard", None) == "evals/telelogs"
+
+
+def test_resolve_task_standard_3gpp_tsg(job_spec_path):
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/3gpp-tsg"
+    assert adapter._resolve_task(adapter.job_spec, "standard", None) == "evals/three_gpp"
+
+
 def test_resolve_task_explicit_override(job_spec_path):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.parameters["task"] = "inspect_evals/mmlu"
@@ -206,21 +224,20 @@ def test_standard_command_no_model_flag(job_spec_path, tmp_path, monkeypatch):
     assert "ibm-granite/granite-3.3-8b-instruct" in env["INSPECT_EVAL_MODEL"]
 
 
-def test_sample_limit_prefers_num_examples_over_max_samples(job_spec_path, tmp_path, monkeypatch):
-    """--limit uses JobSpec.num_examples when set, even if max_samples differs."""
+def test_sample_limit_from_num_examples(job_spec_path, tmp_path, monkeypatch):
+    """--limit uses JobSpec.num_examples when set."""
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.benchmark_id = "inspect/gsm8k"
     adapter.job_spec.num_examples = 7
-    adapter.job_spec.parameters["max_samples"] = 99
     env = adapter._build_env(adapter.job_spec, "standard")
     cmd = adapter._build_command(adapter.job_spec, "standard", "inspect_evals/gsm8k", tmp_path, None, env)
     assert "--limit" in cmd
     assert cmd[cmd.index("--limit") + 1] == "7"
 
 
-def test_sample_limit_falls_back_to_max_samples(job_spec_path, tmp_path, monkeypatch):
-    """--limit uses max_samples when num_examples is unset."""
+def test_sample_limit_omitted_without_num_examples(job_spec_path, tmp_path, monkeypatch):
+    """No --limit when num_examples is unset (max_samples is ignored)."""
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.benchmark_id = "inspect/gsm8k"
@@ -228,25 +245,107 @@ def test_sample_limit_falls_back_to_max_samples(job_spec_path, tmp_path, monkeyp
     adapter.job_spec.parameters["max_samples"] = 12
     env = adapter._build_env(adapter.job_spec, "standard")
     cmd = adapter._build_command(adapter.job_spec, "standard", "inspect_evals/gsm8k", tmp_path, None, env)
-    assert cmd[cmd.index("--limit") + 1] == "12"
+    assert "--limit" not in cmd
 
 
-def test_telemath_command_defaults_full_dataset(job_spec_path, tmp_path, monkeypatch):
-    """TeleMath always passes -T full=true and maps to evals/telemath."""
+def test_telemath_full_parameter(job_spec_path, tmp_path, monkeypatch):
+    """TeleMath maps to evals/telemath; parameters.full becomes -T full=true."""
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.benchmark_id = "inspect/telemath"
     adapter.job_spec.num_examples = 50
-    adapter.job_spec.parameters.pop("max_samples", None)
     adapter.job_spec.parameters.pop("task_args", None)
+    adapter.job_spec.parameters["full"] = True
     env = adapter._build_env(adapter.job_spec, "standard")
     task = adapter._resolve_task(adapter.job_spec, "standard", None)
     assert task == "evals/telemath"
     cmd = adapter._build_command(adapter.job_spec, "standard", task, tmp_path, None, env)
     assert cmd[cmd.index("--limit") + 1] == "50"
-    assert "-T" in cmd
-    assert "full=True" in cmd or "full=true" in cmd
+    assert "full=true" in cmd
 
+
+def test_telemath_full_not_injected_without_parameter(job_spec_path, tmp_path, monkeypatch):
+    """Without parameters.full, TeleMath does not add -T full=…."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/telemath"
+    adapter.job_spec.num_examples = None
+    adapter.job_spec.parameters.pop("task_args", None)
+    adapter.job_spec.parameters.pop("full", None)
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(
+        adapter.job_spec, "standard", "evals/telemath", tmp_path, None, env
+    )
+    assert not any(a.startswith("full=") for a in cmd)
+
+
+def test_teleqna_subject_and_full_parameters(job_spec_path, tmp_path, monkeypatch):
+    """TeleQnA forwards flat parameters.full and parameters.subject as -T flags."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/teleqna"
+    adapter.job_spec.num_examples = 25
+    adapter.job_spec.parameters.pop("task_args", None)
+    adapter.job_spec.parameters["full"] = True
+    adapter.job_spec.parameters["subject"] = "full"
+    env = adapter._build_env(adapter.job_spec, "standard")
+    task = adapter._resolve_task(adapter.job_spec, "standard", None)
+    assert task == "evals/teleqna"
+    cmd = adapter._build_command(adapter.job_spec, "standard", task, tmp_path, None, env)
+    assert cmd[cmd.index("--limit") + 1] == "25"
+    assert "full=true" in cmd
+    assert "subject=full" in cmd
+
+
+def test_telelogs_eval_type_and_full_parameters(job_spec_path, tmp_path, monkeypatch):
+    """TeleLogs forwards flat parameters.full and parameters.eval_type as -T flags."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/telelogs"
+    adapter.job_spec.num_examples = 40
+    adapter.job_spec.parameters.pop("task_args", None)
+    adapter.job_spec.parameters["full"] = True
+    adapter.job_spec.parameters["eval_type"] = "soft"
+    env = adapter._build_env(adapter.job_spec, "standard")
+    task = adapter._resolve_task(adapter.job_spec, "standard", None)
+    assert task == "evals/telelogs"
+    cmd = adapter._build_command(adapter.job_spec, "standard", task, tmp_path, None, env)
+    assert cmd[cmd.index("--limit") + 1] == "40"
+    assert "full=true" in cmd
+    assert "eval_type=soft" in cmd
+
+
+def test_3gpp_tsg_full_parameter(job_spec_path, tmp_path, monkeypatch):
+    """3GPP-TSG maps to evals/three_gpp and forwards parameters.full."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/3gpp-tsg"
+    adapter.job_spec.num_examples = 30
+    adapter.job_spec.parameters.pop("task_args", None)
+    adapter.job_spec.parameters["full"] = True
+    env = adapter._build_env(adapter.job_spec, "standard")
+    task = adapter._resolve_task(adapter.job_spec, "standard", None)
+    assert task == "evals/three_gpp"
+    cmd = adapter._build_command(adapter.job_spec, "standard", task, tmp_path, None, env)
+    assert cmd[cmd.index("--limit") + 1] == "30"
+    assert "full=true" in cmd
+
+
+def test_full_parameter_wins_over_task_args(job_spec_path, tmp_path, monkeypatch):
+    """parameters.full is the supported path; task_args.full is ignored if full is set."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/telemath"
+    adapter.job_spec.num_examples = None
+    adapter.job_spec.parameters["full"] = True
+    adapter.job_spec.parameters["task_args"] = {"full": False, "dish_scaffold": "claude-code"}
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(
+        adapter.job_spec, "standard", "evals/telemath", tmp_path, None, env
+    )
+    assert "full=true" in cmd
+    assert "full=false" not in cmd
+    assert "dish_scaffold=claude-code" in cmd
 
 def test_client_selection_url_beats_anthropic_key(job_spec_path):
     """endpoint_url present → OpenAI-compatible API selected even if Anthropic key is set."""
