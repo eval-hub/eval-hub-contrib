@@ -1,0 +1,15 @@
+{
+  "id": "test-job-001",
+  "provider_id": "wildguard",
+  "benchmark_id": "wildguard-safety",
+  "benchmark_index": 0,
+  "model": {
+    "url": "http://localhost:8080/v1",
+    "name": "meta-llama/llama-3.1-8b-instruct"
+  },
+  "parameters": {
+    "split": "test",
+    "num_examples": 10
+  },
+  "callback_url": "http://localhost:8081"
+}
