@@ -15,6 +15,7 @@ IMAGE_INSPECT = $(REGISTRY)/community-inspect:$(VERSION)
 IMAGE_DEEPEVAL = $(REGISTRY)/community-deepeval:$(VERSION)
 IMAGE_RAGAS = $(REGISTRY)/community-ragas:$(VERSION)
 IMAGE_SWEBENCH = $(REGISTRY)/community-swebench:$(VERSION)
+IMAGE_RULER = $(REGISTRY)/community-ruler:$(VERSION)
 
 # Default target
 .PHONY: help
@@ -30,6 +31,7 @@ help:
 	@echo "  make image-deepeval     - Build DeepEval adapter image"
 	@echo "  make image-ragas        - Build RAGAS adapter image"
 	@echo "  make image-swebench     - Build SWE-bench adapter image"
+	@echo "  make image-ruler        - Build RULER adapter image"
 	@echo "  make images             - Build all adapter images"
 	@echo ""
 	@echo "Image Push:"
@@ -40,6 +42,7 @@ help:
 	@echo "  make push-deepeval      - Push DeepEval adapter image"
 	@echo "  make push-ragas         - Push RAGAS adapter image"
 	@echo "  make push-swebench      - Push SWE-bench adapter image"
+	@echo "  make push-ruler         - Push RULER adapter image"
 	@echo "  make push-images        - Push all adapter images"
 	@echo ""
 	@echo "Clean:"
@@ -50,6 +53,7 @@ help:
 	@echo "  make clean-deepeval     - Remove DeepEval adapter image"
 	@echo "  make clean-ragas        - Remove RAGAS adapter image"
 	@echo "  make clean-swebench     - Remove SWE-bench adapter image"
+	@echo "  make clean-ruler        - Remove RULER adapter image"
 	@echo "  make clean-images       - Remove all adapter images"
 	@echo ""
 	@echo "Test:"
@@ -60,6 +64,7 @@ help:
 	@echo "  make test-inspect      - Run Inspect AI adapter tests"
 	@echo "  make test-deepeval     - Run DeepEval adapter tests"
 	@echo "  make test-ragas        - Run RAGAS adapter tests"
+	@echo "  make test-ruler        - Run RULER adapter tests"
 	@echo "  make tests             - Run all adapter tests"
 	@echo ""
 	@echo "Variables:"
@@ -126,7 +131,7 @@ image-swebench:
 	@echo "✅ Built: $(IMAGE_SWEBENCH)"
 
 .PHONY: images
-images: image-lighteval image-guidellm image-mteb image-ragas image-swebench
+images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler
 	@echo "✅ All adapter images built"
 
 # Push targets
@@ -177,7 +182,7 @@ push-swebench:
 	@echo "✅ Pushed: $(IMAGE_SWEBENCH)"
 
 .PHONY: push-images
-push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench
+push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench push-ruler
 	@echo "✅ All adapter images pushed"
 
 # Clean targets
@@ -228,7 +233,7 @@ clean-swebench:
 	@echo "✅ Removed: $(IMAGE_SWEBENCH)"
 
 .PHONY: clean-images
-clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench clean-ruler
 	@echo "✅ All adapter images removed"
 
 # Development targets
@@ -324,7 +329,7 @@ test-ragas:
 	@echo "✅ RAGAS tests passed"
 
 .PHONY: tests
-tests: test-guidellm test-lighteval test-mteb test-clear test-ragas
+tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler
 	@echo "✅ All adapter tests passed"
 .PHONY: test-swebench
 test-swebench:
@@ -334,3 +339,35 @@ test-swebench:
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ SWE-bench tests passed"
+
+.PHONY: image-ruler
+image-ruler:
+	@echo "Building RULER adapter image..."
+	cd adapters/ruler && \
+	$(BUILD_TOOL) build -t $(IMAGE_RULER) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_RULER)"
+
+.PHONY: push-ruler
+push-ruler:
+	@echo "Pushing RULER adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_RULER)
+	@echo "✅ Pushed: $(IMAGE_RULER)"
+
+.PHONY: clean-ruler
+clean-ruler:
+	@echo "Removing RULER adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_RULER) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_RULER)"
+
+.PHONY: build-and-push-ruler
+build-and-push-ruler: image-ruler push-ruler
+	@echo "✅ RULER adapter built and pushed"
+
+.PHONY: test-ruler
+test-ruler:
+	@echo "Running RULER adapter tests..."
+	cd adapters/ruler && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ RULER tests passed"
