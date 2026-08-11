@@ -1,0 +1,57 @@
+name: Push RULER image
+
+on:
+  push:
+    branches: [main, 'v*']
+    paths: ['adapters/ruler/**']
+  workflow_dispatch:
+
+env:
+  REGISTRY: quay.io/evalhub
+  IMAGE_NAME: community-ruler
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$REF_NAME" == "main" ]]; then
+            echo "channel=latest" >> "$GITHUB_OUTPUT"
+          elif [[ "$REF_NAME" =~ ^v[0-9a-zA-Z._-]+$ ]]; then
+            echo "channel=$REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unsupported ref '$REF_NAME'; only 'main' and 'v*' release refs are published." >&2
+            exit 1
+          fi
+
+      - name: Build image
+        env:
+          CHANNEL: ${{ steps.tag.outputs.channel }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          docker build \
+            -f adapters/ruler/Containerfile \
+            -t "${REGISTRY}/${IMAGE_NAME}:${GIT_SHA}" \
+            -t "${REGISTRY}/${IMAGE_NAME}:${CHANNEL}" \
+            adapters/ruler
+
+      - name: Push image
+        env:
+          CHANNEL: ${{ steps.tag.outputs.channel }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          echo "${{ secrets.QUAY_TOKEN }}" | docker login quay.io -u "${{ secrets.QUAY_USER }}" --password-stdin
+          docker push "${REGISTRY}/${IMAGE_NAME}:${GIT_SHA}"
+          docker push "${REGISTRY}/${IMAGE_NAME}:${CHANNEL}"
