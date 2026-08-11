@@ -10,6 +10,10 @@ env:
   REGISTRY: quay.io/evalhub
   IMAGE_NAME: community-ruler
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
