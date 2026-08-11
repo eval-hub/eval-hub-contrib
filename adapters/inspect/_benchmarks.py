@@ -123,7 +123,7 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
 }
 
 # ---------------------------------------------------------------------------
-# Judge dimension → EvalCard ability mapping
+# Judge dimension → ability mapping (used when labeling capability rows in tests / metadata)
 # Default for unmapped dimensions is "alignment_risk" (Petri/Bloom) or "reasoning"
 # ---------------------------------------------------------------------------
 

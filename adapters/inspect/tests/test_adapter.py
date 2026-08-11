@@ -629,7 +629,12 @@ def test_petri_happy_path(monkeypatch, job_spec_path, petri_log_file):
     assert "concerning/mean" in metric_names
     assert "eval_awareness/mean" in metric_names
 
-    assert results.eval_card is not None
+    assert results.eval_card is None
+    assert results.additional_info is not None
+    assert results.additional_info["framework"] == "inspect-ai"
+    assert results.additional_info["mode"] == "petri"
+    assert results.additional_info["alt_prompting"] == pytest.approx(3.2)
+    assert results.additional_info["alt_prompting_description"] == "Inspect petri audit"
     assert results.env_card is not None
     assert results.evaluation_metadata["mode"] == "petri"
     assert results.evaluation_metadata["framework"] == "inspect-ai"
@@ -720,6 +725,11 @@ def test_standard_happy_path(monkeypatch, job_spec_path, standard_log_file):
     assert results.evaluation_metadata["mode"] == "standard"
     assert results.num_examples_evaluated == 10
     assert any(r.metric_name == "accuracy/accuracy" for r in results.results)
+    assert results.eval_card is None
+    assert results.additional_info is not None
+    assert results.additional_info["mode"] == "standard"
+    assert results.additional_info["zero_shot"] == results.overall_score
+    assert "alt_prompting" not in results.additional_info
 
 
 # ---------------------------------------------------------------------------

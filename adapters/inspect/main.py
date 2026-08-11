@@ -36,7 +36,6 @@ from typing import Any
 
 from evalhub.adapter import (
     EnvironmentCardMetadata,
-    EvalCardMetadata,
     FrameworkAdapter,
     JobCallbacks,
     JobPhase,
@@ -69,6 +68,14 @@ logger = logging.getLogger(__name__)
 
 class InspectAdapter(FrameworkAdapter):
     """Inspect AI framework adapter for Petri, Bloom, Dish, and inspect-evals tasks."""
+
+    def __init__(self, job_spec_path: str | None = None) -> None:
+        super().__init__(job_spec_path=job_spec_path)
+        self._run_info: dict[str, Any] = {}
+
+    def generate_additional_info(self, results: JobResults) -> dict[str, Any] | None:
+        """Return Inspect-specific supplementary metadata captured during the run."""
+        return self._run_info or None
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         start_time = time.time()
@@ -124,7 +131,7 @@ class InspectAdapter(FrameworkAdapter):
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
             )
 
-            evaluation_results, capability_entries, num_samples = extract_results(eval_log, config.benchmark_id, mode)
+            evaluation_results, _, num_samples = extract_results(eval_log, config.benchmark_id, mode)
             overall_score = compute_overall_score(evaluation_results, mode)
             logger.info(f"Post-processing complete | samples={num_samples} | overall_score={overall_score}")
 
@@ -147,16 +154,15 @@ class InspectAdapter(FrameworkAdapter):
                 logger.info(f"OCI artifact created: {oci_artifact.reference}")
 
             inspect_version = get_inspect_version()
-            eval_card = EvalCardMetadata(
-                modalities_input=["text"], modalities_output=["text"],
-                languages_count=config.parameters.get("languages_count", 1),
-                languages=config.parameters.get("languages", ["en"]),
-                capability_evaluations=capability_entries,
-                developer_footnotes=(
-                    f"Inspect AI {inspect_version} | mode={mode} | task={task_spec} | "
-                    f"model={config.model.name} | samples={num_samples}."
-                ),
+            additional_info = self._build_additional_info(
+                mode=mode,
+                task_spec=task_spec,
+                inspect_version=inspect_version,
+                overall_score=overall_score,
+                eval_status=eval_log.get("status"),
+                num_samples=num_samples,
             )
+            self._run_info = additional_info
 
             job_results = JobResults(
                 id=config.id,
@@ -177,7 +183,7 @@ class InspectAdapter(FrameworkAdapter):
                     "benchmark_config": config.parameters,
                 },
                 oci_artifact=oci_artifact,
-                eval_card=eval_card,
+                additional_info=additional_info,
                 env_card=env_card,
             )
 
@@ -269,6 +275,41 @@ class InspectAdapter(FrameworkAdapter):
         if mode == "bloom":
             return f"Preparing Bloom audit | template={BLOOM_TEMPLATE_MAP.get(config.benchmark_id, 'custom')}"
         return f"Preparing Inspect task for {config.benchmark_id}"
+
+    @staticmethod
+    def _build_additional_info(
+        *,
+        mode: str,
+        task_spec: str,
+        inspect_version: str,
+        overall_score: float | None,
+        eval_status: str | None,
+        num_samples: int,
+    ) -> dict[str, Any]:
+        """Build additional_info delta for EvalHub (not duplicated from request/metrics).
+
+        Follows lm-eval / LightEval: put framework-specific provenance and prompting
+        labels here. Do not send EvalCardMetadata via artifacts['evalhub.eval_card'].
+        """
+        info: dict[str, Any] = {
+            "framework": "inspect-ai",
+            "framework_version": inspect_version,
+            "mode": mode,
+            "task": task_spec,
+            "num_samples_effective": num_samples,
+        }
+        if eval_status is not None:
+            info["inspect_status"] = eval_status
+
+        # Standard / Open-Telco tasks are generate-or-MCQ without few-shot demos.
+        if mode == "standard" and overall_score is not None:
+            info["zero_shot"] = overall_score
+        elif mode in ("petri", "bloom") and overall_score is not None:
+            # Multi-turn auditor/target/judge pipelines — not zero-shot MCQ.
+            info["alt_prompting"] = overall_score
+            info["alt_prompting_description"] = f"Inspect {mode} audit"
+
+        return info
 
     # ------------------------------------------------------------------
     # Thin delegators kept for test and API compatibility
