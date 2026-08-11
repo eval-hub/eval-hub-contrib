@@ -45,6 +45,9 @@ jobs:
     needs: detect
     if: needs.detect.outputs.adapters != '[]'
     runs-on: ubuntu-latest
+    concurrency:
+      group: push-${{ matrix.adapter }}-${{ github.ref_name }}
+      cancel-in-progress: false
     strategy:
       matrix:
         adapter: ${{ fromJson(needs.detect.outputs.adapters) }}
