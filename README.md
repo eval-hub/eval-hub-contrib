@@ -18,6 +18,7 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [RAGAS](https://github.com/explodinggradients/ragas) | `quay.io/evalhub/community-ragas:latest` | ✓ | RAG pipeline quality evaluation (faithfulness, relevancy, context precision/recall, and more) |
 | [SWE-bench](https://github.com/SWE-bench/SWE-bench) | `quay.io/evalhub/community-swebench:latest` | ✓ | Software engineering benchmark for code patch evaluation |
 | [DeepEval](https://github.com/confident-ai/deepeval) | `quay.io/evalhub/community-deepeval:latest` | ✓ | LLM-as-judge evaluation: faithfulness, relevancy, hallucination, correctness, summarization, and multi-turn conversation metrics |
+| [RULER](https://github.com/NVIDIA/RULER) | `quay.io/evalhub/community-ruler:latest` | ✓ | NVIDIA RULER long-context benchmark — 13 synthetic tasks across needle-in-a-haystack, variable tracking, aggregation, and QA at configurable context lengths |
 
 ## Inspect AI Adapter
 
@@ -58,6 +59,32 @@ The DeepEval adapter integrates [DeepEval](https://github.com/confident-ai/deepe
 | `dataset_format` | Input format: `csv`, `jsonl`, or `json` (default `csv`) |
 
 See [adapters/deepeval/README.md](adapters/deepeval/README.md) for full documentation, dataset column requirements, and multi-turn conversation format.
+
+## RULER Adapter
+
+The RULER adapter integrates [NVIDIA RULER](https://github.com/NVIDIA/RULER) (**What's the Real Context Size of Your LLM?**) into eval-hub. RULER is a synthetic long-context benchmark that evaluates LLMs across 13 tasks at configurable context lengths, measuring *effective* context utilisation rather than a simple token-count ceiling.
+
+**13 benchmarks** across four categories:
+
+- **8 Needle-in-a-Haystack** — single needle with noise/essay/UUID haystacks, multi-key, multi-value, multi-query, and needle-background variants.
+- **1 Variable Tracking** — track chains of variable assignments and return the final value.
+- **2 Aggregation** — identify the most frequent words and the top coded words in a Zipf-distributed list.
+- **2 Question Answering** — long-context QA with SQuAD and HotpotQA passages.
+
+**Model configuration** — any OpenAI-compatible inference endpoint. Set `model.url` to the `/v1` endpoint and `model.name` to the model ID.
+
+**Key parameters:**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `context_lengths` | `[4096, 8192, 16384]` | Context sizes (tokens) to evaluate |
+| `num_samples` | `10` | Samples per (task × context length) |
+| `tokenizer_path` | `model.name` | HuggingFace model ID or tiktoken model for data generation |
+| `tokenizer_type` | `hf` | `hf` (HuggingFace) or `openai` (tiktoken) |
+| `model_template` | `base` | Chat prompt template (see `scripts/data/template.py`) |
+| `random_seed` | `42` | Seed for reproducible data generation |
+
+See [adapters/ruler/README.md](adapters/ruler/README.md) for full documentation, example job specs, and vendored script details.
 
 ## JobPhase Lifecycle
 
