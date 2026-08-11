@@ -143,7 +143,7 @@ def _task_args(config: JobSpec) -> dict:
     """
     args: dict = {}
     for key in _FIRST_CLASS_TASK_PARAMS:
-        if key in config.parameters:
+        if key in config.parameters and config.parameters[key] is not None:
             args[key] = config.parameters[key]
     # Escape hatch last so unknown -T flags still work; first-class keys win on conflict.
     for key, value in (config.parameters.get("task_args") or {}).items():

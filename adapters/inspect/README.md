@@ -17,8 +17,8 @@ are also supported.
 
 ## Benchmarks
 
-**79 benchmarks total** — 36 Petri alignment audits, 2 Bloom suites, 37 inspect-evals +
-Open-Telco (TeleMath, TeleQnA, TeleLogs, 3GPP-TSG) + custom.
+**79 benchmarks total** — 36 Petri alignment audits, 2 Bloom suites, 36 inspect-evals,
+4 Open-Telco (TeleMath, TeleQnA, TeleLogs, 3GPP-TSG), and 1 custom task.
 
 ### Petri alignment audits (`inspect/petri-*`)
 

@@ -348,6 +348,28 @@ def test_full_parameter_wins_over_task_args(job_spec_path, tmp_path, monkeypatch
     assert "full=false" not in cmd
     assert "dish_scaffold=claude-code" in cmd
 
+
+def test_none_first_class_params_omitted(job_spec_path, tmp_path, monkeypatch):
+    """None first-class params stay in input but are not forwarded as -T flags."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/teleqna"
+    adapter.job_spec.num_examples = 5
+    adapter.job_spec.parameters.pop("task_args", None)
+    adapter.job_spec.parameters["full"] = None
+    adapter.job_spec.parameters["subject"] = None
+    adapter.job_spec.parameters["eval_type"] = None
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(
+        adapter.job_spec, "standard", "evals/teleqna", tmp_path, None, env
+    )
+    assert "full" in adapter.job_spec.parameters
+    assert "subject" in adapter.job_spec.parameters
+    assert "eval_type" in adapter.job_spec.parameters
+    assert not any(a.startswith("full=") for a in cmd)
+    assert not any(a.startswith("subject=") for a in cmd)
+    assert not any(a.startswith("eval_type=") for a in cmd)
+
 def test_client_selection_url_beats_anthropic_key(job_spec_path):
     """endpoint_url present → OpenAI-compatible API selected even if Anthropic key is set."""
     adapter = InspectAdapter(job_spec_path=job_spec_path)
