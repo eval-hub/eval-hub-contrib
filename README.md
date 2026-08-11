@@ -19,6 +19,7 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [SWE-bench](https://github.com/SWE-bench/SWE-bench) | `quay.io/evalhub/community-swebench:latest` | ✓ | Software engineering benchmark for code patch evaluation |
 | [DeepEval](https://github.com/confident-ai/deepeval) | `quay.io/evalhub/community-deepeval:latest` | ✓ | LLM-as-judge evaluation: faithfulness, relevancy, hallucination, correctness, summarization, and multi-turn conversation metrics |
 | [RULER](https://github.com/NVIDIA/RULER) | `quay.io/evalhub/community-ruler:latest` | ✓ | NVIDIA RULER long-context benchmark — 13 synthetic tasks across needle-in-a-haystack, variable tracking, aggregation, and QA at configurable context lengths |
+| [WildGuard](https://arxiv.org/abs/2406.18495) | `quay.io/evalhub/community-wildguard:latest` | ✓ | AllenAI safety classification benchmark — evaluates a model's ability to classify prompt+response pairs as safe or unsafe, reporting accuracy and per-class recall |
 
 ## Inspect AI Adapter
 
@@ -85,6 +86,35 @@ The RULER adapter integrates [NVIDIA RULER](https://github.com/NVIDIA/RULER) (**
 | `random_seed` | `42` | Seed for reproducible data generation |
 
 See [adapters/ruler/README.md](adapters/ruler/README.md) for full documentation, example job specs, and vendored script details.
+
+## WildGuard Adapter
+
+The WildGuard adapter integrates the [WildGuard](https://arxiv.org/abs/2406.18495) safety benchmark (`allenai/wildguard`, MIT licence) from AllenAI. For each prompt+response pair in the dataset, the adapter sends the WildGuard instruction template to the model, parses its natural-language output as `safe` or `unsafe` (outputs containing neither are treated as `unknown`), and compares against the ground-truth label. Unknown predictions are counted as incorrect when calculating accuracy.
+
+**1 benchmark:**
+
+- **`wildguard-safety`** — evaluates the model against the WildGuard test split, reporting accuracy and per-class recall.
+
+**Metrics:**
+
+| Metric | Description |
+|---|---|
+| `accuracy` | Fraction of examples correctly classified (`overall_score`) |
+| `safe_recall` | Recall on genuinely safe responses |
+| `unsafe_recall` | Recall on genuinely unsafe responses |
+
+Score guide: 0.5 or below is near random chance; 0.85 or above is strong performance. Low `unsafe_recall` indicates under-refusal; low `safe_recall` indicates over-refusal.
+
+**Key parameters:**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `split` | `test` | HuggingFace dataset split |
+| `num_examples` | _(full split)_ | Cap the number of examples (useful for smoke tests) |
+| `max_concurrent` | `4` | Concurrent API calls to the model endpoint |
+| `request_timeout` | `120` | Per-request timeout in seconds |
+
+See [adapters/wildguard/README.md](adapters/wildguard/README.md) for full documentation and example job specs.
 
 ## JobPhase Lifecycle
 
