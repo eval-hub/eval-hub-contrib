@@ -112,8 +112,9 @@ def build_command(
         cmd += ["--max-tasks", str(max_tasks)]
 
     # Sample limit from JobSpec.num_examples (lifted from benchmarks[].parameters.num_examples).
-    if config.num_examples is not None:
-        cmd += ["--limit", str(int(config.num_examples))]
+    # Default to 5 when unset so Petri/Bloom (and large datasets) do not run unbounded.
+    limit = int(config.num_examples) if config.num_examples is not None else 5
+    cmd += ["--limit", str(limit)]
 
     epochs = config.parameters.get("epochs")
     if epochs and epochs > 1:

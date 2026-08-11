@@ -236,8 +236,8 @@ def test_sample_limit_from_num_examples(job_spec_path, tmp_path, monkeypatch):
     assert cmd[cmd.index("--limit") + 1] == "7"
 
 
-def test_sample_limit_omitted_without_num_examples(job_spec_path, tmp_path, monkeypatch):
-    """No --limit when num_examples is unset (max_samples is ignored)."""
+def test_sample_limit_defaults_without_num_examples(job_spec_path, tmp_path, monkeypatch):
+    """--limit defaults to 5 when num_examples is unset (max_samples is ignored)."""
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.benchmark_id = "inspect/gsm8k"
@@ -245,7 +245,8 @@ def test_sample_limit_omitted_without_num_examples(job_spec_path, tmp_path, monk
     adapter.job_spec.parameters["max_samples"] = 12
     env = adapter._build_env(adapter.job_spec, "standard")
     cmd = adapter._build_command(adapter.job_spec, "standard", "inspect_evals/gsm8k", tmp_path, None, env)
-    assert "--limit" not in cmd
+    assert "--limit" in cmd
+    assert cmd[cmd.index("--limit") + 1] == "5"
 
 
 def test_telemath_full_parameter(job_spec_path, tmp_path, monkeypatch):

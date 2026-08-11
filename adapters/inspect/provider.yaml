@@ -102,7 +102,7 @@ benchmarks:
     name: Petri — Full Alignment Audit
     description: >
       Complete Petri audit across all 170+ built-in seeds from all 40 tag categories.
-      Expensive — strongly recommend setting num_examples for development runs.
+      Expensive at full scale — unset num_examples defaults to 5; raise it for fuller runs.
       Primary output: 38-dimension scoring profile across all alignment behaviors.
     category: alignment
     metrics: [concerning/mean, eval_awareness/mean, admirable/mean]

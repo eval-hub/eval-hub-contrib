@@ -246,9 +246,6 @@ class InspectAdapter(FrameworkAdapter):
             if not config.parameters.get("task"):
                 raise ValueError("inspect/custom requires a 'task' parameter.")
 
-        if mode in ("petri", "bloom") and config.num_examples is None:
-            logger.warning("Running Petri/Bloom without num_examples — this may be expensive.")
-
         task_args: dict[str, Any] = config.parameters.get("task_args", {})
         if any("dish" in k.lower() for k in task_args):
             logger.warning("Dish is a research-preview feature. Behaviour may change without notice.")

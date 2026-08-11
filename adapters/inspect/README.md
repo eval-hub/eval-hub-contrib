@@ -127,8 +127,10 @@ Secret that includes the `hf-token` key (alongside `api-key` if needed).
 
 ### Sample limits
 
-Inspect `--limit` is driven only by `benchmarks[].parameters.num_examples` (lifted to
-JobSpec `num_examples` by eval-hub). Omit `num_examples` to run the full task.
+Inspect `--limit` is driven by `benchmarks[].parameters.num_examples` (lifted to
+JobSpec `num_examples` by eval-hub). When unset, the adapter defaults to `--limit 5`
+so Petri/Bloom and large datasets do not run unbounded. Set an explicit
+`num_examples` to raise or lower the cap.
 
 Open-Telco dataset size is controlled via `parameters.full`
 (`true` → `GSMA/ot-full`, `false` → `GSMA/ot-lite`). TeleQnA also accepts
@@ -330,7 +332,7 @@ Environment: `ANTHROPIC_API_KEY=sk-ant-...` (for auditor), `OPENAI_BASE_URL` set
 | `max_turns` | `30` | Max auditor turns per scenario |
 | `enable_rollback` | `true` | Allow auditor to backtrack and retry approaches |
 | `realism_filter` | `false` | Filter unrealistic auditor outputs (experimental) |
-| `num_examples` | *(unset)* | Cap scenarios/samples via EvalHub `benchmarks[].parameters.num_examples` (JobSpec `num_examples` → Inspect `--limit`) |
+| `num_examples` | `5` | Cap scenarios/samples via EvalHub `benchmarks[].parameters.num_examples` (JobSpec `num_examples` → Inspect `--limit`; defaults to 5 when unset) |
 | `seed_instructions` | *(from benchmark_id)* | Override seed selection (`tags:deception`, `id:seed_name`, inline text) |
 | `judge_dimensions` | *(all 38)* | Filter judge dimensions (`tags:safety` or custom directory) |
 | `task_args` | `{}` | Escape hatch for non–first-class Inspect `-T` flags (e.g. Dish `dish_scaffold`). Not for Open-Telco `full`. |
