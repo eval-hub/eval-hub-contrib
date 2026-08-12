@@ -3,24 +3,34 @@ name: Test LM Evaluation Harness
 on:
   push:
     branches: [main]
-    paths: ['adapters/lm-eval/**']
+    paths:
+      - 'adapters/lm-eval/**'
+      - 'Makefile'
+      - '.github/workflows/test-lm-eval.yml'
   pull_request:
     branches: [main]
-    paths: ['adapters/lm-eval/**']
+    paths:
+      - 'adapters/lm-eval/**'
+      - 'Makefile'
+      - '.github/workflows/test-lm-eval.yml'
   workflow_dispatch:
 
 jobs:
   # ── Integration tests (fully mocked — no lm_eval install required) ──────────
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -30,6 +40,10 @@ jobs:
           SDK_DEP=$(grep 'eval-hub-sdk' requirements.txt)
           uv pip install --system "$SDK_DEP" -r requirements-test.txt
 
+      - name: Run unit tests
+        working-directory: adapters/lm-eval
+        run: pytest tests/ -v -m "not integration and not local"
+
       - name: Run integration tests
         working-directory: adapters/lm-eval
         run: pytest tests/ -v -m integration
@@ -37,16 +51,20 @@ jobs:
   # ── Local tests against Ollama (generation tasks via chat endpoint) ──────────
   test-local-ollama:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       OLLAMA_MODELS: /home/runner/.ollama-models
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -75,10 +93,7 @@ jobs:
 
       - name: Run local tests against Ollama
         working-directory: adapters/lm-eval
-        # Ollama exposes both /v1/completions and /v1/chat/completions.
-        # Generation tasks (gsm8k, ifeval) use local-completions by default.
-        # Exit code 5 means no tests collected (local tests not yet written) — treated as pass.
-        run: pytest tests/ -v -s --log-cli-level=INFO -m "local and openai_endpoint" || [ $? -eq 5 ]
+        run: pytest tests/ -v -s --log-cli-level=INFO -m "local and openai_endpoint"
         env:
           LMEVAL_TEST_BASE_URL: http://localhost:11434
           LMEVAL_TEST_MODEL: qwen2.5:0.5b
@@ -87,14 +102,18 @@ jobs:
   # ── Local tests against vLLM-CPU (completions endpoint + loglikelihood) ──────
   test-local-vllm-cpu:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -139,10 +158,7 @@ jobs:
 
       - name: Run local tests against vLLM completions endpoint
         working-directory: adapters/lm-eval
-        # vLLM /v1/completions supports echo=True + logprobs — exercises the
-        # loglikelihood scoring path used by MMLU, HellaSwag, ARC, etc.
-        # Exit code 5 means no tests collected — treated as pass.
-        run: pytest tests/ -v -s --log-cli-level=INFO -m "local and openai_endpoint" || [ $? -eq 5 ]
+        run: pytest tests/ -v -s --log-cli-level=INFO -m "local and openai_endpoint"
         env:
           LMEVAL_TEST_BASE_URL: http://localhost:8000
           LMEVAL_TEST_MODEL: Qwen/Qwen2.5-0.5B-Instruct

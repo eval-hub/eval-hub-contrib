@@ -27,8 +27,11 @@ LOGLIKELIHOOD_TASKS: dict[str, str | list[str]] = {
     "lm-eval/piqa": "piqa",
     "lm-eval/openbookqa": "openbookqa",
     "lm-eval/bbh": "bbh",
-    "lm-eval/gpqa": "gpqa_diamond",
-    "lm-eval/musr": "musr",
+    # GPQA: the zero-shot diamond variant is the registered task name in lm-eval.
+    # The leaderboard group task is "leaderboard_gpqa" (used in the OLL-v2 composite).
+    "lm-eval/gpqa": "gpqa_diamond_zeroshot",
+    # MuSR lives only under the leaderboard group in lm-eval; there is no bare "musr" group.
+    "lm-eval/musr": "leaderboard_musr",
 }
 
 # Maps benchmark_id → lm-eval task name(s).
@@ -38,21 +41,23 @@ GENERATION_TASKS: dict[str, str | list[str]] = {
     "lm-eval/ifeval": "ifeval",
     "lm-eval/triviaqa": "triviaqa",
     "lm-eval/nq_open": "nq_open",
-    "lm-eval/math_500": "math_500",
+    # The task is registered as "hendrycks_math500" in lm-eval; "math_500" does not exist.
+    "lm-eval/math_500": "hendrycks_math500",
 }
 
 # Composite suites (mix of task types).
 # Value is the list of lm-eval task names to pass to --tasks.
 COMPOSITE_SUITES: dict[str, list[str]] = {
-    # Open LLM Leaderboard v2: mmlu_pro + gpqa + math + ifeval + bbh + musr
+    # Open LLM Leaderboard v2 — uses the "leaderboard_*" group task names that
+    # map exactly to the configurations used by the HuggingFace Open LLM Leaderboard.
     # Contains loglikelihood tasks — requires completions endpoint.
     "lm-eval/open-llm-leaderboard-v2": [
-        "mmlu_pro",
-        "gpqa_diamond",
-        "math_500",
-        "ifeval",
-        "bbh",
-        "musr",
+        "leaderboard_mmlu_pro",
+        "leaderboard_gpqa",
+        "leaderboard_math_hard",
+        "leaderboard_ifeval",
+        "leaderboard_bbh",
+        "leaderboard_musr",
     ],
     # Generation-only suite — safe for any endpoint including chat-only.
     "lm-eval/generation-suite": [
@@ -135,13 +140,19 @@ def detect_api_style(params: dict, model_url: str) -> str:
 
     Returns 'completions' or 'chat'.
     Explicit api_style parameter always wins; otherwise inferred from model_url.
+    Raises ValueError for unrecognised explicit values (typos like 'Chat' would
+    otherwise silently fall through to auto-detection and pick the wrong endpoint).
     """
     explicit = params.get("api_style", "auto")
     if explicit == "chat":
         return "chat"
     if explicit == "completions":
         return "completions"
-    # Auto-detect: OpenRouter and Groq expose chat-only endpoints.
+    if explicit != "auto":
+        raise ValueError(
+            f"Unknown api_style '{explicit}'. Valid values: 'auto', 'completions', 'chat'."
+        )
+    # Auto-detect from endpoint URL.
     url = (model_url or "").lower()
     if any(host in url for host in ("openrouter.ai", "groq.com", "together.ai")):
         return "chat"
@@ -156,9 +167,20 @@ def lmeval_model_type(api_style: str) -> str:
 def build_endpoint_url(model_url: str, api_style: str) -> str:
     """Append /completions or /chat/completions to the base model URL.
 
+    Strips any existing endpoint suffix before appending, so a URL that already
+    contains /completions or /v1/completions does not get double-appended.
     Handles both 'http://host:8000' and 'http://host:8000/v1' inputs.
     """
     url = model_url.rstrip("/")
+    for suffix in (
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/chat/completions",
+        "/completions",
+    ):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)]
+            break
     if not url.endswith("/v1"):
         url += "/v1"
     return url + ("/chat/completions" if api_style == "chat" else "/completions")

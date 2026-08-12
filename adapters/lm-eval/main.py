@@ -57,7 +57,6 @@ from _execution import (
     build_env,
     build_model_args,
     get_lmeval_version,
-    redact_cmd,
     run_lmeval,
 )
 from _results import (
@@ -135,7 +134,16 @@ class LMEvalAdapter(FrameworkAdapter):
             )
 
             tasks = resolve_tasks(config.benchmark_id, params.get("task"))
-            api_style = detect_api_style(params, config.model.url or "")
+            # Resolve model_url before api_style detection so URL-based auto-detection
+            # uses the final resolved value (config.model.url may be supplemented by
+            # a params["base_url"] fallback when the job spec omits model.url).
+            model_url = config.model.url or params.get("base_url", "")
+            if not model_url:
+                raise ValueError(
+                    "'model.url' is required. Provide the base URL of the "
+                    "OpenAI-compatible inference endpoint (e.g. http://vllm:8000)."
+                )
+            api_style = detect_api_style(params, model_url)
             preflight_check(config.benchmark_id, api_style)
 
             tokenizer = params.get("tokenizer")
@@ -156,13 +164,6 @@ class LMEvalAdapter(FrameworkAdapter):
             work_dir = Path(tempfile.mkdtemp(prefix="lmeval_"))
             output_dir = work_dir / "output"
             output_dir.mkdir()
-
-            model_url = config.model.url or params.get("base_url", "")
-            if not model_url:
-                raise ValueError(
-                    "'model.url' is required. Provide the base URL of the "
-                    "OpenAI-compatible inference endpoint (e.g. http://vllm:8000)."
-                )
 
             creds = resolve_model_credentials()
             api_key = params.get("api_key") or (creds.api_key if creds else "") or ""
@@ -208,7 +209,7 @@ class LMEvalAdapter(FrameworkAdapter):
                 apply_chat_template=bool(params.get("apply_chat_template", False)),
                 system_instruction=params.get("system_instruction"),
             )
-            logger.info("lm_eval command: %s", " ".join(redact_cmd(cmd)))
+            # Command is already logged at INFO level inside run_lmeval().
 
             # ── Phase 2: Load data (lm_eval handles internally) ──────────────
             callbacks.report_status(
@@ -376,7 +377,15 @@ class LMEvalAdapter(FrameworkAdapter):
 
     @staticmethod
     def _total_samples(results: list) -> int | None:
-        total = sum(r.num_samples or 0 for r in results)
+        # Deduplicate by task name: each task carries the same num_samples on
+        # every metric row, so summing all rows would multiply the count by the
+        # number of metrics per task (e.g. HellaSwag has acc + acc_norm = 2×).
+        seen: dict[str, int] = {}
+        for r in results:
+            task = r.metric_name.rsplit(".", 1)[0]
+            if task not in seen and r.num_samples:
+                seen[task] = r.num_samples
+        total = sum(seen.values())
         return total if total else None
 
 
