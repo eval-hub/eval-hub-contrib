@@ -47,7 +47,7 @@ jobs:
       - name: Install Ollama
         run: curl -fsSL https://ollama.com/install.sh | sh
       - name: Cache Ollama model
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.OLLAMA_MODELS }}
           key: ollama-qwen2.5-0.5b
@@ -77,7 +77,7 @@ jobs:
         working-directory: adapters/lighteval
         run: uv pip install --system -r requirements.txt -r requirements-test.txt
       - name: Cache HuggingFace models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/huggingface
           key: hf-qwen2.5-0.5b-instruct
