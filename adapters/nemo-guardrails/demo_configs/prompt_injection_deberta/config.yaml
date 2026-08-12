@@ -1,0 +1,16 @@
+models: []
+
+rails:
+  input:
+    flows:
+      - hf classifier check input $classifier="prompt_injection"
+
+  config:
+    hf_classifier:
+      prompt_injection:
+        engine: local
+        model: "protectai/deberta-v3-base-prompt-injection-v2"
+        task: text-classification
+        threshold: 0.5
+        blocked_labels:
+          - "INJECTION"
