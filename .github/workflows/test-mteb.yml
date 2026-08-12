@@ -43,7 +43,7 @@ jobs:
         working-directory: adapters/mteb
         run: uv pip install --system -r requirements.txt -r requirements-test.txt
       - name: Cache HuggingFace models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/huggingface
           key: hf-sentence-transformers-all-MiniLM-L6-v2
