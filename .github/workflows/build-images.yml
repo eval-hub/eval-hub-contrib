@@ -20,7 +20,7 @@ jobs:
     outputs:
       adapters: ${{ steps.find.outputs.adapters }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
 
@@ -54,7 +54,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve image name and tag
         id: image
