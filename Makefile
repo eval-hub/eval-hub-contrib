@@ -15,9 +15,12 @@ IMAGE_INSPECT = $(REGISTRY)/community-inspect:$(VERSION)
 IMAGE_DEEPEVAL = $(REGISTRY)/community-deepeval:$(VERSION)
 IMAGE_RAGAS = $(REGISTRY)/community-ragas:$(VERSION)
 IMAGE_SWEBENCH = $(REGISTRY)/community-swebench:$(VERSION)
-IMAGE_RULER = $(REGISTRY)/community-ruler:$(VERSION)
+IMAGE_RULER   = $(REGISTRY)/community-ruler:$(VERSION)
+IMAGE_LMEVAL  = $(REGISTRY)/community-lm-eval:$(VERSION)
 
 # Default target
+# ── Help ──────────────────────────────────────────────────────────────────────
+
 .PHONY: help
 help:
 	@echo "EvalHub Adapters Build Targets"
@@ -32,6 +35,7 @@ help:
 	@echo "  make image-ragas        - Build RAGAS adapter image"
 	@echo "  make image-swebench     - Build SWE-bench adapter image"
 	@echo "  make image-ruler        - Build RULER adapter image"
+	@echo "  make image-lm-eval      - Build LM Evaluation Harness adapter image"
 	@echo "  make images             - Build all adapter images"
 	@echo ""
 	@echo "Image Push:"
@@ -43,6 +47,7 @@ help:
 	@echo "  make push-ragas         - Push RAGAS adapter image"
 	@echo "  make push-swebench      - Push SWE-bench adapter image"
 	@echo "  make push-ruler         - Push RULER adapter image"
+	@echo "  make push-lm-eval       - Push LM Evaluation Harness adapter image"
 	@echo "  make push-images        - Push all adapter images"
 	@echo ""
 	@echo "Clean:"
@@ -54,6 +59,7 @@ help:
 	@echo "  make clean-ragas        - Remove RAGAS adapter image"
 	@echo "  make clean-swebench     - Remove SWE-bench adapter image"
 	@echo "  make clean-ruler        - Remove RULER adapter image"
+	@echo "  make clean-lm-eval      - Remove LM Evaluation Harness adapter image"
 	@echo "  make clean-images       - Remove all adapter images"
 	@echo ""
 	@echo "Test:"
@@ -64,8 +70,10 @@ help:
 	@echo "  make test-inspect      - Run Inspect AI adapter tests"
 	@echo "  make test-deepeval     - Run DeepEval adapter tests"
 	@echo "  make test-ragas        - Run RAGAS adapter tests"
-	@echo "  make test-ruler        - Run RULER adapter tests"
-	@echo "  make tests             - Run all adapter tests"
+	@echo "  make test-ruler         - Run RULER adapter tests"
+	@echo "  make test-swebench      - Run SWE-bench adapter tests"
+	@echo "  make test-lm-eval       - Run LM Evaluation Harness adapter tests"
+	@echo "  make tests              - Run all adapter tests"
 	@echo ""
 	@echo "Variables:"
 	@echo "  REGISTRY=$(REGISTRY)"
@@ -131,7 +139,7 @@ image-swebench:
 	@echo "✅ Built: $(IMAGE_SWEBENCH)"
 
 .PHONY: images
-images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler
+images: image-lighteval image-guidellm image-mteb image-inspect image-deepeval image-ragas image-swebench image-ruler image-lm-eval
 	@echo "✅ All adapter images built"
 
 # Push targets
@@ -182,7 +190,7 @@ push-swebench:
 	@echo "✅ Pushed: $(IMAGE_SWEBENCH)"
 
 .PHONY: push-images
-push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench push-ruler
+push-images: push-lighteval push-guidellm push-mteb push-inspect push-deepeval push-ragas push-swebench push-ruler push-lm-eval
 	@echo "✅ All adapter images pushed"
 
 # Clean targets
@@ -233,7 +241,7 @@ clean-swebench:
 	@echo "✅ Removed: $(IMAGE_SWEBENCH)"
 
 .PHONY: clean-images
-clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench clean-ruler
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-inspect clean-deepeval clean-ragas clean-swebench clean-ruler clean-lm-eval
 	@echo "✅ All adapter images removed"
 
 # Development targets
@@ -329,7 +337,7 @@ test-ragas:
 	@echo "✅ RAGAS tests passed"
 
 .PHONY: tests
-tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler
+tests: test-lighteval test-guidellm test-mteb test-clear test-inspect test-deepeval test-ragas test-swebench test-ruler test-lm-eval
 	@echo "✅ All adapter tests passed"
 .PHONY: test-swebench
 test-swebench:
@@ -347,11 +355,24 @@ image-ruler:
 	$(BUILD_TOOL) build -t $(IMAGE_RULER) -f Containerfile .
 	@echo "✅ Built: $(IMAGE_RULER)"
 
+.PHONY: image-lm-eval
+image-lm-eval:
+	@echo "Building LM Evaluation Harness adapter image..."
+	cd adapters/lm-eval && \
+	$(BUILD_TOOL) build -t $(IMAGE_LMEVAL) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_LMEVAL)"
+
 .PHONY: push-ruler
 push-ruler:
 	@echo "Pushing RULER adapter image..."
 	$(BUILD_TOOL) push $(IMAGE_RULER)
 	@echo "✅ Pushed: $(IMAGE_RULER)"
+
+.PHONY: push-lm-eval
+push-lm-eval:
+	@echo "Pushing LM Evaluation Harness adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_LMEVAL)
+	@echo "✅ Pushed: $(IMAGE_LMEVAL)"
 
 .PHONY: clean-ruler
 clean-ruler:
@@ -359,9 +380,19 @@ clean-ruler:
 	$(BUILD_TOOL) rmi $(IMAGE_RULER) 2>/dev/null || true
 	@echo "✅ Removed: $(IMAGE_RULER)"
 
+.PHONY: clean-lm-eval
+clean-lm-eval:
+	@echo "Removing LM Evaluation Harness adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_LMEVAL) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_LMEVAL)"
+
 .PHONY: build-and-push-ruler
 build-and-push-ruler: image-ruler push-ruler
 	@echo "✅ RULER adapter built and pushed"
+
+.PHONY: build-and-push-lm-eval
+build-and-push-lm-eval: image-lm-eval push-lm-eval
+	@echo "✅ LM Evaluation Harness adapter built and pushed"
 
 .PHONY: test-ruler
 test-ruler:
@@ -371,3 +402,12 @@ test-ruler:
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ RULER tests passed"
+
+.PHONY: test-lm-eval
+test-lm-eval:
+	@echo "Running LM Evaluation Harness adapter tests..."
+	cd adapters/lm-eval && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -m integration -v
+	@echo "✅ LM Evaluation Harness tests passed"
