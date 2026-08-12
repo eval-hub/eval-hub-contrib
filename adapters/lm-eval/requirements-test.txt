@@ -1,0 +1,8 @@
+# Integration tests only — does NOT include lm_eval[api].
+# All framework subprocess calls are monkeypatched; only the SDK and pytest are needed.
+# Local / live-endpoint tests (marked @pytest.mark.local) require the full
+# requirements.txt to be installed first:
+#   uv pip install --system -r requirements.txt -r requirements-test.txt
+eval-hub-sdk[adapter]>=1.0.0
+pytest>=8.0
+pytest-cov>=5.0

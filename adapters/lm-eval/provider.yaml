@@ -1,0 +1,600 @@
+id: lm-eval
+name: LM Evaluation Harness
+description: >
+  EleutherAI lm-evaluation-harness — endpoint-only evaluation against any
+  OpenAI-compatible inference server (vLLM, Ollama, OpenRouter). No local model
+  weights required. Supports loglikelihood (multiple-choice) and generate_until
+  (open-generation) tasks, custom task YAMLs, and HuggingFace Hub / local
+  filesystem / S3-compatible dataset sources.
+type: community
+
+# ── Agent Discoverability ──────────────────────────────────────────────────────
+# Used by EvalHub MCP discover_providers to route agent evaluation requests.
+agent:
+  evaluates:
+    - accuracy
+    - knowledge
+    - reasoning
+    - math
+    - instruction_following
+    - language-model-benchmarks
+    - endpoint-benchmarks
+  recommended_when:
+    - "User wants standard academic benchmarks (MMLU, HellaSwag, ARC, GSM8K)"
+    - "Pre-deployment accuracy baseline for a language model or fine-tuned checkpoint"
+    - "Comparing model quality across endpoint providers or inference configurations"
+    - "User wants to measure instruction-following capability (IFEval)"
+    - "User wants reasoning or math evaluation (BBH, GPQA, MATH-500, MuSR)"
+    - "User wants Open LLM Leaderboard v2 results for a model endpoint"
+  target_type: model
+  summary: >-
+    EleutherAI lm-evaluation-harness — academic accuracy benchmarks (MMLU, GSM8K,
+    HellaSwag, BBH, GPQA, IFEval, etc.) against any OpenAI-compatible endpoint.
+    No local model loading. 21 benchmarks across knowledge, reasoning, math,
+    and instruction-following.
+  complements:
+    - guidellm
+    - inspect
+  hints:
+    - >-
+      Loglikelihood benchmarks (MMLU, HellaSwag, ARC, BBH, GPQA, MuSR,
+      open-llm-leaderboard-v2) require a completions endpoint with echo+logprob
+      support — vLLM (/v1/completions) or Ollama in OpenAI-compat mode qualify.
+      OpenRouter and other chat-only endpoints will fail at startup with a clear error.
+    - >-
+      Generation-safe benchmarks (gsm8k, ifeval, triviaqa, nq_open, math_500,
+      generation-suite) work with any endpoint including chat-only (OpenRouter, Groq).
+      Set api_style=chat for those endpoints.
+    - "Leave api_style=auto for vLLM and Ollama — auto-detection reads the endpoint URL."
+    - "Use num_examples to cap evaluation for smoke-testing before committing to a full run."
+    - >-
+      Set hf_datasets_cache to a mounted PVC path to reuse downloaded datasets
+      across runs (avoids re-downloading MMLU/HellaSwag on every job execution).
+  result_interpretation:
+    - "All scores are normalised to [0.0, 1.0] — higher is always better."
+    - >-
+      Multiple-choice random baseline is 0.25 (4-choice) or 0.20 (5-choice).
+      Scores near or below the random baseline indicate endpoint or configuration problems.
+    - >-
+      MMLU ≥ 0.70 indicates strong general knowledge.
+      GSM8K ≥ 0.80 indicates frontier-level math reasoning.
+      IFEval ≥ 0.70 indicates reliable instruction following.
+      HellaSwag ≥ 0.85 indicates strong commonsense.
+
+runtime:
+  k8s:
+    image: quay.io/evalhub/community-lm-eval:latest
+    entrypoint:
+      - python
+      - main.py
+    cpu_request: 500m
+    memory_request: 1Gi
+    cpu_limit: 4000m
+    memory_limit: 4Gi
+  local:
+    # Reserved for local runtime
+
+benchmarks:
+  # -------------------------------------------------------------------------
+  # Generation tasks — generate_until output type.
+  # Work with any OpenAI-compatible endpoint, including chat-only (OpenRouter).
+  # -------------------------------------------------------------------------
+
+  - id: lm-eval/gsm8k
+    name: GSM8K
+    description: >
+      Grade school math word problems requiring multi-step arithmetic reasoning.
+      8,500 problems; scored by exact-match on the final numeric answer.
+      5-shot by default.
+    category: reasoning
+    metrics: [exact_match]
+    tags: [generation-safe, math, reasoning, lm-eval]
+    agent:
+      result_interpretation: >-
+        exact_match: HIGHER is better. Measures ability to produce the correct
+        numeric answer after multi-step arithmetic. Generation-safe — works with
+        any endpoint.
+      score_ranges:
+        - range: "0.0-0.30"
+          meaning: "Weak mathematical reasoning — not suitable for math-intensive tasks"
+        - range: "0.30-0.60"
+          meaning: "Moderate reasoning — handles straightforward arithmetic"
+        - range: "0.60-0.80"
+          meaning: "Strong reasoning — production-grade for most math applications"
+        - range: "0.80-1.0"
+          meaning: "Frontier-level mathematical reasoning"
+
+  - id: lm-eval/ifeval
+    name: IFEval
+    description: >
+      Instruction Following Evaluation — 541 prompts with verifiable
+      formatting and content constraints (e.g. "write exactly 3 bullet points",
+      "do not use commas"). Scored by prompt- and instruction-level accuracy.
+    category: instruction_following
+    metrics: [prompt_level_strict_acc, inst_level_strict_acc]
+    tags: [generation-safe, instruction-following, lm-eval]
+    agent:
+      result_interpretation: >-
+        prompt_level_strict_acc / inst_level_strict_acc: HIGHER is better.
+        Measures whether the model reliably follows explicit formatting and
+        content constraints. Generation-safe — works with any endpoint.
+      score_ranges:
+        - range: "0.0-0.50"
+          meaning: "Unreliable instruction following — not suitable for structured output tasks"
+        - range: "0.50-0.70"
+          meaning: "Moderate — follows simple constraints but struggles with complex multi-part instructions"
+        - range: "0.70-0.85"
+          meaning: "Good instruction following — suitable for most structured generation use cases"
+        - range: "0.85-1.0"
+          meaning: "Excellent — reliably follows complex, multi-constraint instructions"
+
+  - id: lm-eval/triviaqa
+    name: TriviaQA
+    description: >
+      Reading comprehension dataset with 95K question-answer pairs from
+      trivia websites. Zero-shot or few-shot. Scored by exact-match / F1
+      on the short-answer field.
+    category: knowledge
+    metrics: [exact_match]
+    tags: [generation-safe, knowledge, qa, lm-eval]
+
+  - id: lm-eval/nq_open
+    name: Natural Questions Open
+    description: >
+      Open-domain QA from real Google search queries. Questions have
+      short factual answers extracted from Wikipedia. 5-shot.
+    category: knowledge
+    metrics: [exact_match]
+    tags: [generation-safe, knowledge, qa, lm-eval]
+
+  - id: lm-eval/math_500
+    name: MATH-500
+    description: >
+      500-problem subset of MATH covering competition mathematics (algebra,
+      geometry, counting, calculus). Scored by symbolic exact-match on the
+      final boxed answer. 4-shot chain-of-thought.
+    category: reasoning
+    metrics: [exact_match]
+    tags: [generation-safe, math, reasoning, competition, lm-eval]
+
+  # -------------------------------------------------------------------------
+  # Loglikelihood tasks — multiple_choice / loglikelihood output type.
+  # REQUIRE a completions endpoint with echo=True + logprobs support.
+  # vLLM /v1/completions and Ollama in OpenAI-compat mode qualify.
+  # Chat-only endpoints (OpenRouter, Groq) do NOT qualify.
+  # The adapter raises an error at startup if this combination is detected.
+  # -------------------------------------------------------------------------
+
+  - id: lm-eval/mmlu
+    name: MMLU
+    description: >
+      Massive Multitask Language Understanding — 57 academic subjects spanning
+      STEM, humanities, social sciences, and professional domains. 14,000
+      multiple-choice questions; 5-shot by default.
+    category: knowledge
+    metrics: [acc, acc_stderr]
+    tags: [requires-completions, knowledge, academic, lm-eval]
+    agent:
+      result_interpretation: >-
+        acc: HIGHER is better. 4-choice questions; random baseline is 0.25.
+        Requires completions endpoint. Industry benchmark for general knowledge breadth.
+      score_ranges:
+        - range: "0.0-0.35"
+          meaning: "At or below random baseline — check endpoint and api_style configuration"
+        - range: "0.35-0.60"
+          meaning: "Below human performance — significant knowledge gaps across domains"
+        - range: "0.60-0.75"
+          meaning: "Moderate general knowledge — suitable for many enterprise use cases"
+        - range: "0.75-0.90"
+          meaning: "Strong academic knowledge — competitive with leading open models"
+        - range: "0.90-1.0"
+          meaning: "Expert-level general knowledge — frontier model territory"
+
+  - id: lm-eval/mmlu_pro
+    name: MMLU-Pro
+    description: >
+      Harder MMLU variant with 10-choice questions and more reasoning-intensive
+      problems sourced from STEM textbooks and exams. 12,032 questions.
+    category: knowledge
+    metrics: [acc, acc_stderr]
+    tags: [requires-completions, knowledge, academic, hard, lm-eval]
+
+  - id: lm-eval/arc_easy
+    name: ARC-Easy
+    description: >
+      AI2 Reasoning Challenge easy partition — 2,376 multiple-choice science
+      questions answered correctly by retrieval-based methods. 0-shot.
+    category: reasoning
+    metrics: [acc, acc_norm]
+    tags: [requires-completions, reasoning, science, lm-eval]
+
+  - id: lm-eval/arc_challenge
+    name: ARC-Challenge
+    description: >
+      AI2 Reasoning Challenge hard partition — 1,172 science questions that
+      retrieval methods and simple word co-occurrence fail. 0-shot.
+    category: reasoning
+    metrics: [acc, acc_norm]
+    tags: [requires-completions, reasoning, science, hard, lm-eval]
+
+  - id: lm-eval/hellaswag
+    name: HellaSwag
+    description: >
+      Commonsense NLI — choose the most plausible sentence continuation.
+      10,000 validation examples; nearly 95% human accuracy vs ~40% random.
+      0-shot, scored by log-prob normalised by completion length.
+    category: reasoning
+    metrics: [acc, acc_norm]
+    tags: [requires-completions, reasoning, commonsense, lm-eval]
+    agent:
+      result_interpretation: >-
+        acc_norm: HIGHER is better. 4-choice; random baseline 0.25, human ~0.95.
+        Requires completions endpoint. Use acc_norm (length-normalised) as primary.
+      score_ranges:
+        - range: "0.0-0.50"
+          meaning: "At or below random baseline — check configuration"
+        - range: "0.50-0.75"
+          meaning: "Average commonsense understanding — typical of smaller models"
+        - range: "0.75-0.85"
+          meaning: "Strong commonsense — competitive with mid-size open models"
+        - range: "0.85-1.0"
+          meaning: "Near-human commonsense reasoning"
+
+  - id: lm-eval/winogrande
+    name: WinoGrande
+    description: >
+      Large-scale Winograd schema challenge — resolve pronoun ambiguity
+      in commonsense scenarios. 1,267 validation examples. 5-shot.
+    category: reasoning
+    metrics: [acc]
+    tags: [requires-completions, reasoning, commonsense, lm-eval]
+
+  - id: lm-eval/truthfulqa_mc2
+    name: TruthfulQA MC2
+    description: >
+      Tests whether models reproduce common misconceptions. 817 questions across
+      38 categories (health, law, finance, etc.). MC2 variant: scored as the
+      probability mass on all correct answers vs. all answers.
+    category: knowledge
+    metrics: [acc]
+    tags: [requires-completions, knowledge, truthfulness, lm-eval]
+
+  - id: lm-eval/boolq
+    name: BoolQ
+    description: >
+      Boolean question-answering — 3,270 yes/no questions sourced from Google
+      queries paired with Wikipedia passages. 0-shot.
+    category: reasoning
+    metrics: [acc]
+    tags: [requires-completions, reasoning, qa, lm-eval]
+
+  - id: lm-eval/piqa
+    name: PIQA
+    description: >
+      Physical Intuition QA — 2,000 commonsense questions about everyday
+      physical procedures. 0-shot; tests real-world understanding not covered
+      by academic benchmarks.
+    category: reasoning
+    metrics: [acc, acc_norm]
+    tags: [requires-completions, reasoning, commonsense, physical, lm-eval]
+
+  - id: lm-eval/openbookqa
+    name: OpenBookQA
+    description: >
+      500 multiple-choice science questions requiring combining core science
+      facts with common knowledge and reading comprehension. 0-shot.
+    category: knowledge
+    metrics: [acc, acc_norm]
+    tags: [requires-completions, knowledge, science, lm-eval]
+
+  - id: lm-eval/bbh
+    name: BIG-Bench Hard
+    description: >
+      23 challenging BIG-Bench tasks where prior language models performed
+      below human average. Covers logical deduction, causal reasoning,
+      multistep arithmetic, and more. 3-shot chain-of-thought.
+    category: reasoning
+    metrics: [acc_norm]
+    tags: [requires-completions, reasoning, hard, lm-eval]
+
+  - id: lm-eval/gpqa
+    name: GPQA Diamond
+    description: >
+      Graduate-level Google-proof questions in biology, chemistry, and physics.
+      198 questions that PhD-level experts can answer but Googling cannot.
+      0-shot; primary leaderboard variant is "diamond".
+    category: knowledge
+    metrics: [acc_norm]
+    tags: [requires-completions, knowledge, science, expert, hard, lm-eval]
+    agent:
+      result_interpretation: >-
+        acc_norm: HIGHER is better. 4-choice; random baseline 0.25, PhD experts ~0.65.
+        Requires completions endpoint. High-bar signal for frontier scientific reasoning.
+      score_ranges:
+        - range: "0.0-0.30"
+          meaning: "Near random — model lacks expert scientific knowledge"
+        - range: "0.30-0.45"
+          meaning: "Below PhD-level — better than random but not expert-grade"
+        - range: "0.45-0.60"
+          meaning: "Competitive — approaching PhD-level expert performance"
+        - range: "0.60-1.0"
+          meaning: "Expert or frontier-level scientific reasoning"
+
+  - id: lm-eval/musr
+    name: MuSR
+    description: >
+      Multi-Step Soft Reasoning — 756 challenging multiple-choice problems
+      requiring sustained deductive chains across murder mystery, object
+      placement, and team allocation domains.
+    category: reasoning
+    metrics: [acc_norm]
+    tags: [requires-completions, reasoning, multi-step, hard, lm-eval]
+
+  # -------------------------------------------------------------------------
+  # Composite suites
+  # -------------------------------------------------------------------------
+
+  - id: lm-eval/open-llm-leaderboard-v2
+    name: Open LLM Leaderboard v2
+    description: >
+      The six tasks from HuggingFace's Open LLM Leaderboard v2:
+      MMLU-Pro, GPQA Diamond, MATH-500, IFEval, BIG-Bench Hard, and MuSR.
+      Contains loglikelihood tasks — requires a completions endpoint.
+    category: composite
+    metrics: [acc, acc_norm, exact_match]
+    tags: [requires-completions, composite, leaderboard, lm-eval]
+
+  - id: lm-eval/generation-suite
+    name: Generation Safety Suite
+    description: >
+      Generation-only benchmarks safe for any endpoint including chat-only:
+      GSM8K, IFEval, TriviaQA, Natural Questions, and MATH-500.
+      Recommended when using OpenRouter or other chat-only endpoints.
+    category: composite
+    metrics: [exact_match, acc]
+    tags: [generation-safe, composite, lm-eval]
+
+  # -------------------------------------------------------------------------
+  # Custom / pass-through
+  # -------------------------------------------------------------------------
+
+  - id: lm-eval/custom
+    name: Custom lm-eval Task
+    description: >
+      Run any lm-eval task by specifying 'task' in parameters. Supports built-in
+      task names (e.g. "wikitext", "lambada_openai", "crows_pairs_english"),
+      comma-separated lists of tasks, and custom task YAML files loaded via
+      'custom_tasks_path'. The adapter does not pre-validate API style for custom
+      tasks — choose endpoint and api_style appropriately.
+    category: custom
+    metrics: []
+    tags: [custom, lm-eval]
+
+parameters:
+  # ---------------------------------------------------------------------------
+  # Endpoint configuration
+  #
+  # model.url (from the job spec) sets the base URL of the inference server.
+  # Append /v1 if not already present; the adapter adds /completions or
+  # /chat/completions depending on api_style.
+  #
+  # Endpoint examples:
+  #   vLLM:       http://vllm-server:8000
+  #   Ollama:     http://ollama-server:11434
+  #   OpenRouter: https://openrouter.ai/api  (chat-only → set api_style=chat)
+  # ---------------------------------------------------------------------------
+
+  - name: api_key
+    type: string
+    default: null
+    description: >
+      API key for authenticated endpoints. Sets OPENAI_API_KEY in the subprocess.
+      For open vLLM/Ollama endpoints without auth, this can be omitted — a
+      placeholder value is used automatically. Falls back to OPENAI_API_KEY
+      environment variable if not set here.
+
+  - name: api_style
+    type: string
+    default: auto
+    description: >
+      Endpoint API style: 'auto' (default), 'completions', or 'chat'.
+      'auto' detects from model.url: openrouter.ai / groq.com URLs → 'chat';
+      everything else → 'completions'.
+      'completions' selects local-completions (supports loglikelihood tasks).
+      'chat' selects local-chat-completions (generation tasks only).
+      Loglikelihood benchmarks (MMLU, HellaSwag, ARC, BBH, GPQA, MuSR) raise
+      an error at startup when api_style resolves to 'chat'.
+
+  # ---------------------------------------------------------------------------
+  # Model / generation settings
+  # ---------------------------------------------------------------------------
+
+  - name: num_concurrent
+    type: integer
+    default: 4
+    description: >
+      Number of concurrent HTTP requests to the inference endpoint.
+      Increase for high-throughput endpoints (vLLM with many GPU replicas);
+      decrease if the endpoint rate-limits or has low concurrency.
+
+  - name: max_retries
+    type: integer
+    default: 3
+    description: Number of retries per request on transient HTTP errors.
+
+  - name: timeout_http
+    type: integer
+    default: 300
+    description: Per-request HTTP timeout in seconds. Increase for slow or large models.
+
+  - name: max_context_length
+    type: integer
+    default: 4096
+    description: >
+      Maximum total context length (prompt + completion) in tokens.
+      The harness uses this to truncate inputs. Without a local tokenizer
+      the count is approximate; set 'tokenizer' for accurate truncation.
+
+  - name: max_gen_tokens
+    type: integer
+    default: 512
+    description: >
+      Maximum tokens the model may generate per request.
+      Increase for long-form generation tasks (math, code).
+
+  - name: tokenizer
+    type: string
+    default: null
+    description: >
+      Optional HuggingFace model ID for accurate token counting and context
+      truncation (e.g. 'meta-llama/Meta-Llama-3-8B'). When omitted, the harness
+      uses character-count heuristics — sufficient for most short-answer tasks
+      but imprecise for long-context benchmarks. A warning is logged when this
+      is not set. The tokenizer is loaded from the HuggingFace Hub; set
+      HF_TOKEN in the environment if the model is gated.
+
+  - name: tokenizer_backend
+    type: string
+    default: "None"
+    description: >
+      Tokenizer backend used by the harness: 'None' (default, send raw strings),
+      'huggingface' (requires 'tokenizer'), 'tiktoken', or 'auto' (probes the
+      endpoint's /tokenize API). 'None' is correct for all OpenAI-compatible
+      endpoints; only change this if the endpoint exposes a /tokenize path.
+
+  - name: batch_size
+    type: integer
+    default: 1
+    description: >
+      Number of requests sent per batch. For API endpoints this is typically 1
+      (the server handles batching internally). Increase only if the endpoint
+      explicitly supports batched completions requests.
+
+  - name: gen_kwargs
+    type: string
+    default: null
+    description: >
+      Comma-separated generation kwargs forwarded to the API payload, overriding
+      task YAML defaults. Format: 'key=value,key=value'.
+      Examples: 'temperature=0.0,do_sample=False'
+                'temperature=0.6,top_p=0.9,do_sample=True'
+      Keys must match the OpenAI completions request body (temperature, top_p,
+      top_k, repetition_penalty, stop, seed, etc.).
+
+  - name: apply_chat_template
+    type: boolean
+    default: false
+    description: >
+      Apply the model's chat template to prompts before sending. Required for
+      instruction-tuned models accessed via local-chat-completions. Set to true
+      when api_style=chat or when using a chat endpoint with instruction models.
+
+  - name: system_instruction
+    type: string
+    default: null
+    description: >
+      System prompt prepended to every request. Useful for instruction-tuned
+      models that expect a system role (e.g. 'You are a helpful assistant.').
+
+  # ---------------------------------------------------------------------------
+  # Evaluation settings
+  # ---------------------------------------------------------------------------
+
+  - name: num_fewshot
+    type: integer
+    default: null
+    description: >
+      Override the number of few-shot examples. When null (default), each task
+      uses its built-in default (e.g. 5-shot for MMLU, 0-shot for HellaSwag).
+      Set to 0 for zero-shot evaluation across all tasks.
+
+  # ---------------------------------------------------------------------------
+  # Custom tasks
+  # ---------------------------------------------------------------------------
+
+  - name: task
+    type: string
+    default: null
+    description: >
+      Required for lm-eval/custom. One or more lm-eval task names, comma-
+      separated (e.g. 'wikitext', 'lambada_openai,crows_pairs_english').
+      Also accepts full task YAML paths or lm-eval group/tag names.
+      Ignored for all built-in benchmark IDs.
+
+  - name: custom_tasks_path
+    type: string
+    default: null
+    description: >
+      Path to a directory containing custom task YAML files (passed as
+      --include_path to lm_eval). Mount the directory into the container at a
+      known path (e.g. /data/tasks) and set this parameter to that path.
+      Custom tasks in this directory are addressable by their 'task:' YAML key.
+
+  # ---------------------------------------------------------------------------
+  # Dataset source
+  # ---------------------------------------------------------------------------
+
+  - name: dataset_source
+    type: string
+    default: hub
+    description: >
+      Where to load evaluation datasets from:
+        'hub'   — HuggingFace Hub (default; uses HF cache, respects HF_TOKEN).
+        'local' — local filesystem; set dataset path in custom task YAML's
+                  dataset_kwargs.data_dir pointing to a mounted volume.
+        's3'    — S3-compatible storage; set s3_endpoint + AWS credentials
+                  and reference s3:// URIs in dataset_kwargs.data_files.
+      For built-in tasks (MMLU, etc.) the dataset path is baked in; only
+      'hub' is applicable. Use 'local' or 's3' with lm-eval/custom tasks.
+
+  - name: hf_datasets_cache
+    type: string
+    default: null
+    description: >
+      Override the HuggingFace datasets cache directory (HF_DATASETS_CACHE).
+      Mount a PVC at this path to reuse downloaded datasets across runs and
+      avoid re-downloading on every job execution.
+
+  - name: s3_endpoint
+    type: string
+    default: null
+    description: >
+      S3-compatible endpoint URL for dataset_source=s3.
+      Example: 'https://s3.us-east-1.amazonaws.com' or 'http://minio:9000'.
+
+  - name: aws_access_key_id
+    type: string
+    default: null
+    description: AWS / S3-compatible access key ID for dataset_source=s3.
+
+  - name: aws_secret_access_key
+    type: string
+    default: null
+    description: AWS / S3-compatible secret access key for dataset_source=s3.
+
+  # ---------------------------------------------------------------------------
+  # Runtime
+  # ---------------------------------------------------------------------------
+
+  - name: subprocess_timeout
+    type: integer
+    default: 7200
+    description: >
+      Maximum wall-clock time (seconds) for the lm_eval subprocess before the
+      adapter kills it and reports failure. Default 2 hours. Increase for large
+      benchmark suites (full MMLU) or slow endpoints.
+
+  - name: log_level
+    type: string
+    default: INFO
+    description: Logging verbosity for the adapter process (DEBUG, INFO, WARNING, ERROR).
+
+  - name: languages
+    type: array
+    default: [en]
+    description: ISO 639 language codes for EvalCard metadata.
+
+  - name: languages_count
+    type: integer
+    default: 1
+    description: Number of languages evaluated, for EvalCard metadata.

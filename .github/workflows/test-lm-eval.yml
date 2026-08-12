@@ -1,0 +1,149 @@
+name: Test LM Evaluation Harness
+
+on:
+  push:
+    branches: [main]
+    paths: ['adapters/lm-eval/**']
+  pull_request:
+    branches: [main]
+    paths: ['adapters/lm-eval/**']
+  workflow_dispatch:
+
+jobs:
+  # ── Integration tests (fully mocked — no lm_eval install required) ──────────
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install test dependencies
+        working-directory: adapters/lm-eval
+        run: |
+          SDK_DEP=$(grep 'eval-hub-sdk' requirements.txt)
+          uv pip install --system "$SDK_DEP" -r requirements-test.txt
+
+      - name: Run integration tests
+        working-directory: adapters/lm-eval
+        run: pytest tests/ -v -m integration
+
+  # ── Local tests against Ollama (generation tasks via chat endpoint) ──────────
+  test-local-ollama:
+    runs-on: ubuntu-latest
+    env:
+      OLLAMA_MODELS: /home/runner/.ollama-models
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install all dependencies
+        working-directory: adapters/lm-eval
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Cache Ollama model
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.OLLAMA_MODELS }}
+          key: ollama-qwen2.5-0.5b
+
+      - name: Start Ollama and pull model
+        run: |
+          sudo systemctl stop ollama 2>/dev/null || true
+          OLLAMA_MODELS=${{ env.OLLAMA_MODELS }} ollama serve &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:11434/api/tags >/dev/null && break
+            sleep 1
+          done
+          ollama pull qwen2.5:0.5b
+
+      - name: Run local tests against Ollama
+        working-directory: adapters/lm-eval
+        # Ollama exposes both /v1/completions and /v1/chat/completions.
+        # Generation tasks (gsm8k, ifeval) use local-completions by default.
+        # Exit code 5 means no tests collected (local tests not yet written) — treated as pass.
+        run: pytest tests/ -v -s --log-cli-level=INFO -m "local and openai_endpoint" || [ $? -eq 5 ]
+        env:
+          LMEVAL_TEST_BASE_URL: http://localhost:11434
+          LMEVAL_TEST_MODEL: qwen2.5:0.5b
+          OPENAI_API_KEY: dummy
+
+  # ── Local tests against vLLM-CPU (completions endpoint + loglikelihood) ──────
+  test-local-vllm-cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install all dependencies
+        working-directory: adapters/lm-eval
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-qwen2.5-0.5b-instruct
+
+      - name: Start vLLM-CPU server
+        run: |
+          docker run --rm --detach \
+            --name vllm-cpu \
+            --shm-size=4g \
+            -p 8000:8000 \
+            -v ~/.cache/huggingface:/root/.cache/huggingface \
+            -e VLLM_CPU_KVCACHE_SPACE=4 \
+            docker.io/vllm/vllm-openai-cpu:v0.19.1 \
+            --model Qwen/Qwen2.5-0.5B-Instruct \
+            --dtype bfloat16
+          docker logs -f vllm-cpu &
+          LOGS_PID=$!
+          echo "Waiting for vLLM health endpoint..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+              echo "vLLM ready (after ${i}x5s)"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "vLLM failed to start within 300s"
+              kill $LOGS_PID 2>/dev/null || true
+              exit 1
+            fi
+            sleep 5
+          done
+          kill $LOGS_PID 2>/dev/null || true
+          sudo chown -R $(id -u):$(id -g) ~/.cache/huggingface
+
+      - name: Run local tests against vLLM completions endpoint
+        working-directory: adapters/lm-eval
+        # vLLM /v1/completions supports echo=True + logprobs — exercises the
+        # loglikelihood scoring path used by MMLU, HellaSwag, ARC, etc.
+        # Exit code 5 means no tests collected — treated as pass.
+        run: pytest tests/ -v -s --log-cli-level=INFO -m "local and openai_endpoint" || [ $? -eq 5 ]
+        env:
+          LMEVAL_TEST_BASE_URL: http://localhost:8000
+          LMEVAL_TEST_MODEL: Qwen/Qwen2.5-0.5B-Instruct
+          OPENAI_API_KEY: dummy
