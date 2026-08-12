@@ -15,6 +15,7 @@ _REDACT_PATTERN = re.compile(r"((?:api_key|auth_token|token|hf_token)=)[^,]*")
 
 
 def get_lmeval_version() -> str:
+    """Return the installed lm_eval package version, or 'unknown' on failure."""
     try:
         from importlib.metadata import version
 
@@ -69,6 +70,7 @@ def build_cmd(
     apply_chat_template: bool,
     system_instruction: str | None,
 ) -> list[str]:
+    """Build the lm_eval CLI command list from evaluation parameters."""
     cmd = [
         "lm_eval",
         "--model",

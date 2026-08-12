@@ -396,47 +396,57 @@ from _tasks import (
 
 
 def test_resolve_known_generation_task():
+    """GSM8K maps to the 'gsm8k' lm-eval task name."""
     assert resolve_tasks("lm-eval/gsm8k", None) == "gsm8k"
 
 
 def test_resolve_known_loglikelihood_task():
+    """MMLU maps to the 'mmlu' lm-eval task name."""
     assert resolve_tasks("lm-eval/mmlu", None) == "mmlu"
 
 
 def test_resolve_composite_suite():
+    """generation-suite expands to a comma-separated list that includes gsm8k and ifeval."""
     tasks = resolve_tasks("lm-eval/generation-suite", None)
     assert "gsm8k" in tasks
     assert "ifeval" in tasks
 
 
 def test_resolve_custom_with_override():
+    """lm-eval/custom with a task_override passes through the override unchanged."""
     assert resolve_tasks("lm-eval/custom", "wikitext") == "wikitext"
 
 
 def test_resolve_custom_without_override_raises():
+    """lm-eval/custom without a task_override raises ValueError."""
     with pytest.raises(ValueError, match="requires a 'task' parameter"):
         resolve_tasks("lm-eval/custom", None)
 
 
 def test_resolve_excluded_task_raises():
+    """HumanEval is excluded; resolve_tasks raises ValueError with the exclusion reason."""
     with pytest.raises(ValueError, match="sandboxed Python code execution"):
         resolve_tasks("lm-eval/humaneval", None)
 
 
 def test_resolve_unknown_raises():
+    """An unregistered benchmark ID raises ValueError."""
     with pytest.raises(ValueError, match="Unknown benchmark"):
         resolve_tasks("lm-eval/nonexistent", None)
 
 
 def test_detect_api_style_auto_defaults_completions():
+    """Auto-detection defaults to 'completions' for a plain vLLM host URL."""
     assert detect_api_style({}, "http://vllm:8000") == "completions"
 
 
 def test_detect_api_style_openrouter_auto():
+    """Auto-detection returns 'chat' when the URL contains 'openrouter.ai'."""
     assert detect_api_style({}, "https://openrouter.ai/api/v1") == "chat"
 
 
 def test_detect_api_style_explicit_override():
+    """An explicit api_style parameter overrides URL-based auto-detection."""
     assert detect_api_style({"api_style": "chat"}, "http://vllm:8000") == "chat"
     assert (
         detect_api_style({"api_style": "completions"}, "https://openrouter.ai/api/v1")
@@ -445,21 +455,24 @@ def test_detect_api_style_explicit_override():
 
 
 def test_preflight_check_passes_generation_with_chat():
-    # Should not raise
+    """Generation-safe benchmarks pass the preflight check with a chat endpoint."""
     preflight_check("lm-eval/gsm8k", "chat")
     preflight_check("lm-eval/generation-suite", "chat")
 
 
 def test_preflight_check_raises_loglikelihood_with_chat():
+    """Loglikelihood benchmarks paired with a chat endpoint raise ValueError."""
     with pytest.raises(ValueError, match="loglikelihood"):
         preflight_check("lm-eval/mmlu", "chat")
 
 
 def test_preflight_check_passes_loglikelihood_with_completions():
+    """Loglikelihood benchmarks paired with a completions endpoint pass the preflight check."""
     preflight_check("lm-eval/mmlu", "completions")
 
 
 def test_build_endpoint_url_appends_completions():
+    """A bare host URL gets /v1/completions appended for the completions API style."""
     assert (
         build_endpoint_url("http://vllm:8000", "completions")
         == "http://vllm:8000/v1/completions"
@@ -467,6 +480,7 @@ def test_build_endpoint_url_appends_completions():
 
 
 def test_build_endpoint_url_appends_chat():
+    """A bare host URL gets /v1/chat/completions appended for the chat API style."""
     assert (
         build_endpoint_url("http://vllm:8000", "chat")
         == "http://vllm:8000/v1/chat/completions"
@@ -474,6 +488,7 @@ def test_build_endpoint_url_appends_chat():
 
 
 def test_build_endpoint_url_with_v1_already():
+    """A URL that already ends with /v1 does not get a duplicate /v1 segment."""
     assert (
         build_endpoint_url("http://vllm:8000/v1", "completions")
         == "http://vllm:8000/v1/completions"
@@ -486,6 +501,7 @@ from _results import compute_overall_score, extract_evaluation_results
 
 
 def test_extract_results_basic():
+    """Single-metric result is correctly parsed, including confidence interval and sample count."""
     results = extract_evaluation_results(CANNED_RESULTS)
     assert len(results) == 1
     r = results[0]
@@ -496,6 +512,7 @@ def test_extract_results_basic():
 
 
 def test_extract_results_multiple_metrics():
+    """Multiple metrics per task are all extracted; stderr entries are excluded."""
     results = extract_evaluation_results(CANNED_MMLU_RESULTS)
     metric_names = {r.metric_name for r in results}
     assert "mmlu.acc" in metric_names
@@ -505,6 +522,7 @@ def test_extract_results_multiple_metrics():
 
 
 def test_extract_results_strips_fewshot_suffix():
+    """Task names with a '|N' few-shot suffix are normalised by stripping the suffix."""
     raw = {
         "results": {
             "gsm8k|5": {
@@ -518,6 +536,7 @@ def test_extract_results_strips_fewshot_suffix():
 
 
 def test_compute_overall_score_normalises():
+    """A score already in [0, 1] is returned unchanged."""
     from evalhub.adapter import EvaluationResult
 
     results = [
@@ -533,6 +552,7 @@ def test_compute_overall_score_normalises():
 
 
 def test_compute_overall_score_percent_normalised():
+    """A score expressed as a percentage (> 1) is divided by 100 before returning."""
     from evalhub.adapter import EvaluationResult
 
     results = [
@@ -548,4 +568,5 @@ def test_compute_overall_score_percent_normalised():
 
 
 def test_compute_overall_score_empty_returns_none():
+    """An empty result list returns None rather than raising."""
     assert compute_overall_score([]) is None
