@@ -70,8 +70,10 @@ def extract_evaluation_results(raw: dict[str, Any]) -> list[EvaluationResult]:
             if "," not in key:
                 continue
             metric_base, filter_name = key.rsplit(",", 1)
-            # Skip the stderr companion entries.
-            if filter_name == "stderr":
+            # Skip stderr companion entries in both formats:
+            #   three-part: "exact_match,none,stderr" → filter_name == "stderr"
+            #   two-part:   "acc_stderr,none"         → metric_base ends with "_stderr"
+            if filter_name == "stderr" or metric_base.endswith("_stderr"):
                 continue
 
             # lm-eval uses two stderr key formats depending on task/version:
@@ -82,8 +84,8 @@ def extract_evaluation_results(raw: dict[str, Any]) -> list[EvaluationResult]:
                 stderr = metrics.get(f"{metric_base}_stderr,{filter_name}")
 
             confidence_interval: tuple[float, float] | None = None
-            if isinstance(stderr, float):
-                margin = 1.96 * stderr
+            if isinstance(stderr, (int, float)):
+                margin = 1.96 * float(stderr)
                 confidence_interval = (float(val) - margin, float(val) + margin)
 
             # Strip the "|N" fewshot suffix lm-eval appends to task names.

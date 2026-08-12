@@ -5,14 +5,14 @@ access is required. Never mocks the evalhub-sdk layer — tests adapter plumbing
 """
 
 import json
-import shutil
 from pathlib import Path
-from unittest.mock import create_autospec
 
 import pytest
-from evalhub.adapter import JobCallbacks, JobPhase, JobStatus, OCIArtifactResult
+from evalhub.adapter import JobPhase, JobStatus
 
 from main import LMEvalAdapter
+
+# Shared fixtures (adapter, mock_callbacks) and markers are defined in conftest.py.
 
 # Canned results matching lm-eval's results JSON structure.
 CANNED_RESULTS = {
@@ -44,24 +44,6 @@ CANNED_MMLU_RESULTS = {
     "n-samples": {"mmlu": {"original": 5, "effective": 5}},
     "versions": {"mmlu": 2.0},
 }
-
-
-@pytest.fixture
-def adapter(tmp_path):
-    meta_dir = tmp_path / "meta"
-    meta_dir.mkdir()
-    shutil.copy(Path("meta/job.json"), meta_dir / "job.json")
-    return LMEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
-
-
-@pytest.fixture
-def mock_callbacks():
-    callbacks = create_autospec(JobCallbacks)
-    callbacks.create_oci_artifact.return_value = OCIArtifactResult(
-        digest="sha256:fake",
-        reference="fake:latest",
-    )
-    return callbacks
 
 
 # ── Happy path ────────────────────────────────────────────────────────────────
@@ -184,7 +166,7 @@ def test_mmlu_with_explicit_chat_style_raises(tmp_path, mock_callbacks):
     (meta_dir / "job.json").write_text(json.dumps(job))
     adapter = LMEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
 
-    with pytest.raises(ValueError, match="[Cc]hat-only endpoints"):
+    with pytest.raises(ValueError, match=r"[Cc]hat-only endpoints"):
         adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
 
 

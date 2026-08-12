@@ -264,6 +264,12 @@ build-and-push-deepeval: image-deepeval push-deepeval
 build-and-push-swebench: image-swebench push-swebench
 	@echo "✅ SWE-bench adapter built and pushed"
 
+.PHONY: build-and-push-lm-eval
+build-and-push-lm-eval:
+	$(MAKE) image-lm-eval
+	$(MAKE) push-lm-eval
+	@echo "✅ LM Evaluation Harness adapter built and pushed"
+
 .PHONY: build-and-push-all
 build-and-push-all: images push-images
 	@echo "✅ All adapters built and pushed"
@@ -390,10 +396,6 @@ clean-lm-eval:
 build-and-push-ruler: image-ruler push-ruler
 	@echo "✅ RULER adapter built and pushed"
 
-.PHONY: build-and-push-lm-eval
-build-and-push-lm-eval: image-lm-eval push-lm-eval
-	@echo "✅ LM Evaluation Harness adapter built and pushed"
-
 .PHONY: test-ruler
 test-ruler:
 	@echo "Running RULER adapter tests..."
@@ -409,5 +411,5 @@ test-lm-eval:
 	cd adapters/lm-eval && \
 	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
-	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -m integration -v
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -m "not local" -v
 	@echo "✅ LM Evaluation Harness tests passed"
