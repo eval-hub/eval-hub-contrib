@@ -113,8 +113,6 @@ image-inspect:
 	$(BUILD_TOOL) build -t $(IMAGE_INSPECT) -f Containerfile .
 	@echo "✅ Built: $(IMAGE_INSPECT)"
 
-.PHONY: images
-images: image-lighteval image-guidellm image-mteb image-inspect
 .PHONY: image-deepeval
 image-deepeval:
 	@echo "Building DeepEval adapter image..."
@@ -122,8 +120,6 @@ image-deepeval:
 	$(BUILD_TOOL) build -t $(IMAGE_DEEPEVAL) -f Containerfile .
 	@echo "✅ Built: $(IMAGE_DEEPEVAL)"
 
-.PHONY: images
-images: image-lighteval image-guidellm image-mteb image-deepeval
 .PHONY: image-ragas
 image-ragas:
 	@echo "Building RAGAS adapter image..."
@@ -167,16 +163,12 @@ push-inspect:
 	$(BUILD_TOOL) push $(IMAGE_INSPECT)
 	@echo "✅ Pushed: $(IMAGE_INSPECT)"
 
-.PHONY: push-images
-push-images: push-lighteval push-guidellm push-mteb push-inspect
 .PHONY: push-deepeval
 push-deepeval:
 	@echo "Pushing DeepEval adapter image..."
 	$(BUILD_TOOL) push $(IMAGE_DEEPEVAL)
 	@echo "✅ Pushed: $(IMAGE_DEEPEVAL)"
 
-.PHONY: push-images
-push-images: push-lighteval push-guidellm push-mteb push-deepeval
 .PHONY: push-ragas
 push-ragas:
 	@echo "Pushing RAGAS adapter image..."
@@ -218,16 +210,12 @@ clean-inspect:
 	$(BUILD_TOOL) rmi $(IMAGE_INSPECT) 2>/dev/null || true
 	@echo "✅ Removed: $(IMAGE_INSPECT)"
 
-.PHONY: clean-images
-clean-images: clean-lighteval clean-guidellm clean-mteb clean-inspect
 .PHONY: clean-deepeval
 clean-deepeval:
 	@echo "Removing DeepEval adapter image..."
 	$(BUILD_TOOL) rmi $(IMAGE_DEEPEVAL) 2>/dev/null || true
 	@echo "✅ Removed: $(IMAGE_DEEPEVAL)"
 
-.PHONY: clean-images
-clean-images: clean-lighteval clean-guidellm clean-mteb clean-deepeval
 .PHONY: clean-ragas
 clean-ragas:
 	@echo "Removing RAGAS adapter image..."
@@ -246,22 +234,45 @@ clean-images: clean-lighteval clean-guidellm clean-mteb clean-inspect clean-deep
 
 # Development targets
 .PHONY: build-and-push-lighteval
-build-and-push-lighteval: image-lighteval push-lighteval
+build-and-push-lighteval:
+	$(MAKE) image-lighteval
+	$(MAKE) push-lighteval
 	@echo "✅ LightEval adapter built and pushed"
 
 .PHONY: build-and-push-guidellm
-build-and-push-guidellm: image-guidellm push-guidellm
+build-and-push-guidellm:
+	$(MAKE) image-guidellm
+	$(MAKE) push-guidellm
 	@echo "✅ GuideLLM adapter built and pushed"
 
 .PHONY: build-and-push-mteb
-build-and-push-mteb: image-mteb push-mteb
+build-and-push-mteb:
+	$(MAKE) image-mteb
+	$(MAKE) push-mteb
 	@echo "✅ MTEB adapter built and pushed"
 
+.PHONY: build-and-push-inspect
+build-and-push-inspect:
+	$(MAKE) image-inspect
+	$(MAKE) push-inspect
+	@echo "✅ Inspect AI adapter built and pushed"
+
 .PHONY: build-and-push-deepeval
-build-and-push-deepeval: image-deepeval push-deepeval
+build-and-push-deepeval:
+	$(MAKE) image-deepeval
+	$(MAKE) push-deepeval
 	@echo "✅ DeepEval adapter built and pushed"
+
+.PHONY: build-and-push-ragas
+build-and-push-ragas:
+	$(MAKE) image-ragas
+	$(MAKE) push-ragas
+	@echo "✅ RAGAS adapter built and pushed"
+
 .PHONY: build-and-push-swebench
-build-and-push-swebench: image-swebench push-swebench
+build-and-push-swebench:
+	$(MAKE) image-swebench
+	$(MAKE) push-swebench
 	@echo "✅ SWE-bench adapter built and pushed"
 
 .PHONY: build-and-push-lm-eval
@@ -320,8 +331,6 @@ test-inspect:
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ Inspect AI tests passed"
 
-.PHONY: tests
-tests: test-guidellm test-lighteval test-mteb test-clear test-inspect
 .PHONY: test-deepeval
 test-deepeval:
 	@echo "Running DeepEval adapter tests..."
@@ -331,8 +340,6 @@ test-deepeval:
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ DeepEval tests passed"
 
-.PHONY: tests
-tests: test-guidellm test-lighteval test-mteb test-clear test-deepeval
 .PHONY: test-ragas
 test-ragas:
 	@echo "Running RAGAS adapter tests..."
@@ -342,9 +349,6 @@ test-ragas:
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ RAGAS tests passed"
 
-.PHONY: tests
-tests: test-lighteval test-guidellm test-mteb test-clear test-inspect test-deepeval test-ragas test-swebench test-ruler test-lm-eval
-	@echo "✅ All adapter tests passed"
 .PHONY: test-swebench
 test-swebench:
 	@echo "Running SWE-bench adapter tests..."
@@ -413,3 +417,7 @@ test-lm-eval:
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -m "not local" -v
 	@echo "✅ LM Evaluation Harness tests passed"
+
+.PHONY: tests
+tests: test-lighteval test-guidellm test-mteb test-clear test-inspect test-deepeval test-ragas test-swebench test-ruler test-lm-eval
+	@echo "✅ All adapter tests passed"
