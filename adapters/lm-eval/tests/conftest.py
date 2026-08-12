@@ -14,6 +14,7 @@ from main import LMEvalAdapter
 
 
 def pytest_configure(config):
+    """Register custom pytest markers for integration, local, and endpoint tests."""
     config.addinivalue_line(
         "markers", "integration: integration tests for adapter plumbing"
     )
@@ -27,6 +28,7 @@ def pytest_configure(config):
 
 @pytest.fixture
 def adapter(tmp_path):
+    """Return a LMEvalAdapter loaded from a copy of the canonical job.json fixture."""
     meta_dir = tmp_path / "meta"
     meta_dir.mkdir()
     shutil.copy(Path("meta/job.json"), meta_dir / "job.json")
@@ -35,6 +37,7 @@ def adapter(tmp_path):
 
 @pytest.fixture
 def mock_callbacks():
+    """Return a mock JobCallbacks with a pre-configured OCI artifact response."""
     callbacks = create_autospec(JobCallbacks)
     callbacks.create_oci_artifact.return_value = OCIArtifactResult(
         digest="sha256:fake",

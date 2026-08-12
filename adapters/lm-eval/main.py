@@ -101,6 +101,7 @@ _ABILITY_MAP: dict[str, str] = {
 
 
 def _benchmark_ability(benchmark_id: str) -> str:
+    """Return the EvalCard ability category string for a given benchmark ID."""
     return _ABILITY_MAP.get(benchmark_id, "custom")
 
 
@@ -117,6 +118,7 @@ class LMEvalAdapter(FrameworkAdapter):
     """lm-evaluation-harness adapter for OpenAI-compatible inference endpoints."""
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
+        """Execute the lm-eval benchmark and return structured JobResults."""
         start_time = time.time()
         params = config.parameters or {}
         logger.info(
@@ -370,13 +372,16 @@ class LMEvalAdapter(FrameworkAdapter):
     # ── Delegators — thin wrappers for test monkeypatching ───────────────────
 
     def _run_lmeval(self, cmd: list[str], env: dict[str, str], timeout: int) -> None:
+        """Thin wrapper around run_lmeval — isolated for test monkeypatching."""
         run_lmeval(cmd, env, timeout)
 
     def _parse_results(self, output_dir: Path) -> dict:
+        """Locate and parse lm_eval results JSON — isolated for test monkeypatching."""
         return parse_results_file(find_results_file(output_dir))
 
     @staticmethod
     def _total_samples(results: list) -> int | None:
+        """Sum unique per-task sample counts, deduplicating across multiple metric rows."""
         # Deduplicate by task name: each task carries the same num_samples on
         # every metric row, so summing all rows would multiply the count by the
         # number of metrics per task (e.g. HellaSwag has acc + acc_norm = 2×).

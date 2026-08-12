@@ -397,7 +397,9 @@ clean-lm-eval:
 	@echo "✅ Removed: $(IMAGE_LMEVAL)"
 
 .PHONY: build-and-push-ruler
-build-and-push-ruler: image-ruler push-ruler
+build-and-push-ruler:
+	$(MAKE) image-ruler
+	$(MAKE) push-ruler
 	@echo "✅ RULER adapter built and pushed"
 
 .PHONY: test-ruler

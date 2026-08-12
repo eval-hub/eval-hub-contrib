@@ -45,6 +45,7 @@ def find_results_file(output_dir: Path) -> Path:
 
 
 def parse_results_file(results_file: Path) -> dict[str, Any]:
+    """Load and return the lm_eval results JSON from disk."""
     with open(results_file) as f:
         return json.load(f)
 
