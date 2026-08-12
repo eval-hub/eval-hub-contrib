@@ -397,7 +397,8 @@ parameters:
     default: auto
     description: >
       Endpoint API style: 'auto' (default), 'completions', or 'chat'.
-      'auto' detects from model.url: openrouter.ai / groq.com / together.ai URLs → 'chat';
+      'auto' detects from the resolved endpoint URL (model.url, or base_url if
+      model.url is unset): openrouter.ai / groq.com / together.ai → 'chat';
       everything else → 'completions'. Any other value raises a ValueError at startup.
       'completions' selects local-completions (supports loglikelihood tasks).
       'chat' selects local-chat-completions (generation tasks only).
