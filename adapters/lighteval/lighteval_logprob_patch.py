@@ -151,11 +151,25 @@ def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelRespon
 def _apply_patch() -> None:
     try:
         from lighteval.models.endpoints.litellm_model import LiteLLMClient  # noqa: PLC0415
-
-        LiteLLMClient.loglikelihood = _loglikelihood_via_completions  # type: ignore[method-assign]
-        logger.info("loglikelihood patch applied to LiteLLMClient")
     except ImportError as exc:
-        logger.warning("Could not apply loglikelihood patch: %s", exc)
+        logger.warning("Could not import LiteLLMClient — patch skipped: %s", exc)
+        return
+
+    # Guard: only patch when the method still raises NotImplementedError so that
+    # a future lighteval release that ships a real implementation is not clobbered.
+    import inspect as _inspect
+    try:
+        src = _inspect.getsource(LiteLLMClient.loglikelihood)
+        if "NotImplementedError" not in src:
+            logger.info(
+                "loglikelihood patch skipped — LiteLLMClient already has an implementation"
+            )
+            return
+    except (OSError, TypeError):
+        pass  # can't read source (compiled); apply the patch anyway
+
+    LiteLLMClient.loglikelihood = _loglikelihood_via_completions  # type: ignore[method-assign]
+    logger.info("loglikelihood patch applied to LiteLLMClient")
 
 
 # ---------------------------------------------------------------------------

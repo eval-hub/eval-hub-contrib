@@ -54,9 +54,9 @@ class LightEvalAdapter(FrameworkAdapter):
         "commonsense_reasoning": ["hellaswag", "winogrande", "openbookqa", "arc:easy"],
         "scientific_reasoning": ["arc:easy", "arc:challenge"],
         "physical_commonsense": ["piqa"],
-        "truthfulness": ["truthfulqa:mc", "truthfulqa:generation"],
-        "math": ["gsm8k", "math:algebra", "math:counting_and_probability"],
-        "knowledge": ["mmlu", "triviaqa"],
+        "truthfulness": ["truthfulqa:mc"],
+        "math": ["gsm8k", "math:algebra", "math:counting_and_probability", "math_500"],
+        "knowledge": ["mmlu", "triviaqa", "openbookqa"],
         "language_understanding": ["glue:cola", "glue:sst2", "glue:mrpc"],
     }
 
@@ -247,8 +247,10 @@ class LightEvalAdapter(FrameworkAdapter):
 
     # Task name aliases: provider.yaml ID → lighteval task registry name.
     # Add entries here when the EvalHub benchmark ID differs from the lighteval CLI name.
+    # Note: truthfulqa:generation is NOT aliased — its correct registry name varies
+    # across lighteval releases. Submit it as a direct task ID and handle the
+    # resulting ValueError at the lighteval CLI level if unavailable.
     TASK_ALIASES: dict[str, str] = {
-        "truthfulqa:generation": "truthfulqa:mc2",   # generative variant unavailable in 0.13.0
         "math:counting_and_probability": "math:counting_and_prob",
     }
 

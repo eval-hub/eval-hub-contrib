@@ -552,7 +552,10 @@ def test_run_lighteval_cmd_formats_generation_parameters(adapter, tmp_path, monk
         benchmark_config=adapter.job_spec.parameters,
     )
 
-    model_args = captured["cmd"][3]
+    # _lighteval_cmd may be ["python", "<patch>"] or ["lighteval"] depending on
+    # whether the logprob patch script is present.  Find model_args by content
+    # instead of relying on a fixed positional index.
+    model_args = next(arg for arg in captured["cmd"] if arg.startswith("model_name="))
 
     assert "generation_parameters={temperature:0.1,max_new_tokens:512" in model_args
     assert 'stop_tokens:["\\n", "###"]' in model_args
@@ -654,22 +657,48 @@ def test_max_samples_from_num_examples_forwarded(adapter, monkeypatch, tmp_path)
 @pytest.mark.integration
 def test_task_alias_applied_to_single_benchmark(adapter):
     """TASK_ALIASES remaps benchmark IDs that differ from the lighteval registry."""
-    # truthfulqa:generation → truthfulqa:mc2 in lighteval 0.13.0
-    tasks = adapter._parse_benchmark_tasks("truthfulqa:generation", {})
-    assert tasks == ["truthfulqa:mc2"], (
-        "truthfulqa:generation must be aliased to truthfulqa:mc2"
+    # math:counting_and_probability → math:counting_and_prob
+    tasks = adapter._parse_benchmark_tasks("math:counting_and_probability", {})
+    assert tasks == ["math:counting_and_prob"], (
+        "math:counting_and_probability must be aliased to math:counting_and_prob"
     )
+
+
+@pytest.mark.integration
+def test_truthfulqa_generation_not_aliased(adapter):
+    """truthfulqa:generation has no alias — its registry name is version-dependent."""
+    tasks = adapter._parse_benchmark_tasks("truthfulqa:generation", {})
+    # Pass-through unchanged; the lighteval CLI will raise if unavailable
+    assert tasks == ["truthfulqa:generation"]
 
 
 @pytest.mark.integration
 def test_task_alias_applied_in_category(adapter):
     """TASK_ALIASES is applied when expanding a category to individual tasks."""
-    # math category includes math:counting_and_probability which has an alias
     tasks = adapter._parse_benchmark_tasks("math", {})
     assert "math:counting_and_prob" in tasks, (
         "math:counting_and_probability should be aliased to math:counting_and_prob"
     )
     assert "math:counting_and_probability" not in tasks
+    # SUPPORTED_TASKS["math"] must include math_500 as declared in provider.yaml
+    assert "math_500" in tasks, "math_500 must be in the math category suite"
+
+
+@pytest.mark.integration
+def test_knowledge_category_includes_openbookqa(adapter):
+    """knowledge suite must include openbookqa as declared in provider.yaml."""
+    tasks = adapter._parse_benchmark_tasks("knowledge", {})
+    assert "openbookqa" in tasks, "openbookqa must be in the knowledge category suite"
+
+
+@pytest.mark.integration
+def test_truthfulness_category_excludes_generation(adapter):
+    """truthfulness suite must not contain truthfulqa:generation (no stable alias)."""
+    tasks = adapter._parse_benchmark_tasks("truthfulness", {})
+    assert "truthfulqa:generation" not in tasks, (
+        "truthfulqa:generation has no stable alias and must not be in the truthfulness suite"
+    )
+    assert "truthfulqa:mc" in tasks
 
 
 @pytest.mark.integration

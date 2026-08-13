@@ -50,6 +50,33 @@ agent:
       endpoint does not expose /v1/completions with echo/logprobs, use
       lm-evaluation-harness instead.
 
+parameters:
+  provider:
+    type: string
+    default: endpoint
+    description: >
+      Model provider backend. Use "endpoint" (default) for any OpenAI-compatible
+      API server (vLLM, Ollama, OpenRouter, etc.). Other valid values are
+      "transformers", "vllm", "openai", "anthropic".
+  max_samples:
+    type: integer
+    description: >
+      Maximum number of examples to evaluate per task. When omitted the full
+      dataset runs, which can take hours for large benchmarks.
+  num_few_shot:
+    type: integer
+    default: 0
+    description: Number of few-shot examples prepended to each prompt (0 = zero-shot).
+  random_seed:
+    type: integer
+    default: 42
+    description: Random seed for reproducible sampling.
+  generation_parameters:
+    type: object
+    description: >
+      Generation config forwarded to the model (temperature, max_new_tokens,
+      top_p, top_k, stop_tokens, etc.). Passed as lighteval brace notation.
+
 runtime:
   k8s:
     image: quay.io/evalhub/community-lighteval:latest
@@ -68,8 +95,8 @@ benchmarks:
   - id: math
     name: Math problem-solving suite
     description: >
-      Mathematical problem-solving suite covering algebra, counting & probability,
-      and MATH-500 competition problems.
+      Mathematical problem-solving suite covering GSM8K, algebra,
+      counting & probability, and MATH-500 competition problems.
     category: math
     metrics: [extractive_match]
     tags: [math, reasoning, lighteval]
@@ -263,7 +290,7 @@ benchmarks:
   # ── Knowledge ─────────────────────────────────────────────────────────────
   - id: knowledge
     name: Factual knowledge suite
-    description: Factual knowledge suite (MMLU, TriviaQA, OpenBookQA).
+    description: Factual knowledge suite (MMLU, TriviaQA, OpenBookQA). Expands to mmlu, triviaqa, and openbookqa.
     category: knowledge
     metrics: [accuracy]
     tags: [knowledge, factuality, lighteval]
