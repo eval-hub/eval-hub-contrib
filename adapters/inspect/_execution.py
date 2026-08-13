@@ -111,9 +111,10 @@ def build_command(
     if max_tasks:
         cmd += ["--max-tasks", str(max_tasks)]
 
-    max_samples = config.parameters.get("max_samples")
-    if max_samples is not None:
-        cmd += ["--limit", str(max_samples)]
+    # Sample limit from JobSpec.num_examples (lifted from benchmarks[].parameters.num_examples).
+    # Default to 5 when unset so Petri/Bloom (and large datasets) do not run unbounded.
+    limit = int(config.num_examples) if config.num_examples is not None else 5
+    cmd += ["--limit", str(limit)]
 
     epochs = config.parameters.get("epochs")
     if epochs and epochs > 1:
@@ -121,10 +122,35 @@ def build_command(
 
     cmd += ["--log-level", config.parameters.get("log_level", "info")]
 
-    for key, value in config.parameters.get("task_args", {}).items():
+    for key, value in _task_args(config).items():
+        if isinstance(value, bool):
+            value = str(value).lower()
         cmd += ["-T", f"{key}={value}"]
 
     return cmd
+
+
+# Open-Telco (and similar) first-class -T parameters — keep flat under parameters, not task_args.
+_FIRST_CLASS_TASK_PARAMS = ("full", "subject", "eval_type")
+
+
+def _task_args(config: JobSpec) -> dict:
+    """Build Inspect -T args from first-class parameters and optional task_args escape hatch.
+
+    First-class keys are the supported API surface for Open-Telco and similar tasks.
+    parameters.task_args remains for Dish / ad-hoc Inspect flags only; it must not
+    redefine first-class keys.
+    """
+    args: dict = {}
+    for key in _FIRST_CLASS_TASK_PARAMS:
+        if key in config.parameters and config.parameters[key] is not None:
+            args[key] = config.parameters[key]
+    # Escape hatch last so unknown -T flags still work; first-class keys win on conflict.
+    for key, value in (config.parameters.get("task_args") or {}).items():
+        if key in args:
+            continue
+        args[key] = value
+    return args
 
 
 def _petri_model_role_flags(config: JobSpec, env: dict[str, str]) -> list[str]:
