@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 from evalhub.adapter import (
     DefaultCallbacks,
+    ErrorInfo,
     EvaluationResult,
     FrameworkAdapter,
     JobCallbacks,
@@ -50,7 +51,7 @@ try:
 except ImportError as exc:
     raise ImportError(
         "Install IBM CLEAR with tool-calls support (see requirements.txt): "
-        "pip install 'clear_eval[tool-calls] @ git+https://github.com/IBM/clear.git@main_with_sparc'"
+        "pip install 'clear_eval[tool-calls] @ git+https://github.com/IBM/clear.git@main'"
     ) from exc
 
 logger = logging.getLogger(__name__)
@@ -381,6 +382,21 @@ def _fetch_mlflow_traces_to_dir(mlflow_client: EvalHubMlflowClient, parameters: 
             start_ns = s.get("start_time_unix_nano", 0)
             end_ns = s.get("end_time_unix_nano", 0)
             duration_ms = (end_ns - start_ns) / 1_000_000 if end_ns and start_ns else None
+
+            # The SDK's _normalize_spans pops mlflow.spanType/Inputs/Outputs from
+            # attributes into top-level fields. Re-inject them so CLEAR's
+            # preprocessor can identify LLM calls and extract I/O.
+            span_type = s.get("span_type") or attrs.get("mlflow.spanType", "UNKNOWN")
+            inputs = s.get("inputs") or attrs.get("mlflow.spanInputs", {})
+            outputs = s.get("outputs") or attrs.get("mlflow.spanOutputs", {})
+
+            if "mlflow.spanType" not in attrs:
+                attrs["mlflow.spanType"] = span_type
+            if "mlflow.spanInputs" not in attrs:
+                attrs["mlflow.spanInputs"] = inputs
+            if "mlflow.spanOutputs" not in attrs:
+                attrs["mlflow.spanOutputs"] = outputs
+
             spans.append({
                 "span_id": s.get("span_id", ""),
                 "parent_span_id": s.get("parent_span_id"),
@@ -390,6 +406,8 @@ def _fetch_mlflow_traces_to_dir(mlflow_client: EvalHubMlflowClient, parameters: 
                 "end_time_unix_nano": end_ns,
                 "duration_ms": duration_ms,
                 "attributes": attrs,
+                "inputs": inputs,
+                "outputs": outputs,
             })
 
         trace_doc = {
@@ -424,14 +442,37 @@ class ClearAdapter(FrameworkAdapter):
 
         try:
             callbacks.report_status(
-                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
+                JobStatusUpdate(
+                    status=JobStatus.RUNNING,
+                    phase=JobPhase.INITIALIZING,
+                    progress=0.0,
+                    message=MessageInfo(
+                        message="Initializing CLEAR for agentic evaluation",
+                        message_code="initializing",
+                    ),
+                )
             )
 
             self._validate_config(config)
 
-            callbacks.report_status(
-                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
-            )
+            # Allow job to override the MLflow workspace (e.g. when EvalHub sidecar
+            # sets it to the tenant namespace but traces live in a different workspace).
+            # When overriding, bypass the sidecar proxy (which injects the tenant workspace
+            # header) and use the external MLflow route directly.
+            ws = config.parameters.get("mlflow_workspace")
+            if ws:
+                os.environ["MLFLOW_WORKSPACE"] = ws
+                sidecar_mlflow_uri = os.environ.get("MLFLOW_TRACKING_URI", "")
+                if sidecar_mlflow_uri.startswith("http://localhost"):
+                    mlflow_route = config.parameters.get("mlflow_route_url")
+                    if not mlflow_route:
+                        ns = os.environ.get("POD_NAMESPACE", "redhat-ods-applications")
+                        direct_uri = f"https://mlflow.{ns}.svc:8443"
+                    else:
+                        direct_uri = mlflow_route.rstrip("/")
+                    os.environ["MLFLOW_TRACKING_URI"] = direct_uri
+                    os.environ["MLFLOW_TRACKING_INSECURE_TLS"] = "true"
+                    logger.info("Bypassing sidecar proxy for MLflow workspace=%s uri=%s", ws, direct_uri)
 
             data_dir: str | None = None
             test_data_path = Path("/test_data")
@@ -472,6 +513,17 @@ class ClearAdapter(FrameworkAdapter):
             if not data_dir and TracesNamespace.is_source_configured(config.parameters):
                 if os.environ.get("MLFLOW_TRACKING_URI"):
                     logger.info("Fetching traces from MLflow experiment via SDK")
+                    callbacks.report_status(
+                        JobStatusUpdate(
+                            status=JobStatus.RUNNING,
+                            phase=JobPhase.LOADING_DATA,
+                            progress=0.1,
+                            message=MessageInfo(
+                                message="Fetching traces from MLflow",
+                                message_code="fetching_mlflow_traces",
+                            ),
+                        )
+                    )
                     mlflow_traces_dir = tempfile.mkdtemp(prefix="clear_mlflow_traces_")
                     _fetch_mlflow_traces_to_dir(self.mlflow, config.parameters, mlflow_traces_dir)
                     data_dir = mlflow_traces_dir
@@ -518,6 +570,18 @@ class ClearAdapter(FrameworkAdapter):
 
             logger.info("Found %d trace file(s) in %s", len(trace_files), data_dir)
 
+            callbacks.report_status(
+                JobStatusUpdate(
+                    status=JobStatus.RUNNING,
+                    phase=JobPhase.LOADING_DATA,
+                    progress=0.2,
+                    message=MessageInfo(
+                        message="Processing MLflow traces",
+                        message_code="loading_data",
+                    ),
+                )
+            )
+
             results_dir_param = config.parameters.get("results_dir")
             run_name_param = config.parameters.get("run_name")
             if results_dir_param and run_name_param:
@@ -531,7 +595,15 @@ class ClearAdapter(FrameworkAdapter):
             logger.info("CLEAR output base: %s", output_dir)
 
             callbacks.report_status(
-                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
+                JobStatusUpdate(
+                    status=JobStatus.RUNNING,
+                    phase=JobPhase.RUNNING_EVALUATION,
+                    progress=0.4,
+                    message=MessageInfo(
+                        message="Running CLEAR agentic pipeline",
+                        message_code="running_evaluation",
+                    ),
+                )
             )
 
             if config.model.url and config.parameters.get("inference_backend") != "endpoint":
@@ -551,7 +623,15 @@ class ClearAdapter(FrameworkAdapter):
             logger.info("Results file: %s", json_results_path)
 
             callbacks.report_status(
-                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
+                JobStatusUpdate(
+                    status=JobStatus.RUNNING,
+                    phase=JobPhase.POST_PROCESSING,
+                    progress=0.8,
+                    message=MessageInfo(
+                        message="Processing CLEAR results",
+                        message_code="post_processing",
+                    ),
+                )
             )
 
             evaluation_results = self._extract_agentic_results(str(json_results_path))
@@ -607,13 +687,22 @@ class ClearAdapter(FrameworkAdapter):
 
         except Exception as exc:
             logger.exception("CLEAR evaluation failed")
+            error_msg = str(exc)
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
-                    error_message=MessageInfo(
-                        message=str(exc),
+                    message=MessageInfo(
+                        message=error_msg,
+                        message_code="failed",
+                    ),
+                    error=ErrorInfo(
+                        message=error_msg,
                         message_code="evaluation_error",
                     ),
+                    error_details={
+                        "exception_type": type(exc).__name__,
+                        "benchmark_id": config.benchmark_id,
+                    },
                 )
             )
             raise
@@ -893,7 +982,15 @@ class ClearAdapter(FrameworkAdapter):
             return None
 
         callbacks.report_status(
-            JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
+            JobStatusUpdate(
+                status=JobStatus.RUNNING,
+                phase=JobPhase.PERSISTING_ARTIFACTS,
+                progress=0.9,
+                message=MessageInfo(
+                    message="Persisting CLEAR artifacts",
+                    message_code="persisting_artifacts",
+                ),
+            )
         )
 
         if self.local_jobs_base_path is not None:
