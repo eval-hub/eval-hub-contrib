@@ -562,3 +562,128 @@ def test_run_lighteval_cmd_formats_generation_parameters(adapter, tmp_path, monk
     # Scalar parameters pass through directly
     assert ",concurrent_requests=7" in model_args
     assert ",system_prompt=You are a helpful math tutor." in model_args
+
+
+# ── L1 fix: max_samples parameter forwarding ──────────────────────────────────
+
+@pytest.mark.integration
+def test_max_samples_from_parameters_forwarded(adapter, monkeypatch, tmp_path):
+    """parameters['max_samples'] is forwarded as --max-samples when num_examples is None.
+
+    Regression test for the bug where config.num_examples was None when callers
+    passed max_samples in benchmark parameters instead of the top-level field,
+    causing --max-samples to never be emitted.
+    """
+    captured: dict = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        # Return enough structure for the caller to find a results file
+        results_dir = tmp_path / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "results_dummy.json").write_text(
+            '{"results": {"gsm8k|0": {"extractive_match": 0.8}}, "config_general": {}, "config_tasks": {}}'
+        )
+        import subprocess
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "main.resolve_model_credentials",
+        lambda: SimpleNamespace(api_key=None),
+    )
+
+    # num_examples is NOT set; max_samples comes from parameters
+    adapter._run_lighteval(
+        model_config=adapter.job_spec.model,
+        tasks=["gsm8k"],
+        output_dir=tmp_path,
+        num_fewshot=0,
+        limit=adapter.job_spec.num_examples or adapter.job_spec.parameters.get("max_samples"),
+        batch_size=1,
+        benchmark_config=adapter.job_spec.parameters,
+    )
+
+    assert "--max-samples" in captured["cmd"], (
+        "--max-samples must appear in the lighteval CLI when max_samples is in parameters"
+    )
+    idx = captured["cmd"].index("--max-samples")
+    assert captured["cmd"][idx + 1] == "5", (
+        f"Expected --max-samples 5, got {captured['cmd'][idx + 1]}"
+    )
+
+
+@pytest.mark.integration
+def test_max_samples_from_num_examples_forwarded(adapter, monkeypatch, tmp_path):
+    """num_examples (the primary limit field) is forwarded as --max-samples."""
+    captured: dict = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        results_dir = tmp_path / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "results_dummy.json").write_text(
+            '{"results": {"gsm8k|0": {"extractive_match": 0.8}}, "config_general": {}, "config_tasks": {}}'
+        )
+        import subprocess
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "main.resolve_model_credentials",
+        lambda: SimpleNamespace(api_key=None),
+    )
+
+    adapter._run_lighteval(
+        model_config=adapter.job_spec.model,
+        tasks=["gsm8k"],
+        output_dir=tmp_path,
+        num_fewshot=0,
+        limit=10,  # explicit num_examples value
+        batch_size=1,
+        benchmark_config=adapter.job_spec.parameters,
+    )
+
+    assert "--max-samples" in captured["cmd"]
+    idx = captured["cmd"].index("--max-samples")
+    assert captured["cmd"][idx + 1] == "10"
+
+
+# ── L3 fix: TASK_ALIASES remapping ────────────────────────────────────────────
+
+@pytest.mark.integration
+def test_task_alias_applied_to_single_benchmark(adapter):
+    """TASK_ALIASES remaps benchmark IDs that differ from the lighteval registry."""
+    # truthfulqa:generation → truthfulqa:mc2 in lighteval 0.13.0
+    tasks = adapter._parse_benchmark_tasks("truthfulqa:generation", {})
+    assert tasks == ["truthfulqa:mc2"], (
+        "truthfulqa:generation must be aliased to truthfulqa:mc2"
+    )
+
+
+@pytest.mark.integration
+def test_task_alias_applied_in_category(adapter):
+    """TASK_ALIASES is applied when expanding a category to individual tasks."""
+    # math category includes math:counting_and_probability which has an alias
+    tasks = adapter._parse_benchmark_tasks("math", {})
+    assert "math:counting_and_prob" in tasks, (
+        "math:counting_and_probability should be aliased to math:counting_and_prob"
+    )
+    assert "math:counting_and_probability" not in tasks
+
+
+@pytest.mark.integration
+def test_no_alias_for_unknown_benchmark(adapter):
+    """Benchmarks not in TASK_ALIASES pass through unchanged."""
+    tasks = adapter._parse_benchmark_tasks("aime24", {})
+    assert tasks == ["aime24"]
+
+
+@pytest.mark.integration
+def test_logprob_patch_script_exists():
+    """lighteval_logprob_patch.py must be present alongside main.py in the image."""
+    patch_path = Path(__file__).parent.parent / "lighteval_logprob_patch.py"
+    assert patch_path.exists(), (
+        "lighteval_logprob_patch.py missing — Containerfile copies it into /app but the "
+        "file is absent from the source tree. Add it before building the image."
+    )

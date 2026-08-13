@@ -1,0 +1,413 @@
+# LightEval Adapter — Provider Configuration
+#
+# Wraps HuggingFace LightEval (https://github.com/huggingface/lighteval) as an
+# EvalHub community provider. Evaluates any OpenAI-compatible inference endpoint
+# against the benchmark suite without loading model weights locally.
+
+id: lighteval
+name: LightEval
+description: >
+  HuggingFace LightEval — endpoint-only evaluation against any OpenAI-compatible
+  server (vLLM, Ollama, OpenRouter). Supports loglikelihood (multiple-choice) and
+  generative tasks across reasoning, math, knowledge, coding, and safety benchmarks.
+  Loglikelihood scoring uses the /v1/completions echo+logprobs path; no local
+  model weights required.
+type: community
+
+# ── Agent Discoverability ──────────────────────────────────────────────────────
+agent:
+  evaluates:
+    - accuracy
+    - reasoning
+    - math
+    - knowledge
+    - coding
+    - safety
+    - truthfulness
+  recommended_when:
+    - "User wants GSM8K, HellaSwag, ARC, WinoGrande, or TruthfulQA via endpoint"
+    - "Competition math benchmarks: AIME 2024/2025, MATH-500"
+    - "User wants GLUE language-understanding subtasks via a custom endpoint"
+    - "Lightweight truth-checking: TruthfulQA MC against an API model"
+  target_type: model
+  summary: >-
+    HuggingFace LightEval — 28 benchmarks across reasoning, math, knowledge, coding,
+    and safety. Evaluates any OpenAI-compatible endpoint; no local GPU needed.
+  complements:
+    - inspect
+    - lm-eval
+  hints:
+    - >-
+      Pass max_samples in benchmark parameters to limit dataset size (e.g.
+      {"max_samples": 50}). Without it the full dataset runs, which can take
+      hours for large benchmarks.
+    - >-
+      Loglikelihood benchmarks (arc, hellaswag, winogrande, truthfulqa:mc) use
+      /v1/completions with echo=True and logprobs=1. The endpoint must support
+      these parameters (vLLM does by default).
+    - >-
+      boolq, piqa, openbookqa, glue:* require loglikelihood scoring. If your
+      endpoint does not expose /v1/completions with echo/logprobs, use
+      lm-evaluation-harness instead.
+
+runtime:
+  k8s:
+    image: quay.io/evalhub/community-lighteval:latest
+    entrypoint:
+      - python
+      - main.py
+    cpu_request: 500m
+    memory_request: 512Mi
+    cpu_limit: 2000m
+    memory_limit: 4Gi
+  local:
+    command: python main.py
+
+benchmarks:
+  # ── Math ──────────────────────────────────────────────────────────────────
+  - id: math
+    name: Math problem-solving suite
+    description: >
+      Mathematical problem-solving suite covering algebra, counting & probability,
+      and MATH-500 competition problems.
+    category: math
+    metrics: [extractive_match]
+    tags: [math, reasoning, lighteval]
+    primary_score:
+      metric: extractive_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.3
+
+  - id: gsm8k
+    name: GSM8K
+    description: Grade-school math word problems requiring multi-step reasoning (8,500 problems).
+    category: math
+    metrics: [extractive_match]
+    tags: [math, reasoning, lighteval]
+    primary_score:
+      metric: extractive_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
+
+  - id: math:algebra
+    name: Competition algebra
+    description: Algebra subset of MATH competition benchmark.
+    category: math
+    metrics: [extractive_match]
+    tags: [math, competition, lighteval]
+    primary_score:
+      metric: extractive_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.3
+
+  - id: math:counting_and_probability
+    name: Counting & probability problems
+    description: Counting and probability subset of MATH competition benchmark.
+    category: math
+    metrics: [extractive_match]
+    tags: [math, competition, lighteval]
+    primary_score:
+      metric: extractive_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.3
+
+  - id: math_500
+    name: MATH-500
+    description: 500 competition math problems across all MATH difficulty levels.
+    category: math
+    metrics: [extractive_match]
+    tags: [math, competition, lighteval]
+    primary_score:
+      metric: extractive_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.3
+
+  - id: aime24
+    name: AIME 2024
+    description: American Invitational Mathematics Examination 2024 — 30 competition problems.
+    category: math
+    metrics: [pass@k]
+    tags: [math, competition, aime, lighteval]
+    primary_score:
+      metric: pass@k
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.0
+
+  - id: aime25
+    name: AIME 2025
+    description: American Invitational Mathematics Examination 2025 — 30 competition problems.
+    category: math
+    metrics: [pass@k]
+    tags: [math, competition, aime, lighteval]
+    primary_score:
+      metric: pass@k
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.0
+
+  # ── Reasoning ─────────────────────────────────────────────────────────────
+  - id: commonsense_reasoning
+    name: Commonsense reasoning suite
+    description: Everyday commonsense reasoning suite (HellaSwag, WinoGrande, OpenBookQA, ARC Easy).
+    category: reasoning
+    metrics: [accuracy, em]
+    tags: [reasoning, commonsense, lighteval]
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
+
+  - id: scientific_reasoning
+    name: Science reasoning suite
+    description: Scientific reasoning suite (ARC Easy, ARC Challenge).
+    category: reasoning
+    metrics: [accuracy]
+    tags: [reasoning, science, lighteval]
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
+
+  - id: physical_commonsense
+    name: Physical world understanding suite
+    description: Physical interaction intuition and commonsense (PIQA).
+    category: reasoning
+    metrics: [accuracy]
+    tags: [reasoning, commonsense, lighteval]
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.6
+
+  - id: hellaswag
+    name: HellaSwag
+    description: Everyday activity completion — commonsense NLI via loglikelihood scoring.
+    category: reasoning
+    metrics: [em, accuracy]
+    tags: [reasoning, commonsense, lighteval]
+    primary_score:
+      metric: em
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
+
+  - id: winogrande
+    name: WinoGrande
+    description: Pronoun commonsense reasoning (Winograd schema at scale).
+    category: reasoning
+    metrics: [accuracy]
+    tags: [reasoning, commonsense, lighteval]
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.6
+
+  - id: arc:easy
+    name: ARC Easy
+    description: Basic science Q&A — AI2 Reasoning Challenge easy split.
+    category: reasoning
+    metrics: [accuracy, acc]
+    tags: [reasoning, science, lighteval]
+    primary_score:
+      metric: acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.7
+
+  - id: arc:challenge
+    name: ARC Challenge
+    description: Hard science Q&A — AI2 Reasoning Challenge challenge split.
+    category: reasoning
+    metrics: [accuracy, acc]
+    tags: [reasoning, science, lighteval]
+    primary_score:
+      metric: acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
+
+  - id: piqa
+    name: PIQA
+    description: Physical interaction intuition — two-choice physical world Q&A.
+    category: reasoning
+    metrics: [accuracy]
+    tags: [reasoning, commonsense, lighteval]
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.7
+
+  - id: gpqa:diamond
+    name: GPQA Diamond
+    description: Graduate-level GPQA Diamond split — expert-level biology, chemistry, and physics.
+    category: reasoning
+    metrics: [accuracy]
+    tags: [reasoning, graduate, expert, lighteval]
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.3
+
+  # ── Knowledge ─────────────────────────────────────────────────────────────
+  - id: knowledge
+    name: Factual knowledge suite
+    description: Factual knowledge suite (MMLU, TriviaQA, OpenBookQA).
+    category: knowledge
+    metrics: [accuracy]
+    tags: [knowledge, factuality, lighteval]
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
+
+  - id: mmlu
+    name: MMLU
+    description: Massive Multitask Language Understanding — 57 academic subjects.
+    category: knowledge
+    metrics: [accuracy]
+    tags: [knowledge, academic, lighteval]
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.6
+
+  - id: triviaqa
+    name: TriviaQA
+    description: Trivia factual recall — open-domain Q&A across 95k question-answer pairs.
+    category: knowledge
+    metrics: [extractive_match]
+    tags: [knowledge, factuality, lighteval]
+    primary_score:
+      metric: extractive_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
+
+  - id: openbookqa
+    name: OpenBookQA
+    description: Open-book science reasoning — 4-choice Q&A with elementary science facts.
+    category: knowledge
+    metrics: [accuracy]
+    tags: [knowledge, science, lighteval]
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.4
+
+  # ── Language Understanding ─────────────────────────────────────────────────
+  - id: language_understanding
+    name: Language understanding suite
+    description: Language understanding suite combining GLUE subtasks.
+    category: language_understanding
+    metrics: [accuracy]
+    tags: [language, glue, lighteval]
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
+
+  - id: glue:cola
+    name: CoLA — Grammatical acceptability
+    description: Corpus of Linguistic Acceptability — binary grammaticality classification.
+    category: language_understanding
+    metrics: [mcc]
+    tags: [language, glue, lighteval]
+    primary_score:
+      metric: mcc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.3
+
+  - id: glue:sst2
+    name: SST-2 — Sentiment classification
+    description: Stanford Sentiment Treebank — binary sentiment classification.
+    category: language_understanding
+    metrics: [accuracy]
+    tags: [language, sentiment, glue, lighteval]
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.8
+
+  - id: glue:mrpc
+    name: MRPC — Paraphrase detection
+    description: Microsoft Research Paraphrase Corpus — sentence pair paraphrase classification.
+    category: language_understanding
+    metrics: [f1, accuracy]
+    tags: [language, nli, glue, lighteval]
+    primary_score:
+      metric: f1
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.7
+
+  # ── Code ──────────────────────────────────────────────────────────────────
+  - id: lcb:codegeneration_v6
+    name: LiveCodeBench v6 — Code generation
+    description: LiveCodeBench v6 competitive programming and code generation tasks.
+    category: code
+    metrics: [pass@k]
+    tags: [coding, competitive, lighteval]
+    primary_score:
+      metric: pass@k
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.1
+
+  # ── Safety / Truthfulness ─────────────────────────────────────────────────
+  - id: truthfulness
+    name: Honesty & hallucination suite
+    description: Truthfulness suite covering TruthfulQA MC and generative variants.
+    category: safety
+    metrics: [truthfulqa_mc1, truthfulqa_mc2]
+    tags: [safety, truthfulness, hallucination, lighteval]
+    primary_score:
+      metric: truthfulqa_mc2
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
+
+  - id: truthfulqa:mc
+    name: TruthfulQA — Multiple choice
+    description: >
+      TruthfulQA multiple-choice variant — tests whether models reproduce common
+      misconceptions. MC1 = single correct answer; MC2 = multi-correct normalized.
+    category: safety
+    metrics: [truthfulqa_mc1, truthfulqa_mc2]
+    tags: [safety, truthfulness, lighteval]
+    primary_score:
+      metric: truthfulqa_mc2
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
+
+  - id: truthfulqa:generation
+    name: TruthfulQA — Generative
+    description: >
+      TruthfulQA generative variant — model generates free-form answers scored
+      against truthful and informative reference answers.
+    category: safety
+    metrics: [bleurt_max, rouge1_max]
+    tags: [safety, truthfulness, lighteval]
+    primary_score:
+      metric: bleurt_max
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.3
