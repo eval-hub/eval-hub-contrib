@@ -239,6 +239,8 @@ class InspectAdapter(FrameworkAdapter):
         if mode == "standard" and config.benchmark_id == "inspect/custom":
             if not config.parameters.get("task"):
                 raise ValueError("inspect/custom requires a 'task' parameter.")
+            # replace generic inspect/custom with individual tasks name
+            config.benchmark_id = str(config.parameters.get("task"))
 
         if mode in ("petri", "bloom") and not config.parameters.get("max_samples"):
             logger.warning("Running Petri/Bloom without max_samples — this may be expensive.")
