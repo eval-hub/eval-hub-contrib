@@ -147,7 +147,7 @@ benchmarks:
     pass_criteria:
       threshold: 0.90
     datasets:
-      - name: ai4privacy_pii-masking-openpii # only contains prompts with PII
+      - name: ai4privacy_pii-masking-openpii-positives # only contains prompts with PII
         description: AI4 Dataset of privacy-masked prompts
         source: huggingface
         hf_name: "ai4privacy/pii-masking-openpii-1m"
@@ -161,7 +161,7 @@ benchmarks:
         row_filters:
           - column: language
             filter: '. == "en"'
-      - name: ai4privacy_pii-masking-openpii  # duplicate of above
+      - name: ai4privacy_pii-masking-openpii-negatives  # duplicate of above
         description: AI4 Dataset of privacy-masked prompts
         source: huggingface
         hf_name: "ai4privacy/pii-masking-openpii-1m"

@@ -473,7 +473,7 @@ def _evaluate_chunk(server_url: str, text: str) -> dict:
         r = requests.post(f"{server_url}/v1/guardrail/checks", json=payload, timeout=120)
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
-        ms_per_char = elapsed_ms / len(text) if text else 0.0
+        ms_per_char = elapsed_ms / len(text) if text else None
 
         if r.status_code != 200:
             try:
@@ -499,7 +499,7 @@ def _evaluate_chunk(server_url: str, text: str) -> dict:
         return {
             "predicted_blocked": NemoResponses.ERROR,
             "response_time_ms": round(elapsed_ms, 1),
-            "response_time_ms_per_character": elapsed_ms / len(text) if text else 0.0,
+            "response_time_ms_per_character": elapsed_ms / len(text) if text else None,
             "error": str(e),
         }
 
@@ -553,7 +553,7 @@ def _evaluate_prompt(
     return {
         "predicted_blocked": final,
         "response_time_ms": round(total_ms, 1),
-        "response_time_ms_per_character": round(total_ms / len(prompt), 4) if prompt else 0.0,
+        "response_time_ms_per_character": round(total_ms / len(prompt), 4) if prompt else None,
         "error": "; ".join(errors) if final == NemoResponses.ERROR and errors else None,
     }
 
@@ -846,9 +846,6 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
 
         duration = time.monotonic() - start_time
 
-        callbacks.report_status(
-            JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
-        )
         logger.info("Evaluation finished in %.1fs, processing %d results", duration, len(results))
 
         metrics, _ = _compute_metrics(results)
@@ -880,6 +877,10 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
             EvaluationResult(metric_name="p95_latency_ms", metric_value=timing["p95_ms"]),
             EvaluationResult(metric_name="errors", metric_value=float(metrics["errors"])),
         ])
+
+        callbacks.report_status(
+            JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
+        )
 
         return JobResults(
             id=config.id,
@@ -922,6 +923,10 @@ def main() -> None:
             JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
         )
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+        run_id = callbacks.mlflow.save(results, adapter.job_spec)
+        if run_id:
+            results.mlflow_run_id = run_id
+            logger.info("MLflow run created: %s", run_id)
         callbacks.report_results(results)
         logger.info("EVALUATION COMPLETE")
     except Exception as e:
