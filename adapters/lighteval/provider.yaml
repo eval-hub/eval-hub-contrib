@@ -51,28 +51,34 @@ agent:
       lm-evaluation-harness instead.
 
 parameters:
-  provider:
+  - name: provider
     type: string
     default: endpoint
     description: >
       Model provider backend. Use "endpoint" (default) for any OpenAI-compatible
       API server (vLLM, Ollama, OpenRouter, etc.). Other valid values are
       "transformers", "vllm", "openai", "anthropic".
-  max_samples:
+
+  - name: max_samples
     type: integer
+    default: null
     description: >
       Maximum number of examples to evaluate per task. When omitted the full
       dataset runs, which can take hours for large benchmarks.
-  num_few_shot:
+
+  - name: num_few_shot
     type: integer
     default: 0
     description: Number of few-shot examples prepended to each prompt (0 = zero-shot).
-  random_seed:
+
+  - name: random_seed
     type: integer
     default: 42
     description: Random seed for reproducible sampling.
-  generation_parameters:
+
+  - name: generation_parameters
     type: object
+    default: null
     description: >
       Generation config forwarded to the model (temperature, max_new_tokens,
       top_p, top_k, stop_tokens, etc.). Passed as lighteval brace notation.
