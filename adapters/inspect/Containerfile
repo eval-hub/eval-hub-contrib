@@ -34,14 +34,21 @@ RUN pip install --no-cache-dir -r requirements.txt
 #      "
 #
 # 2. Build this Containerfile with the --build-arg NLTK_AIRGAP=true flag.
-#    When NLTK_AIRGAP=true the RUN step below is skipped and the data is
-#    instead COPYied from the nltk-data-airgap/ directory in the build context:
+#    When NLTK_AIRGAP=true the RUN step below skips the network download and
+#    instead copies the data from the nltk-data-airgap/ directory in the build
+#    context (the COPY and RUN instructions always execute; the branch is
+#    selected inside the Python script via the NLTK_AIRGAP environment variable):
 #
 #      podman build --build-arg NLTK_AIRGAP=true -t community-inspect .
 #
 # The base image (registry.access.redhat.com/ubi9/python-312) must be
 # available from your internal registry; mirror it if needed.
 ENV XDG_CACHE_HOME=/app/.cache
+# Pin the inspect_evals cache root explicitly so the NLTK data path is
+# predictable regardless of the XDG_CACHE_HOME default and immune to
+# INSPECT_EVALS_CACHE_DIR overrides at runtime. The value here must match the
+# NLTK_DIR computed inside the RUN step below.
+ENV INSPECT_EVALS_CACHE_DIR=/app/.cache/inspect_evals
 # NLTK_AIRGAP=true  → skip network download; COPY nltk-data-airgap/ from build context instead.
 # NLTK_AIRGAP=false → download punkt, punkt_tab, wordnet from the internet (default).
 ARG NLTK_AIRGAP=false
@@ -58,7 +65,10 @@ COPY nltk-data-airgap/ /tmp/nltk-data-airgap/
 RUN python3 - <<'PYEOF'
 import nltk, pathlib, sys, os, shutil
 
-NLTK_DIR = pathlib.Path('/app/.cache/inspect_evals/make_me_say/nltk_data')
+# Derive the NLTK data path from INSPECT_EVALS_CACHE_DIR (set by the ENV
+# instruction above) so the build path always matches the runtime path that
+# ensure_nltk_resource() in makemesay/game.py resolves via user_cache_dir().
+NLTK_DIR = pathlib.Path(os.environ['INSPECT_EVALS_CACHE_DIR']) / 'make_me_say' / 'nltk_data'
 NLTK_DIR.mkdir(parents=True, exist_ok=True)
 
 # Packages and their nltk.data.find() resource paths — exactly what
