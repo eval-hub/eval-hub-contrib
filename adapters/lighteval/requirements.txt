@@ -1,7 +1,11 @@
 # LightEval framework adapter requirements
 
 # LightEval framework
-lighteval>=0.13.0
+lighteval>=0.13.0,<0.14.0
+
+# lighteval 0.13.0 passes raw str to xxhash.xxh64() in info_loggers.py.
+# xxhash >=3.0.0 requires bytes; pin to the compatible range.
+xxhash>=2.0.0,<3.0.0
 
 # LiteLLM for endpoint support
 litellm[caching]>=1.96.2
