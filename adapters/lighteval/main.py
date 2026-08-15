@@ -394,11 +394,14 @@ class LightEvalAdapter(FrameworkAdapter):
         else:
             raise ValueError(f"Unsupported model provider: {provider}")
 
-        # Add common arguments
+        # Add common arguments.
+        # Note: --save-details is intentionally omitted. lighteval 0.13.0 passes
+        # doc.query (str) directly to xxhash.xxh64(), which fails with TypeError
+        # on xxhash >=3.x that requires bytes. The adapter only reads results_*.json
+        # (always written); per-sample detail files are not used.
         cmd.extend([
             "--output-dir", str(output_dir),
             "--no-push-to-hub",
-            "--save-details",
         ])
 
         # Add max-samples limit if specified
