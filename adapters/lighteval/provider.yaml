@@ -57,7 +57,9 @@ parameters:
     description: >
       Model provider backend. Use "endpoint" (default) for any OpenAI-compatible
       API server (vLLM, Ollama, OpenRouter, etc.). Other valid values are
-      "transformers", "vllm", "openai", "anthropic".
+      "transformers", "vllm", "openai". Note: "anthropic" is not supported —
+      loglikelihood benchmarks require /v1/completions with echo+logprobs, which
+      Anthropic's API does not implement.
 
   - name: max_samples
     type: integer

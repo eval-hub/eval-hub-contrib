@@ -716,3 +716,103 @@ def test_logprob_patch_script_exists():
         "lighteval_logprob_patch.py missing — Containerfile copies it into /app but the "
         "file is absent from the source tree. Add it before building the image."
     )
+
+
+# ── C3: Fail fast for unsupported providers ────────────────────────────────────
+
+
+@pytest.mark.integration
+def test_provider_anthropic_raises_value_error(adapter):
+    """provider: anthropic must be rejected before execution.
+
+    Anthropic's API does not implement /v1/completions with echo+logprobs,
+    so loglikelihood benchmarks would silently return -inf scores. Fail fast
+    at validation time instead.
+    """
+    adapter.job_spec.parameters["provider"] = "anthropic"
+    with pytest.raises(ValueError, match="anthropic"):
+        adapter._validate_config(adapter.job_spec)
+
+
+# ── C4: Top-level generation_parameters forwarding ────────────────────────────
+
+
+@pytest.mark.integration
+def test_generation_parameters_top_level_forwarded(adapter, tmp_path, monkeypatch):
+    """generation_parameters declared at the top level of provider.yaml parameters
+    is forwarded to the lighteval CLI, not only when nested under 'parameters'."""
+    adapter.job_spec.parameters.pop("parameters", None)
+    adapter.job_spec.parameters["generation_parameters"] = {
+        "temperature": 0.5,
+        "max_new_tokens": 256,
+    }
+
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        results_dir = tmp_path / "output" / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "results_test.json").write_text(json.dumps(CANNED_RESULTS))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "main.resolve_model_credentials",
+        lambda: SimpleNamespace(api_key="test-key"),
+    )
+    monkeypatch.setenv("HF_TOKEN", "fake")
+
+    adapter._run_lighteval(
+        model_config=adapter.job_spec.model,
+        tasks=["boolq"],
+        output_dir=tmp_path / "output",
+        num_fewshot=0,
+        limit=5,
+        batch_size=1,
+        benchmark_config=adapter.job_spec.parameters,
+    )
+
+    model_args = next(arg for arg in captured["cmd"] if arg.startswith("model_name="))
+    assert "generation_parameters={temperature:0.5,max_new_tokens:256}" in model_args
+
+
+@pytest.mark.integration
+def test_generation_parameters_nested_takes_precedence(adapter, tmp_path, monkeypatch):
+    """When generation_parameters appears in both top-level and nested 'parameters',
+    the nested one takes precedence (explicit override wins)."""
+    adapter.job_spec.parameters["generation_parameters"] = {"temperature": 0.9}
+    adapter.job_spec.parameters["parameters"] = {
+        "generation_parameters": {"temperature": 0.1, "max_new_tokens": 128},
+    }
+
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        results_dir = tmp_path / "output" / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "results_test.json").write_text(json.dumps(CANNED_RESULTS))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "main.resolve_model_credentials",
+        lambda: SimpleNamespace(api_key="test-key"),
+    )
+    monkeypatch.setenv("HF_TOKEN", "fake")
+
+    adapter._run_lighteval(
+        model_config=adapter.job_spec.model,
+        tasks=["boolq"],
+        output_dir=tmp_path / "output",
+        num_fewshot=0,
+        limit=5,
+        batch_size=1,
+        benchmark_config=adapter.job_spec.parameters,
+    )
+
+    model_args = next(arg for arg in captured["cmd"] if arg.startswith("model_name="))
+    # Nested value (0.1, 128) wins over top-level (0.9)
+    assert "generation_parameters={temperature:0.1,max_new_tokens:128}" in model_args
+    assert "temperature:0.9" not in model_args

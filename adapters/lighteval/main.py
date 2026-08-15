@@ -236,7 +236,14 @@ class LightEvalAdapter(FrameworkAdapter):
 
         # Validate model provider (from benchmark_config)
         provider = config.parameters.get("provider", "endpoint")
-        valid_providers = ["transformers", "vllm", "openai", "anthropic", "endpoint", "litellm"]
+        valid_providers = ["transformers", "vllm", "openai", "endpoint", "litellm"]
+        if provider == "anthropic":
+            raise ValueError(
+                "provider: anthropic is not supported. The loglikelihood patch uses "
+                "/v1/completions with echo=True and logprobs=1, which Anthropic's API "
+                "does not implement. Use provider: endpoint with a vLLM-compatible server "
+                "for MC benchmarks (arc, hellaswag, winogrande, truthfulqa:mc)."
+            )
         if provider not in valid_providers:
             logger.warning(
                 f"Unknown model provider '{provider}'. "
@@ -372,6 +379,11 @@ class LightEvalAdapter(FrameworkAdapter):
             parameters = benchmark_config.get("parameters") or {}
             if not isinstance(parameters, dict):
                 raise ValueError("parameters must be an object")
+            parameters = dict(parameters)
+            # generation_parameters is declared at the top level of the provider schema;
+            # forward it if not already overridden by the nested "parameters" sub-key.
+            if "generation_parameters" in benchmark_config and "generation_parameters" not in parameters:
+                parameters["generation_parameters"] = benchmark_config["generation_parameters"]
             for key, value in parameters.items():
                 if key == "generation_parameters":
                     value = self._format_generation_parameters(value)
