@@ -71,7 +71,7 @@ runtime:
     memory_request: 1Gi
     cpu_limit: 4000m
     memory_limit: 4Gi
-  local: ~  # Local execution not supported; use k8s runtime
+  # local: not supported — this adapter requires the lm-eval container (k8s only)
 
 benchmarks:
   # -------------------------------------------------------------------------
