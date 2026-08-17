@@ -37,6 +37,7 @@ from evalhub.adapter import (
     read_model_auth_key,
     resolve_model_credentials,
 )
+from evalhub.models import MetricSchema, ResultType
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,7 @@ class LightEvalAdapter(FrameworkAdapter):
 
             config_tasks = lighteval_results.get("config_tasks", {})
 
-            evaluation_results = self._extract_evaluation_results(
+            evaluation_results, metrics_schema = self._extract_evaluation_results(
                 lighteval_results, config.benchmark_id
             )
             overall_score = self._compute_overall_score(evaluation_results)
@@ -177,6 +178,7 @@ class LightEvalAdapter(FrameworkAdapter):
                 benchmark_index=config.benchmark_index,
                 model_name=config.model.name,
                 results=evaluation_results,
+                metrics_schema=metrics_schema,
                 overall_score=overall_score,
                 num_examples_evaluated=num_evaluated,
                 duration_seconds=duration,
@@ -451,7 +453,7 @@ class LightEvalAdapter(FrameworkAdapter):
 
     def _extract_evaluation_results(
         self, lighteval_results: dict[str, Any], benchmark_id: str
-    ) -> list[EvaluationResult]:
+    ) -> tuple[list[EvaluationResult], list[MetricSchema]]:
         """Extract structured evaluation results from LightEval output.
 
         LightEval results format:
@@ -470,9 +472,11 @@ class LightEvalAdapter(FrameworkAdapter):
             benchmark_id: Benchmark identifier for context
 
         Returns:
-            List of structured EvaluationResult objects
+            Tuple of (EvaluationResult list, MetricSchema list). String-valued
+            metrics are declared as CATEGORICAL; all others as NUMERIC.
         """
         evaluation_results = []
+        metrics_schema = []
 
         # Extract results dict
         results_dict = lighteval_results.get("results", lighteval_results)
@@ -507,10 +511,11 @@ class LightEvalAdapter(FrameworkAdapter):
 
                 clean_metric = self._normalise_metric_name(metric_name)
                 clean_task = self._normalise_task_name(task_name)
+                full_name = f"{clean_task}.{clean_metric}"
 
                 evaluation_results.append(
                     EvaluationResult(
-                        metric_name=f"{clean_task}.{clean_metric}",
+                        metric_name=full_name,
                         metric_value=metric_value,
                         metric_type=metric_type,
                         confidence_interval=confidence_interval,
@@ -523,8 +528,12 @@ class LightEvalAdapter(FrameworkAdapter):
                     )
                 )
 
+                # String-valued metrics are categorical labels; everything else is numeric.
+                result_type = ResultType.CATEGORICAL if isinstance(metric_value, str) else ResultType.NUMERIC
+                metrics_schema.append(MetricSchema(name=full_name, type=result_type))
+
         logger.info(f"Extracted {len(evaluation_results)} metrics from LightEval results")
-        return evaluation_results
+        return evaluation_results, metrics_schema
 
     @staticmethod
     def _normalise_task_name(task_name: str) -> str:
