@@ -54,9 +54,9 @@ class LightEvalAdapter(FrameworkAdapter):
         "commonsense_reasoning": ["hellaswag", "winogrande", "openbookqa", "arc:easy"],
         "scientific_reasoning": ["arc:easy", "arc:challenge"],
         "physical_commonsense": ["piqa"],
-        "truthfulness": ["truthfulqa:mc", "truthfulqa:generation"],
-        "math": ["gsm8k", "math:algebra", "math:counting_and_probability"],
-        "knowledge": ["mmlu", "triviaqa"],
+        "truthfulness": ["truthfulqa:mc"],
+        "math": ["gsm8k", "math:algebra", "math:counting_and_probability", "math_500"],
+        "knowledge": ["mmlu", "triviaqa", "openbookqa"],
         "language_understanding": ["glue:cola", "glue:sst2", "glue:mrpc"],
     }
 
@@ -105,7 +105,7 @@ class LightEvalAdapter(FrameworkAdapter):
                 tasks=tasks,
                 output_dir=output_dir,
                 num_fewshot=config.parameters.get("num_few_shot", 0),
-                limit=config.num_examples,
+                limit=config.num_examples or config.parameters.get("max_samples"),
                 batch_size=config.parameters.get("batch_size", 1),
                 benchmark_config=config.parameters,
             )
@@ -236,7 +236,14 @@ class LightEvalAdapter(FrameworkAdapter):
 
         # Validate model provider (from benchmark_config)
         provider = config.parameters.get("provider", "endpoint")
-        valid_providers = ["transformers", "vllm", "openai", "anthropic", "endpoint", "litellm"]
+        valid_providers = ["transformers", "vllm", "openai", "endpoint", "litellm"]
+        if provider == "anthropic":
+            raise ValueError(
+                "provider: anthropic is not supported. The loglikelihood patch uses "
+                "/v1/completions with echo=True and logprobs=1, which Anthropic's API "
+                "does not implement. Use provider: endpoint with a vLLM-compatible server "
+                "for MC benchmarks (arc, hellaswag, winogrande, truthfulqa:mc)."
+            )
         if provider not in valid_providers:
             logger.warning(
                 f"Unknown model provider '{provider}'. "
@@ -244,6 +251,15 @@ class LightEvalAdapter(FrameworkAdapter):
             )
 
         logger.debug("Configuration validated successfully")
+
+    # Task name aliases: provider.yaml ID → lighteval task registry name.
+    # Add entries here when the EvalHub benchmark ID differs from the lighteval CLI name.
+    # Note: truthfulqa:generation is NOT aliased — its correct registry name varies
+    # across lighteval releases. Submit it as a direct task ID and handle the
+    # resulting ValueError at the lighteval CLI level if unavailable.
+    TASK_ALIASES: dict[str, str] = {
+        "math:counting_and_probability": "math:counting_and_prob",
+    }
 
     def _parse_benchmark_tasks(
         self, benchmark_id: str, benchmark_config: dict[str, Any]
@@ -265,15 +281,15 @@ class LightEvalAdapter(FrameworkAdapter):
             tasks = benchmark_config["tasks"]
             if isinstance(tasks, str):
                 tasks = [tasks]
-            return tasks
+            return [self.TASK_ALIASES.get(t, t) for t in tasks]
 
         # Check if benchmark_id is a known category
         if benchmark_id in self.SUPPORTED_TASKS:
-            return self.SUPPORTED_TASKS[benchmark_id]
+            return [self.TASK_ALIASES.get(t, t) for t in self.SUPPORTED_TASKS[benchmark_id]]
 
-        # Otherwise, treat benchmark_id as a single task name
+        # Otherwise, treat benchmark_id as a single task name, applying alias if present
         # LightEval task names can include colons (e.g., "arc:easy", "truthfulqa:mc")
-        return [benchmark_id]
+        return [self.TASK_ALIASES.get(benchmark_id, benchmark_id)]
 
     def _run_lighteval(
         self,
@@ -313,18 +329,22 @@ class LightEvalAdapter(FrameworkAdapter):
         # Determine model provider from benchmark_config
         provider = benchmark_config.get("provider", "endpoint")
 
+        # Path to the loglikelihood patch wrapper (installed alongside main.py in the container)
+        _patch_script = str(Path(__file__).parent / "lighteval_logprob_patch.py")
+        _lighteval_cmd = ["python", _patch_script] if Path(_patch_script).exists() else ["lighteval"]
+
         if provider == "transformers":
             # For HuggingFace transformers models
             model_args = f"pretrained={model_config.name}"
             device = benchmark_config.get("device")
             if device:
                 model_args += f",device={device}"
-            cmd = ["lighteval", "accelerate", model_args, tasks_arg]
+            cmd = [*_lighteval_cmd, "accelerate", model_args, tasks_arg]
 
         elif provider == "vllm":
             # For vLLM models
             model_args = f"pretrained={model_config.name}"
-            cmd = ["lighteval", "vllm", model_args, tasks_arg]
+            cmd = [*_lighteval_cmd, "vllm", model_args, tasks_arg]
 
         elif provider in ["openai", "anthropic", "endpoint", "litellm"]:
             # For API-based models (OpenAI, Anthropic, custom endpoints)
@@ -359,12 +379,17 @@ class LightEvalAdapter(FrameworkAdapter):
             parameters = benchmark_config.get("parameters") or {}
             if not isinstance(parameters, dict):
                 raise ValueError("parameters must be an object")
+            parameters = dict(parameters)
+            # generation_parameters is declared at the top level of the provider schema;
+            # forward it if not already overridden by the nested "parameters" sub-key.
+            if "generation_parameters" in benchmark_config and "generation_parameters" not in parameters:
+                parameters["generation_parameters"] = benchmark_config["generation_parameters"]
             for key, value in parameters.items():
                 if key == "generation_parameters":
                     value = self._format_generation_parameters(value)
                 model_args += f",{key}={value}"
 
-            cmd = ["lighteval", "endpoint", "litellm", model_args, tasks_arg]
+            cmd = [*_lighteval_cmd, "endpoint", "litellm", model_args, tasks_arg]
 
         else:
             raise ValueError(f"Unsupported model provider: {provider}")
