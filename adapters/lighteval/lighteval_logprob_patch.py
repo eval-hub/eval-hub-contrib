@@ -37,14 +37,67 @@ if TYPE_CHECKING:
 # loglikelihood implementation via /v1/completions echo + logprobs
 # ---------------------------------------------------------------------------
 
+def _score_one_choice(
+    completions_url: str,
+    model_name: str,
+    api_key: str,
+    context: str,
+    choice: str,
+) -> float:
+    """POST a single (context + choice) prompt and return the summed continuation log-prob.
+
+    Returns ``float("-inf")`` on any failure (endpoint error, missing logprobs).
+    """
+    full_prompt = context + choice
+    ctx_char_len = len(context)
+
+    payload = {
+        "model": model_name,
+        "prompt": full_prompt,
+        "max_tokens": 0,
+        "echo": True,
+        "logprobs": 1,
+    }
+    req = urllib.request.Request(
+        completions_url,
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
+            data = json.loads(resp.read())
+        choice_resp = data["choices"][0]
+        logprobs_obj = choice_resp.get("logprobs") or {}
+        token_logprobs: list[float | None] = logprobs_obj.get("token_logprobs", [])
+        text_offsets: list[int] = logprobs_obj.get("text_offset", [])
+        cont_sum = 0.0
+        found = False
+        for i, offset in enumerate(text_offsets):
+            if offset >= ctx_char_len:
+                lp = token_logprobs[i] if i < len(token_logprobs) else None
+                if lp is not None and math.isfinite(lp):
+                    cont_sum += lp
+                    found = True
+        return cont_sum if found else float("-inf")
+    except (urllib.error.URLError, KeyError, json.JSONDecodeError) as exc:
+        logger.warning("loglikelihood fallback (echo failed for choice %r): %s", choice[:40], exc)
+        return float("-inf")
+
+
 def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelResponse"]:  # noqa: N802
-    """Compute log-likelihood of the continuation using vLLM echo+logprobs.
+    """Compute log-likelihood for all choices of each Doc using vLLM echo+logprobs.
 
-    POSTs to ``{base_url}/completions`` with:
+    lighteval's ``LoglikelihoodAcc`` metric expects ``ModelResponse.logprobs`` to
+    contain **one summed log-prob per choice** (``logprobs[:n_choices]``), not
+    per-token values for a single continuation.  This implementation scores every
+    entry in ``doc.choices`` and returns the per-choice sums.
+
+    POSTs to ``{base_url}/completions`` for each (context, choice) pair with:
         max_tokens=0, echo=True, logprobs=1
-
-    Then sums the token log-probs that correspond to the continuation portion
-    of the concatenated (context + continuation) prompt.
     """
     from lighteval.models.model_output import ModelResponse  # noqa: PLC0415
 
@@ -71,73 +124,33 @@ def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelRespon
     )
 
     for doc in docs:
-        # lighteval 0.13.0 Doc uses `query` (not `context`).
-        # For MC loglikelihood tasks lighteval creates one Doc per choice;
-        # the continuation to evaluate is choices[0] when there is exactly
-        # one choice, or '' when choices is empty (greedy tasks — shouldn't
-        # reach this path, but guard defensively).
+        # lighteval 0.13.0 Doc.choices holds ALL candidate continuations for this
+        # sample.  We must score every choice and return per-choice sums so that
+        # LoglikelihoodAcc can pick the argmax (logprobs[:n_choices]).
         context: str = getattr(doc, "query", "") or ""
-        continuation: str = getattr(doc, "continuation", None) or (
-            doc.choices[0] if getattr(doc, "choices", None) else ""
-        )
-        full_prompt: str = context + continuation
-        ctx_char_len: int = len(context)
+        choices: list[str] = list(getattr(doc, "choices", None) or [])
+        if not choices:
+            choices = [""]  # generative fallback — shouldn't reach this path
 
-        payload = {
-            "model": model_name,
-            "prompt": full_prompt,
-            "max_tokens": 0,
-            "echo": True,
-            "logprobs": 1,
-        }
+        choice_sums: list[float] = [
+            _score_one_choice(completions_url, model_name, api_key, context, ch)
+            for ch in choices
+        ]
 
-        req = urllib.request.Request(
-            completions_url,
-            data=json.dumps(payload).encode(),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-            method="POST",
-        )
+        # Determine argmax and compare to gold.
+        best_idx = max(range(len(choice_sums)), key=lambda i: choice_sums[i])
+        gold_index = getattr(doc, "gold_index", 0)
+        gold_ixs: list[int] = gold_index if isinstance(gold_index, list) else [gold_index]
+        argmax_eq_gold = [best_idx in gold_ixs]
 
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
-                data = json.loads(resp.read())
-
-            choice = data["choices"][0]
-            logprobs_obj = choice.get("logprobs") or {}
-            tokens: list[str] = logprobs_obj.get("tokens", [])
-            token_logprobs: list[float | None] = logprobs_obj.get("token_logprobs", [])
-            text_offsets: list[int] = logprobs_obj.get("text_offset", [])
-
-            # Collect per-token log-probs for tokens in the continuation portion
-            cont_logprobs: list[float] = []
-            for i, offset in enumerate(text_offsets):
-                lp = token_logprobs[i] if i < len(token_logprobs) else None
-                if offset >= ctx_char_len and lp is not None and math.isfinite(lp):
-                    cont_logprobs.append(lp)
-
-            # Fall back to -inf when the endpoint returned no continuation logprobs
-            if not cont_logprobs:
-                cont_logprobs = [float("-inf")]
-
-            n_ctx_tokens = len(tokens) - len(cont_logprobs)
-
-        except (urllib.error.URLError, KeyError, json.JSONDecodeError) as exc:
-            logger.warning("loglikelihood fallback (echo failed): %s", exc)
-            cont_logprobs = [float("-inf")]
-            n_ctx_tokens = 0
-
-        # ModelResponse.logprobs holds per-token log-probs for the continuation.
-        # argmax_logits_eq_gold is set to False; the downstream metric picks the
-        # choice with the highest sum(logprobs) across all candidate Docs.
         results.append(
             ModelResponse(
-                logprobs=cont_logprobs,
-                argmax_logits_eq_gold=[False] * len(cont_logprobs),
-                input_tokens=list(range(n_ctx_tokens)),   # placeholder token ids
-                output_tokens=[list(range(len(cont_logprobs)))],
+                # logprobs[:n_choices] — one sum per choice, as expected by LoglikelihoodAcc
+                logprobs=choice_sums,
+                argmax_logits_eq_gold=argmax_eq_gold,
+                input_tokens=[],
+                # output_tokens[:n_choices] — placeholder lists (no real token IDs available)
+                output_tokens=[[] for _ in choices],
             )
         )
 

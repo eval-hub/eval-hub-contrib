@@ -816,3 +816,168 @@ def test_generation_parameters_nested_takes_precedence(adapter, tmp_path, monkey
     # Nested value (0.1, 128) wins over top-level (0.9)
     assert "generation_parameters={temperature:0.1,max_new_tokens:128}" in model_args
     assert "temperature:0.9" not in model_args
+
+
+# ── C1: Multi-choice aggregate scoring in loglikelihood patch ──────────────────
+
+
+class _FakeHTTPResponse:
+    """Proper context manager for monkeypatching urllib.request.urlopen."""
+    def __init__(self, data: bytes):
+        self._data = data
+    def read(self):
+        return self._data
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return None
+
+
+def _completions_json(context: str, choice: str, choice_logprob: float) -> bytes:
+    """Build a minimal /v1/completions echo response with two tokens:
+    the context as one token (offset 0, logprob None) and the choice as
+    one token (offset = len(context), logprob = choice_logprob).
+
+    This is enough for _score_one_choice to pick up the continuation logprob.
+    """
+    ctx_len = len(context)
+    payload = {
+        "choices": [{
+            "logprobs": {
+                "tokens": [context, choice],
+                "token_logprobs": [None, choice_logprob],
+                "text_offset": [0, ctx_len],
+            }
+        }]
+    }
+    return json.dumps(payload).encode()
+
+
+def _load_patch_fn():
+    """Load _loglikelihood_via_completions from the patch script without lighteval."""
+    import importlib.util, sys as _sys
+    patch_path = Path(__file__).parent.parent / "lighteval_logprob_patch.py"
+    key = f"_logprob_patch_{id(patch_path)}"
+    spec = importlib.util.spec_from_file_location(key, patch_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod._loglikelihood_via_completions
+
+
+def test_loglikelihood_patch_scores_all_choices(monkeypatch):
+    """_loglikelihood_via_completions returns one logprob SUM per choice.
+
+    lighteval's LoglikelihoodAcc.compute reads logprobs[:n_choices] and picks
+    the argmax.  The patch must score every doc.choices entry and return per-
+    choice sums, not per-token values for a single continuation.
+
+    Regression for the bug where only choices[0] was evaluated.
+    """
+    import urllib.request as _urllib_request
+    import sys as _sys
+    from types import SimpleNamespace
+
+    _loglikelihood_via_completions = _load_patch_fn()
+
+    # Stub ModelResponse so lighteval install is not required
+    class FakeModelResponse:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    stub_mr = MagicMock()
+    stub_mr.ModelResponse = FakeModelResponse
+    monkeypatch.setitem(_sys.modules, "lighteval.models.model_output", stub_mr)
+
+    # 4-choice doc: gold is index 2 ("four"), which gets the highest logprob.
+    context = "Q: What is 2+2? A: "
+    choices = ["two", "three", "four", "five"]
+    logprobs_per_choice = {"two": -0.9, "three": -0.6, "four": -0.1, "five": -0.8}
+    doc = SimpleNamespace(query=context, choices=choices, gold_index=2)
+
+    def fake_urlopen(req, timeout=60):
+        body = json.loads(req.data.decode())
+        choice_text = body["prompt"][len(context):]
+        return _FakeHTTPResponse(
+            _completions_json(context, choice_text, logprobs_per_choice[choice_text])
+        )
+
+    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
+
+    fake_self = SimpleNamespace(
+        base_url="http://fake-vllm:8000/v1",
+        model_name="openai/test-model",
+        api_key="dummy",
+    )
+
+    responses = _loglikelihood_via_completions(fake_self, [doc])
+
+    assert len(responses) == 1, "one response per doc"
+    resp = responses[0]
+
+    # logprobs must have one sum per choice (length == 4)
+    assert len(resp.logprobs) == 4, (
+        f"Expected 4 choice sums, got {len(resp.logprobs)}: {resp.logprobs}"
+    )
+
+    # choice 2 ("four", -0.1) must have the highest (least negative) logprob
+    best_idx = max(range(4), key=lambda i: resp.logprobs[i])
+    assert best_idx == 2, (
+        f"Expected argmax at choice 2 ('four'), got {best_idx}. Sums: {resp.logprobs}"
+    )
+
+    # argmax == gold (both index 2) → [True]
+    assert resp.argmax_logits_eq_gold == [True], (
+        f"Expected [True] since argmax==gold, got {resp.argmax_logits_eq_gold}"
+    )
+
+    # output_tokens must have one entry per choice
+    assert len(resp.output_tokens) == 4, (
+        f"Expected 4 output_tokens entries, got {len(resp.output_tokens)}"
+    )
+
+
+def test_loglikelihood_patch_wrong_argmax(monkeypatch):
+    """When argmax != gold, argmax_logits_eq_gold is [False]."""
+    import urllib.request as _urllib_request
+    import sys as _sys
+    from types import SimpleNamespace
+
+    _loglikelihood_via_completions = _load_patch_fn()
+
+    class FakeModelResponse:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    stub_mr = MagicMock()
+    stub_mr.ModelResponse = FakeModelResponse
+    monkeypatch.setitem(_sys.modules, "lighteval.models.model_output", stub_mr)
+
+    context = "The sky is "
+    choices = ["blue", "green"]
+    # gold is 0 ("blue"), but model picks 1 ("green", higher logprob)
+    logprobs_per_choice = {"blue": -1.5, "green": -0.2}
+    doc = SimpleNamespace(query=context, choices=choices, gold_index=0)
+
+    def fake_urlopen(req, timeout=60):
+        body = json.loads(req.data.decode())
+        choice_text = body["prompt"][len(context):]
+        return _FakeHTTPResponse(
+            _completions_json(context, choice_text, logprobs_per_choice[choice_text])
+        )
+
+    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
+
+    fake_self = SimpleNamespace(
+        base_url="http://fake-vllm:8000/v1",
+        model_name="test-model",
+        api_key="dummy",
+    )
+
+    responses = _loglikelihood_via_completions(fake_self, [doc])
+    resp = responses[0]
+
+    assert len(resp.logprobs) == 2
+    # argmax chose "green" (idx 1); gold is "blue" (idx 0) → [False]
+    assert resp.argmax_logits_eq_gold == [False], (
+        f"Expected [False], got {resp.argmax_logits_eq_gold}"
+    )
