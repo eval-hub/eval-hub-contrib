@@ -99,6 +99,11 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     "inspect/math":                   "inspect_evals/math",
     "inspect/aime2024":               "inspect_evals/aime2024",
     "inspect/aime2025":               "inspect_evals/aime2025",
+    # Telecom (GSMA Open-Telco / gsma-labs/evals)
+    "inspect/telemath":               "evals/telemath",
+    "inspect/teleqna":                "evals/teleqna",
+    "inspect/telelogs":               "evals/telelogs",
+    "inspect/3gpp-tsg":               "evals/three_gpp",
     # Knowledge & reasoning
     "inspect/mmlu":                   "inspect_evals/mmlu",
     "inspect/mmlu-pro":               "inspect_evals/mmlu_pro",
@@ -118,7 +123,7 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
 }
 
 # ---------------------------------------------------------------------------
-# Judge dimension → EvalCard ability mapping
+# Judge dimension → ability mapping (used when labeling capability rows in tests / metadata)
 # Default for unmapped dimensions is "alignment_risk" (Petri/Bloom) or "reasoning"
 # ---------------------------------------------------------------------------
 

@@ -17,7 +17,8 @@ are also supported.
 
 ## Benchmarks
 
-**75 benchmarks total** — 36 Petri alignment audits, 2 Bloom suites, 37 inspect-evals + custom.
+**79 benchmarks total** — 36 Petri alignment audits, 2 Bloom suites, 36 inspect-evals,
+4 Open-Telco (TeleMath, TeleQnA, TeleLogs, 3GPP-TSG), and 1 custom task.
 
 ### Petri alignment audits (`inspect/petri-*`)
 
@@ -78,6 +79,15 @@ All 38 Petri judge dimensions are captured as individual metrics.
 
 `inspect/gsm8k` · `inspect/math` · `inspect/aime2024` · `inspect/aime2025`
 
+### Telecom (GSMA Open-Telco)
+
+| Benchmark ID | Description |
+|---|---|
+| `inspect/telemath` | Telecom numerical math reasoning. Set `full=true` for `GSMA/ot-full` (500 Q&A); cap with `num_examples`. |
+| `inspect/teleqna` | Telecom multiple-choice domain knowledge. Set `full=true`; optional `subject` (default `full`). |
+| `inspect/telelogs` | 5G root-cause analysis. Set `full=true`; `eval_type` soft (default) or hard. |
+| `inspect/3gpp-tsg` | 3GPP working-group classification. Set `full=true`; cap with `num_examples`. |
+
 ### Knowledge & Reasoning
 
 `inspect/mmlu` · `inspect/mmlu-pro` · `inspect/gpqa` · `inspect/bbh` · `inspect/arc` · `inspect/hellaswag` · `inspect/winogrande` · `inspect/truthfulqa` · `inspect/simpleqa`
@@ -109,10 +119,23 @@ Petri and Bloom modes do not use a sandbox.
 
 ### HuggingFace datasets
 
-Some inspect-evals benchmarks (e.g. `humaneval`, `mmlu`) download datasets from the
-HuggingFace Hub. The adapter reads an `hf-token` secret mounted at
-`/var/run/secrets/model/hf-token` and injects it as `HF_TOKEN` automatically. Mount
-the secret in your EvalHub provider configuration if gated datasets are required.
+Some inspect-evals benchmarks (e.g. `humaneval`, `mmlu`) and Open-Telco tasks
+(`inspect/telemath`) download datasets from the HuggingFace Hub. The adapter reads an
+`hf-token` secret mounted at `/var/run/secrets/model/hf-token` and injects it as
+`HF_TOKEN` automatically. In EvalHub jobs, set `model.auth.secret_ref` to a Kubernetes
+Secret that includes the `hf-token` key (alongside `api-key` if needed).
+
+### Sample limits
+
+Inspect `--limit` is driven by `benchmarks[].parameters.num_examples` (lifted to
+JobSpec `num_examples` by eval-hub). When unset, the adapter defaults to `--limit 5`
+so Petri/Bloom and large datasets do not run unbounded. Set an explicit
+`num_examples` to raise or lower the cap.
+
+Open-Telco dataset size is controlled via `parameters.full`
+(`true` → `GSMA/ot-full`, `false` → `GSMA/ot-lite`). TeleQnA also accepts
+`parameters.subject` (default in the task is `full` = all subjects). TeleLogs
+accepts `parameters.eval_type` (`soft` or `hard`).
 
 ---
 
@@ -162,8 +185,7 @@ When set, only that role uses the override; all other roles continue using globa
   },
   "parameters": {
     "auditor_model": "ibm-granite/granite-3.3-8b-instruct",
-    "judge_model": "meta-llama/Llama-3.3-70B-Instruct",
-    "max_samples": 5
+    "judge_model": "meta-llama/Llama-3.3-70B-Instruct"
   }
 }
 ```
@@ -181,8 +203,7 @@ Environment: none required (vLLM does not require authentication by default).
   },
   "parameters": {
     "auditor_model": "claude-sonnet-4-6",
-    "judge_model": "claude-opus-4-7",
-    "max_samples": 5
+    "judge_model": "claude-opus-4-7"
   }
 }
 ```
@@ -208,8 +229,7 @@ server requires a token even if authentication is not enforced).
     "auditor_model": "ibm-granite/granite-3.3-8b-instruct",
     "judge_model": "meta-llama/Llama-3.3-70B-Instruct",
     "judge_base_url": "http://vllm-b:8080/v1",
-    "judge_api_key": "EMPTY",
-    "max_samples": 5
+    "judge_api_key": "EMPTY"
   }
 }
 ```
@@ -229,8 +249,7 @@ Environment: `OPENAI_API_KEY=EMPTY` (for target and auditor on vLLM-A).
     "auditor_model": "meta-llama/llama-3.3-70b-instruct",
     "auditor_base_url": "https://openrouter.ai/api/v1",
     "auditor_api_key": "sk-or-...",
-    "judge_model": "claude-opus-4-7",
-    "max_samples": 5
+    "judge_model": "claude-opus-4-7"
   }
 }
 ```
@@ -253,8 +272,7 @@ format (`granite3.3:8b`, `llama3.3`, `qwen3:32b`), not HuggingFace IDs.
   },
   "parameters": {
     "auditor_model": "llama3.3",
-    "judge_model": "qwen3:32b",
-    "max_samples": 5
+    "judge_model": "qwen3:32b"
   }
 }
 ```
@@ -271,8 +289,7 @@ Environment: none required.
   },
   "parameters": {
     "auditor_model": "claude-sonnet-4-6",
-    "judge_model": "claude-opus-4-7",
-    "max_samples": 5
+    "judge_model": "claude-opus-4-7"
   }
 }
 ```
@@ -297,8 +314,7 @@ endpoint while everything else uses the standard configuration.
     "auditor_model": "claude-sonnet-4-6",
     "judge_model": "claude-opus-4-7",
     "judge_anthropic_base_url": "https://my-anthropic-proxy/v1",
-    "judge_anthropic_api_key": "sk-proxy-key",
-    "max_samples": 5
+    "judge_anthropic_api_key": "sk-proxy-key"
   }
 }
 ```
@@ -316,10 +332,10 @@ Environment: `ANTHROPIC_API_KEY=sk-ant-...` (for auditor), `OPENAI_BASE_URL` set
 | `max_turns` | `30` | Max auditor turns per scenario |
 | `enable_rollback` | `true` | Allow auditor to backtrack and retry approaches |
 | `realism_filter` | `false` | Filter unrealistic auditor outputs (experimental) |
-| `max_samples` | `null` | Limit scenarios per run — recommended for cost control |
+| `num_examples` | `5` | Cap scenarios/samples via EvalHub `benchmarks[].parameters.num_examples` (JobSpec `num_examples` → Inspect `--limit`; defaults to 5 when unset) |
 | `seed_instructions` | *(from benchmark_id)* | Override seed selection (`tags:deception`, `id:seed_name`, inline text) |
 | `judge_dimensions` | *(all 38)* | Filter judge dimensions (`tags:safety` or custom directory) |
-| `task_args` | `{}` | Pass-through to `inspect eval` (`{"dish_scaffold": "claude-code"}` enables Dish) |
+| `task_args` | `{}` | Escape hatch for non–first-class Inspect `-T` flags (e.g. Dish `dish_scaffold`). Not for Open-Telco `full`. |
 
 ## Bloom-specific parameters
 
