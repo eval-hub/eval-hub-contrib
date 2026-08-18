@@ -618,6 +618,20 @@ are included; null-valued parameters are omitted:
 
 If all generation parameters are null, this key is omitted entirely.
 
+### Metric Result Types (`metrics_schema`)
+
+This adapter emits a `metrics_schema` list alongside evaluation results, declaring the type of each metric for the eval-hub comparison surface.
+
+LightEval's aggregated results are always numeric floats — the framework passes all sample-level scores through a `corpus_level_fn` (typically `np.mean`) before writing to the results JSON, producing a `dict[str, dict[str, float]]` structure (`info_loggers.py:322`). Accordingly, all metrics submitted by this adapter are declared as `ResultType.NUMERIC`.
+
+```python
+# All lighteval metrics are float aggregates — declared as NUMERIC
+MetricSchema(name="commonsense_reasoning.hellaswag.acc", type=ResultType.NUMERIC)
+MetricSchema(name="commonsense_reasoning.hellaswag.acc_norm", type=ResultType.NUMERIC)
+```
+
+See [`CONTRIBUTING.md`](../../CONTRIBUTING.md#annotating-metric-result-types-metrics_schema) for the full annotation guide and available `ResultType` values.
+
 ### Limitations: CoT and Multi-Turn Detection
 
 Chain-of-Thought (CoT) and multi-turn evaluation strategies **cannot be reliably detected** from

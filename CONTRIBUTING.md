@@ -47,6 +47,55 @@ make push-lighteval REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-guidellm REGISTRY=quay.io/your-org VERSION=v1.0.0
 ```
 
+## Annotating metric result types (`metrics_schema`)
+
+Every adapter should declare the type of each metric it submits by passing a `metrics_schema` list to `JobResults`. This tells the eval-hub UI how to render comparisons between runs without relying on shape-based inference.
+
+### ResultType values
+
+| Value | When to use |
+|---|---|
+| `ResultType.NUMERIC` | Scalar float or int (accuracy, F1, perplexity, latency, etc.) — the default |
+| `ResultType.CATEGORICAL` | Distribution over discrete labels (e.g. per-class accuracy, pass/fail counts) |
+| `ResultType.ARRAY_ORDERED` | Ordered list where position matters (ranked results, top-K lists) |
+| `ResultType.ARRAY_UNORDERED` | Unordered set of values (multi-label predictions, tag sets) |
+| `ResultType.TIME_SERIES` | Sequence of values over time or load (latency over request rate) |
+
+### How to annotate
+
+Import `MetricSchema` and `ResultType` from the SDK, build a `metrics_schema` list alongside your `EvaluationResult` list, then pass it to `JobResults`:
+
+```python
+from evalhub.models import EvaluationResult, JobResults, MetricSchema, ResultType
+
+evaluation_results = []
+metrics_schema = []
+
+for metric_name, metric_value in my_results.items():
+    evaluation_results.append(
+        EvaluationResult(metric_name=metric_name, metric_value=metric_value)
+    )
+    metrics_schema.append(
+        MetricSchema(name=metric_name, type=ResultType.NUMERIC)
+    )
+
+job_results = JobResults(
+    evaluation_results=evaluation_results,
+    metrics_schema=metrics_schema,
+    ...
+)
+```
+
+### Choosing the right type
+
+- **All aggregated scores are floats?** Use `ResultType.NUMERIC` for all metrics. This covers the majority of adapters (lm-eval, lighteval, GuideLLM, MTEB, etc.).
+- **Raw per-attempt data is pass/fail but you aggregate to a rate?** The submission is still `NUMERIC`. If you want to surface the categorical distribution, restructure the result to emit per-label counts as separate metrics with `ResultType.CATEGORICAL`.
+- **Not sure?** Default to `ResultType.NUMERIC`. The field can be updated when the adapter is extended.
+
+### Reference implementation
+
+See [`adapters/lighteval/main.py`](adapters/lighteval/main.py) for a working example. The relevant section is in `_extract_evaluation_results()`, which builds `metrics_schema` alongside `evaluation_results` and returns both.
+
 ## Commit messages
 
 This project uses [Conventional Commits](https://www.conventionalcommits.org). All commit messages must follow the format:
