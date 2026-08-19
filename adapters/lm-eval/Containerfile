@@ -1,0 +1,29 @@
+# lm-evaluation-harness adapter container for eval-hub
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+USER 0
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy adapter implementation
+COPY main.py _tasks.py _execution.py _results.py ./
+
+RUN mkdir -p /tmp/.cache && \
+    chown -R 1001:0 /app && \
+    chmod -R g+rwX /app && \
+    chown -R 1001:0 /opt/app-root && \
+    chmod -R g+rwX /opt/app-root
+
+ENV PYTHONUNBUFFERED=1
+ENV EVALHUB_MODE=k8s
+ENV HOME=/tmp
+# HuggingFace datasets cache — override via hf_datasets_cache parameter
+ENV HF_DATASETS_CACHE=/tmp/.cache/huggingface/datasets
+ENV TOKENIZERS_PARALLELISM=false
+
+USER 1001
+
+ENTRYPOINT ["python", "main.py"]
