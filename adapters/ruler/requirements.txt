@@ -38,4 +38,4 @@ tiktoken>=0.5.0
 pandas>=2.0.0
 
 # EvalHub SDK (framework adapter with adapter extra only)
-eval-hub-sdk[adapter]==0.1.7
+eval-hub-sdk[adapter]==1.0.2

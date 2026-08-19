@@ -648,13 +648,15 @@ class RagasAdapter(FrameworkAdapter):
 
 def main() -> None:
     """Load JobSpec, run RagasAdapter, emit JobResults via DefaultCallbacks."""
-    from evalhub.adapter import DefaultCallbacks
+    from evalhub.adapter import DefaultCallbacks, configure_telemetry
 
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
         level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+    configure_telemetry()
 
     try:
         job_spec_path = os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")
