@@ -54,7 +54,7 @@ class LightEvalAdapter(FrameworkAdapter):
         "commonsense_reasoning": ["hellaswag", "winogrande", "openbookqa", "arc:easy"],
         "scientific_reasoning": ["arc:easy", "arc:challenge"],
         "physical_commonsense": ["piqa"],
-        "truthfulness": ["truthfulqa:mc", "truthfulqa:generation"],
+        "truthfulness": ["truthfulqa:mc", "truthfulqa:gen"],
         "math": ["gsm8k", "math:algebra", "math:counting_and_probability"],
         "knowledge": ["mmlu", "triviaqa"],
         "language_understanding": ["glue:cola", "glue:sst2", "glue:mrpc"],
