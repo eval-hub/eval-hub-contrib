@@ -12,5 +12,9 @@ pydantic==2.12.5
 # LightEval 0.13.0 passes strings to xxhash.xxh64(); xxhash 4.x requires bytes
 xxhash>=3.0.0,<4
 
+# Pin xxhash below v4 to avoid "Strings must be encoded before hashing"
+# TypeError in lighteval's info_loggers.py (upstream bug)
+xxhash<4
+
 # EvalHub SDK (framework adapter with adapter extra only)
 eval-hub-sdk[adapter]==1.0.1
