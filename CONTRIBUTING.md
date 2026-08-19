@@ -80,7 +80,7 @@ for metric_name, metric_value in my_results.items():
     )
 
 job_results = JobResults(
-    evaluation_results=evaluation_results,
+    results=evaluation_results,
     metrics_schema=metrics_schema,
     ...
 )

@@ -622,10 +622,10 @@ If all generation parameters are null, this key is omitted entirely.
 
 This adapter emits a `metrics_schema` list alongside evaluation results, declaring the type of each metric for the eval-hub comparison surface.
 
-LightEval's aggregated results are always numeric floats — the framework passes all sample-level scores through a `corpus_level_fn` (typically `np.mean`) before writing to the results JSON, producing a `dict[str, dict[str, float]]` structure (`info_loggers.py:322`). Accordingly, all metrics submitted by this adapter are declared as `ResultType.NUMERIC`.
+LightEval's aggregated results are always numeric — the framework passes all sample-level scores through a `corpus_level_fn` (typically `np.mean`) before writing to the results JSON, producing a `dict[str, dict[str, float]]` structure (`info_loggers.py:322`). Some aggregators (e.g. `max`/`min`) may produce integer results. All numeric values (int or float) are declared as `ResultType.NUMERIC`. Non-numeric values are skipped with a warning.
 
 ```python
-# All lighteval metrics are float aggregates — declared as NUMERIC
+# All lighteval metrics are numeric (int or float) — declared as NUMERIC
 MetricSchema(name="commonsense_reasoning.hellaswag.acc", type=ResultType.NUMERIC)
 MetricSchema(name="commonsense_reasoning.hellaswag.acc_norm", type=ResultType.NUMERIC)
 ```

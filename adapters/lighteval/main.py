@@ -528,9 +528,13 @@ class LightEvalAdapter(FrameworkAdapter):
                     )
                 )
 
-                # String-valued metrics are categorical labels; everything else is numeric.
-                result_type = ResultType.CATEGORICAL if isinstance(metric_value, str) else ResultType.NUMERIC
-                metrics_schema.append(MetricSchema(name=full_name, type=result_type))
+                if not isinstance(metric_value, (int, float)):
+                    logger.warning(
+                        f"Unexpected non-numeric metric value for {full_name!r}: "
+                        f"{type(metric_value).__name__!r} — skipping schema entry"
+                    )
+                    continue
+                metrics_schema.append(MetricSchema(name=full_name, type=ResultType.NUMERIC))
 
         logger.info(f"Extracted {len(evaluation_results)} metrics from LightEval results")
         return evaluation_results, metrics_schema
