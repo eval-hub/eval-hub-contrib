@@ -18,17 +18,17 @@ completions/embeddings endpoints.
 
 from __future__ import annotations
 
-import base64
+import importlib.metadata
+import inspect
 import json
 import logging
 import os
-import ssl
 import sys
 import time
-import urllib.request as _urlreq
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from evalhub.adapter import (
@@ -44,16 +44,11 @@ from evalhub.adapter import (
     OCIArtifactSpec,
 )
 from evalhub.adapter.auth import resolve_model_credentials
-from langchain_core.language_models.llms import Generation, LLMResult
-from langchain_core.prompt_values import PromptValue
 from ragas import EvaluationDataset
-from ragas import evaluate as ragas_evaluate
-from ragas.embeddings.base import BaseRagasEmbeddings
-from ragas.llms.base import BaseRagasLLM
 from ragas.run_config import RunConfig
 
 try:
-    from openai import AsyncOpenAI, OpenAI
+    from openai import AsyncOpenAI
 
     _HAS_OPENAI = True
 except ImportError:
@@ -68,11 +63,8 @@ DEFAULT_DATASET_FILENAME = "dataset.jsonl"
 _DATA_SUFFIXES = (".jsonl", ".json")
 
 # ---------------------------------------------------------------------------
-# RAGAS metrics — class-based API (ragas >= 0.4.x)
+# RAGAS metrics — collections API (ragas >= 0.4.x)
 # ---------------------------------------------------------------------------
-from dataclasses import dataclass
-from typing import Callable
-
 from ragas.metrics.collections import (
     AnswerAccuracy,
     AnswerCorrectness,
@@ -127,6 +119,68 @@ DEFAULT_METRICS = [
 ]
 
 
+@dataclass
+class _CollectionsEvaluationResult:
+    """Minimal stand-in for legacy ragas.evaluate() result objects."""
+
+    dataframe: Any
+
+    def to_pandas(self):
+        return self.dataframe
+
+
+def _records_from_dataset(eval_dataset: EvaluationDataset) -> list[dict[str, Any]]:
+    if hasattr(eval_dataset, "to_list"):
+        return eval_dataset.to_list()
+    return [dict(sample) for sample in eval_dataset]
+
+
+def _metric_input_fields(metric: Any) -> list[str]:
+    return [
+        name
+        for name, param in inspect.signature(metric.ascore).parameters.items()
+        if name != "self" and param.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+    ]
+
+
+def _build_metric_inputs(
+    records: list[dict[str, Any]], fields: list[str]
+) -> list[dict[str, Any]]:
+    return [{field: record[field] for field in fields if field in record} for record in records]
+
+
+def _run_collections_evaluation(
+    *,
+    eval_dataset: EvaluationDataset,
+    metric_defs: list["_MetricDef"],
+    llm: Any,
+    embeddings: Any,
+) -> _CollectionsEvaluationResult:
+    """Evaluate dataset rows with ragas.metrics.collections metrics."""
+    import pandas as pd
+
+    records = _records_from_dataset(eval_dataset)
+    dataframe = pd.DataFrame(records)
+
+    for metric_def in metric_defs:
+        metric = metric_def.factory(llm, embeddings)
+        fields = _metric_input_fields(metric)
+        if records:
+            missing = [field for field in fields if field not in records[0]]
+            if missing:
+                raise ValueError(
+                    f"Metric {metric_def.name} requires fields {fields}, "
+                    f"but dataset is missing {missing} (columns: {list(records[0].keys())})"
+                )
+        inputs = _build_metric_inputs(records, fields)
+
+        batch_results = metric.batch_score(inputs)
+        column_name = getattr(metric, "name", metric_def.name)
+        dataframe[column_name] = [result.value for result in batch_results]
+
+    return _CollectionsEvaluationResult(dataframe=dataframe)
+
+
 # ---------------------------------------------------------------------------
 # OpenAI-compatible LLM wrapper
 # ---------------------------------------------------------------------------
@@ -143,15 +197,6 @@ def _openai_credentials(base_url: str) -> tuple[str, str]:
     return url, api_key or "DUMMY"
 
 
-def _openai_client(base_url: str) -> Any:
-    if not _HAS_OPENAI:
-        raise RuntimeError(
-            "openai package is required — install with: pip install openai>=1.0.0"
-        )
-    url, api_key = _openai_credentials(base_url)
-    return OpenAI(base_url=url, api_key=api_key)
-
-
 def _async_openai_client(base_url: str) -> Any:
     if not _HAS_OPENAI:
         raise RuntimeError(
@@ -161,184 +206,45 @@ def _async_openai_client(base_url: str) -> Any:
     return AsyncOpenAI(base_url=url, api_key=api_key)
 
 
-class EvalHubOpenAILLM(BaseRagasLLM):
-    """RAGAS LLM that calls an OpenAI-compatible chat completions endpoint.
+def _create_ragas_llm(
+    base_url: str,
+    model_id: str,
+    *,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+) -> Any:
+    """Build an InstructorLLM for ragas.metrics.collections via llm_factory."""
+    from ragas.llms import llm_factory
 
-    Uses chat completions rather than the legacy /v1/completions endpoint:
-    the legacy endpoint defaults max_tokens to 16 on most servers (truncating
-    RAGAS's structured judge prompts into unparseable JSON), and instruct
-    models follow the format instructions more reliably via chat.
-    """
+    kwargs: dict[str, Any] = {}
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    if temperature is not None:
+        kwargs["temperature"] = temperature
 
-    def __init__(
-        self,
-        base_url: str,
-        model_id: str,
-        *,
-        max_tokens: int | None = None,
-        temperature: float | None = None,
-        run_config: RunConfig | None = None,
-    ):
-        if run_config is None:
-            run_config = RunConfig()
-        super().__init__(run_config, multiple_completion_supported=True)
-        self._model_id = model_id
-        self._max_tokens = max_tokens
-        self._temperature = temperature
-        self._client = _openai_client(base_url)
-        self._async_client = _async_openai_client(base_url)
-
-    def _build_completion_kwargs(
-        self,
-        prompt: PromptValue,
-        n: int,
-        temperature: float | None,
-        stop: list[str] | None,
-    ) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {
-            "model": self._model_id,
-            "messages": [{"role": "user", "content": prompt.to_string()}],
-            "n": n,
-        }
-        if self._max_tokens is not None:
-            kwargs["max_tokens"] = self._max_tokens
-        t = temperature if temperature is not None else self._temperature
-        if t is not None:
-            kwargs["temperature"] = t
-        if stop:
-            kwargs["stop"] = stop
-        return kwargs
-
-    @staticmethod
-    def _parse_completion_response(response: Any) -> LLMResult:
-        generations = []
-        for choice in getattr(response, "choices", []) or []:
-            message = getattr(choice, "message", None)
-            text = getattr(message, "content", "") or ""
-            generations.append(Generation(text=text))
-        if not generations:
-            generations = [Generation(text="")]
-        return LLMResult(
-            generations=[generations], llm_output={"provider": "evalhub_openai"}
-        )
-
-    def generate_text(
-        self,
-        prompt: PromptValue,
-        n: int = 1,
-        temperature: float | None = None,
-        stop: list[str] | None = None,
-        callbacks: Any = None,
-    ) -> LLMResult:
-        kwargs = self._build_completion_kwargs(prompt, n, temperature, stop)
-        try:
-            response = self._client.chat.completions.create(**kwargs)
-        except Exception as e:
-            logger.error("Chat completion request failed: %s", e)
-            raise
-        return self._parse_completion_response(response)
-
-    def is_finished(self, response: LLMResult) -> bool:
-        return True
-
-    async def agenerate_text(
-        self,
-        prompt: PromptValue,
-        n: int = 1,
-        temperature: float | None = None,
-        stop: list[str] | None = None,
-        callbacks: Any = None,
-    ) -> LLMResult:
-        kwargs = self._build_completion_kwargs(prompt, n, temperature, stop)
-        try:
-            response = await self._async_client.chat.completions.create(**kwargs)
-        except Exception as e:
-            logger.error("Async chat completion request failed: %s", e)
-            raise
-        return self._parse_completion_response(response)
-
-    def get_temperature(self, n: int) -> float:
-        if self._temperature is not None:
-            return self._temperature
-        return 0.3 if n > 1 else 1e-8
+    # Pass raw AsyncOpenAI — llm_factory patches with instructor internally.
+    # Do not pre-patch or pass mode= (conflicts with llm_factory's own instructor setup).
+    client = _async_openai_client(base_url)
+    return llm_factory(model_id, client=client, **kwargs)
 
 
-# ---------------------------------------------------------------------------
-# OpenAI-compatible embeddings wrapper
-# ---------------------------------------------------------------------------
-class EvalHubOpenAIEmbeddings(BaseRagasEmbeddings):
-    """RAGAS embeddings that call an OpenAI-compatible embeddings endpoint."""
+def _create_ragas_embeddings(
+    base_url: str,
+    model_id: str,
+    *,
+    run_config: RunConfig | None = None,
+) -> Any:
+    """Build embeddings for ragas.metrics.collections via embedding_factory."""
+    from ragas.embeddings.base import embedding_factory
 
-    def __init__(
-        self,
-        base_url: str,
-        model_id: str,
-        *,
-        run_config: RunConfig | None = None,
-    ):
-        super().__init__()
-        self._model_id = model_id
-        if run_config is None:
-            run_config = RunConfig()
-        self.set_run_config(run_config)
-        self._client = _openai_client(base_url)
-        self._async_client = _async_openai_client(base_url)
-
-    def embed_query(self, text: str) -> list[float]:
-        try:
-            r = self._client.embeddings.create(input=text, model=self._model_id)
-            if not r.data:
-                raise ValueError("Embeddings response had no data")
-            emb = r.data[0].embedding
-            if isinstance(emb, str):
-                raise ValueError("Expected float embeddings, got base64 string")
-            return emb
-        except Exception as e:
-            logger.error("Embed query failed: %s", e)
-            raise
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        try:
-            r = self._client.embeddings.create(input=texts, model=self._model_id)
-            result = []
-            for d in sorted(r.data, key=lambda x: x.index):
-                if isinstance(d.embedding, str):
-                    raise ValueError("Expected float embeddings, got base64 string")
-                result.append(d.embedding)
-            return result
-        except Exception as e:
-            logger.error("Embed documents failed: %s", e)
-            raise
-
-    async def aembed_query(self, text: str) -> list[float]:
-        try:
-            r = await self._async_client.embeddings.create(
-                input=text, model=self._model_id
-            )
-            if not r.data:
-                raise ValueError("Embeddings response had no data")
-            emb = r.data[0].embedding
-            if isinstance(emb, str):
-                raise ValueError("Expected float embeddings, got base64 string")
-            return emb
-        except Exception as e:
-            logger.error("Async embed query failed: %s", e)
-            raise
-
-    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
-        try:
-            r = await self._async_client.embeddings.create(
-                input=texts, model=self._model_id
-            )
-            result = []
-            for d in sorted(r.data, key=lambda x: x.index):
-                if isinstance(d.embedding, str):
-                    raise ValueError("Expected float embeddings, got base64 string")
-                result.append(d.embedding)
-            return result
-        except Exception as e:
-            logger.error("Async embed documents failed: %s", e)
-            raise
+    client = _async_openai_client(base_url)
+    return embedding_factory(
+        "openai",
+        model=model_id,
+        client=client,
+        interface="modern",
+        run_config=run_config,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -494,16 +400,15 @@ class RagasAdapter(FrameworkAdapter):
 
             max_workers = min(max(int(bc.get("max_workers") or 1), 1), 10)
             run_config = RunConfig(max_workers=max_workers)
-            llm = EvalHubOpenAILLM(
-                base_url=model_url,
-                model_id=model_name,
+            llm = _create_ragas_llm(
+                model_url,
+                model_name,
                 max_tokens=bc.get("max_tokens"),
                 temperature=bc.get("temperature"),
-                run_config=run_config,
             )
-            embeddings = EvalHubOpenAIEmbeddings(
-                base_url=embedding_url,
-                model_id=embedding_model,
+            embeddings = _create_ragas_embeddings(
+                embedding_url,
+                embedding_model,
                 run_config=run_config,
             )
 
@@ -608,6 +513,9 @@ class RagasAdapter(FrameworkAdapter):
                 completed_at=datetime.now(UTC),
                 evaluation_metadata={
                     "framework": "ragas",
+                    "ragas_version": importlib.metadata.version("ragas"),
+                    "judge_llm": model_name,
+                    "embedding_model": embedding_model,
                     "data_path": str(data_path),
                     "metrics": [d.name for d in metric_defs],
                 },
@@ -628,13 +536,12 @@ class RagasAdapter(FrameworkAdapter):
             raise
 
     def _run_ragas(self, *, eval_dataset, metric_defs, llm, embeddings, run_config):
-        metric_instances = [d.factory(llm, embeddings) for d in metric_defs]
-        return ragas_evaluate(
-            dataset=eval_dataset,
-            metrics=metric_instances,
+        del run_config  # collections metrics use batch_score; RunConfig applies at factory time
+        return _run_collections_evaluation(
+            eval_dataset=eval_dataset,
+            metric_defs=metric_defs,
             llm=llm,
             embeddings=embeddings,
-            run_config=run_config,
         )
 
     def _validate_config(self, config: JobSpec) -> None:

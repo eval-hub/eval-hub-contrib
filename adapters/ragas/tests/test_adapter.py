@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, create_autospec
 
 from evalhub.adapter import JobCallbacks, JobPhase, OCIArtifactResult
-from main import METRIC_MAPPING, RagasAdapter
+from main import METRIC_MAPPING, RagasAdapter, _run_collections_evaluation
 
 _PROVIDER_YAML = Path(__file__).resolve().parent.parent / "provider.yaml"
 
@@ -95,6 +95,100 @@ def test_ragas_happy_path(monkeypatch, tmp_path):
     assert JobPhase.LOADING_DATA in phases
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
+
+    meta = results.evaluation_metadata
+    assert "ragas_version" in meta, "Eval Card missing ragas_version"
+    assert meta["ragas_version"], "ragas_version must not be empty"
+    assert "judge_llm" in meta, "Eval Card missing judge_llm"
+    assert meta["judge_llm"] == adapter.job_spec.model.name
+    assert "embedding_model" in meta, "Eval Card missing embedding_model"
+
+
+@pytest.mark.integration
+def test_run_collections_evaluation_builds_metric_columns():
+    """Collections evaluation should score each row via batch_score()."""
+    from ragas import EvaluationDataset
+
+    records = [
+        {
+            "user_input": "What is AI?",
+            "response": "Artificial Intelligence",
+            "retrieved_contexts": ["AI is..."],
+            "reference": "AI stands for...",
+        },
+        {
+            "user_input": "What is ML?",
+            "response": "Machine Learning",
+            "retrieved_contexts": ["ML is..."],
+            "reference": "ML stands for...",
+        },
+    ]
+    eval_dataset = EvaluationDataset.from_list(records)
+
+    class FakeMetric:
+        def __init__(self, name: str, fields: list[str], values: list[float]):
+            self.name = name
+            self._fields = fields
+            self._values = values
+            self.batch_calls = 0
+
+        async def ascore(self, user_input: str = "", response: str = "", reference: str = "", retrieved_contexts: list[str] | None = None):
+            raise NotImplementedError
+
+        def batch_score(self, inputs):
+            self.batch_calls += 1
+            assert inputs == [
+                {field: record[field] for field in self._fields}
+                for record in records
+            ]
+            return [type("MetricResult", (), {"value": value})() for value in self._values]
+
+    fake_metrics = {
+        "answer_relevancy": FakeMetric(
+            "answer_relevancy",
+            ["user_input", "response"],
+            [0.9, 0.8],
+        ),
+        "faithfulness": FakeMetric(
+            "faithfulness",
+            ["user_input", "response", "retrieved_contexts"],
+            [0.7, 0.6],
+        ),
+    }
+
+    def metric_input_fields(metric):
+        return metric._fields
+
+    def factory(metric_name):
+        return lambda _llm, _emb: fake_metrics[metric_name]
+
+    from types import SimpleNamespace
+
+    patched_defs = []
+    for name in ["answer_relevancy", "faithfulness"]:
+        metric_def = SimpleNamespace(name=name)
+        metric_def.factory = factory(name)
+        patched_defs.append(metric_def)
+
+    import main as main_module
+
+    original_fields = main_module._metric_input_fields
+    main_module._metric_input_fields = metric_input_fields
+    try:
+        result = _run_collections_evaluation(
+            eval_dataset=eval_dataset,
+            metric_defs=patched_defs,
+            llm=object(),
+            embeddings=object(),
+        )
+    finally:
+        main_module._metric_input_fields = original_fields
+    result_df = result.to_pandas()
+
+    assert list(result_df["answer_relevancy"]) == [0.9, 0.8]
+    assert list(result_df["faithfulness"]) == [0.7, 0.6]
+    assert fake_metrics["answer_relevancy"].batch_calls == 1
+    assert fake_metrics["faithfulness"].batch_calls == 1
 
 
 @pytest.mark.integration
