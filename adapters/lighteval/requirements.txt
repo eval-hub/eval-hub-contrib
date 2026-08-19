@@ -10,5 +10,9 @@ litellm[caching]==1.80.17
 requests==2.33.1
 pydantic==2.12.5
 
+# Pin xxhash below v4 to avoid "Strings must be encoded before hashing"
+# TypeError in lighteval's info_loggers.py (upstream bug)
+xxhash<4
+
 # EvalHub SDK (framework adapter with adapter extra only)
 eval-hub-sdk[adapter]==0.4.4
