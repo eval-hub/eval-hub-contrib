@@ -493,6 +493,14 @@ class LightEvalAdapter(FrameworkAdapter):
                 stderr_key = f"{metric_name}_stderr"
                 stderr = task_metrics.get(stderr_key)
 
+                is_numeric = isinstance(metric_value, (int, float))
+                if not is_numeric:
+                    logger.warning(
+                        f"Unexpected non-numeric metric value for {metric_name!r} "
+                        f"in task {task_name!r}: {type(metric_value).__name__!r} — skipping"
+                    )
+                    continue
+
                 confidence_interval = None
                 if stderr is not None:
                     # 95% confidence interval: value ± 1.96 * stderr
@@ -502,12 +510,7 @@ class LightEvalAdapter(FrameworkAdapter):
                         float(metric_value) + margin,
                     )
 
-                # Determine metric type
-                metric_type = "float"
-                if isinstance(metric_value, int):
-                    metric_type = "int"
-                elif isinstance(metric_value, str):
-                    metric_type = "string"
+                metric_type = "int" if isinstance(metric_value, int) else "float"
 
                 clean_metric = self._normalise_metric_name(metric_name)
                 clean_task = self._normalise_task_name(task_name)
@@ -527,13 +530,6 @@ class LightEvalAdapter(FrameworkAdapter):
                         },
                     )
                 )
-
-                if not isinstance(metric_value, (int, float)):
-                    logger.warning(
-                        f"Unexpected non-numeric metric value for {full_name!r}: "
-                        f"{type(metric_value).__name__!r} — skipping schema entry"
-                    )
-                    continue
                 metrics_schema.append(MetricSchema(name=full_name, type=ResultType.NUMERIC))
 
         logger.info(f"Extracted {len(evaluation_results)} metrics from LightEval results")
