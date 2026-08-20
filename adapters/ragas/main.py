@@ -176,12 +176,17 @@ def _run_collections_evaluation(
     metric_defs: list["_MetricDef"],
     llm: Any,
     embeddings: Any,
+    run_config: RunConfig | None = None,
 ) -> _CollectionsEvaluationResult:
     """Evaluate dataset rows with ragas.metrics.collections metrics."""
     import pandas as pd
 
     records = _records_from_dataset(eval_dataset)
     dataframe = pd.DataFrame(records)
+    if run_config is not None:
+        max_workers = min(max(int(run_config.max_workers or 1), 1), 10)
+    else:
+        max_workers = max(len(records), 1)
 
     for metric_def in metric_defs:
         metric = metric_def.factory(llm, embeddings)
@@ -189,7 +194,10 @@ def _run_collections_evaluation(
         _validate_metric_inputs(records, fields, metric_def.name)
         inputs = _build_metric_inputs(records, fields)
 
-        batch_results = metric.batch_score(inputs)
+        batch_results = []
+        for chunk_start in range(0, len(inputs), max_workers):
+            chunk = inputs[chunk_start : chunk_start + max_workers]
+            batch_results.extend(metric.batch_score(chunk))
         column_name = getattr(metric, "name", metric_def.name)
         dataframe[column_name] = [result.value for result in batch_results]
 
@@ -551,12 +559,12 @@ class RagasAdapter(FrameworkAdapter):
             raise
 
     def _run_ragas(self, *, eval_dataset, metric_defs, llm, embeddings, run_config):
-        del run_config  # collections metrics use batch_score; RunConfig applies at factory time
         return _run_collections_evaluation(
             eval_dataset=eval_dataset,
             metric_defs=metric_defs,
             llm=llm,
             embeddings=embeddings,
+            run_config=run_config,
         )
 
     def _validate_config(self, config: JobSpec) -> None:

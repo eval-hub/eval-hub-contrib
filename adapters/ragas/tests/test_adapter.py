@@ -192,6 +192,83 @@ def test_run_collections_evaluation_builds_metric_columns():
 
 
 @pytest.mark.integration
+def test_run_collections_evaluation_respects_max_workers():
+    """batch_score should receive ordered chunks bounded by RunConfig.max_workers."""
+    from ragas import EvaluationDataset
+    from ragas.run_config import RunConfig
+
+    records = [
+        {
+            "user_input": "What is AI?",
+            "response": "Artificial Intelligence",
+            "retrieved_contexts": ["AI is..."],
+            "reference": "AI stands for...",
+        },
+        {
+            "user_input": "What is ML?",
+            "response": "Machine Learning",
+            "retrieved_contexts": ["ML is..."],
+            "reference": "ML stands for...",
+        },
+        {
+            "user_input": "What is DL?",
+            "response": "Deep Learning",
+            "retrieved_contexts": ["DL is..."],
+            "reference": "DL stands for...",
+        },
+    ]
+    eval_dataset = EvaluationDataset.from_list(records)
+
+    class FakeMetric:
+        def __init__(self, name: str, fields: list[str], values: list[float]):
+            self.name = name
+            self._fields = fields
+            self._values = values
+            self.batch_calls = []
+
+        async def ascore(self, user_input: str = "", response: str = ""):
+            raise NotImplementedError
+
+        def batch_score(self, inputs):
+            self.batch_calls.append(inputs)
+            start = sum(len(call) for call in self.batch_calls) - len(inputs)
+            chunk_values = self._values[start : start + len(inputs)]
+            return [type("MetricResult", (), {"value": value})() for value in chunk_values]
+
+    fake_metric = FakeMetric(
+        "answer_relevancy",
+        ["user_input", "response"],
+        [0.9, 0.8, 0.7],
+    )
+
+    from types import SimpleNamespace
+
+    metric_def = SimpleNamespace(name="answer_relevancy")
+    metric_def.factory = lambda _llm, _emb: fake_metric
+
+    import main as main_module
+
+    original_fields = main_module._metric_input_fields
+    main_module._metric_input_fields = lambda metric: metric._fields
+    try:
+        result = _run_collections_evaluation(
+            eval_dataset=eval_dataset,
+            metric_defs=[metric_def],
+            llm=object(),
+            embeddings=object(),
+            run_config=RunConfig(max_workers=2),
+        )
+    finally:
+        main_module._metric_input_fields = original_fields
+
+    result_df = result.to_pandas()
+    assert list(result_df["answer_relevancy"]) == [0.9, 0.8, 0.7]
+    assert len(fake_metric.batch_calls) == 2
+    assert len(fake_metric.batch_calls[0]) == 2
+    assert len(fake_metric.batch_calls[1]) == 1
+
+
+@pytest.mark.integration
 def test_run_collections_evaluation_rejects_incomplete_records():
     """Validation must check every record, not only the first row."""
     from ragas import EvaluationDataset
