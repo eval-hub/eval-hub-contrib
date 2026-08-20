@@ -6,3 +6,7 @@ inspect-petri>=3.0.0
 petri-bloom>=0.1.0
 # GSMA Open-Telco Inspect tasks (TeleMath, TeleQnA, …) — registers as evals/*
 evals @ git+https://github.com/gsma-labs/evals.git@v1.1.0
+# Required by inspect_evals/makemesay for word tokenization and lemmatization.
+# Data (punkt, punkt_tab, wordnet) is pre-seeded in the image at build time —
+# no network access required at runtime.
+nltk>=3.8.0
