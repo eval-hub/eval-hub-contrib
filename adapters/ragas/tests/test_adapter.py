@@ -106,7 +106,7 @@ def test_ragas_happy_path(monkeypatch, tmp_path):
 
 @pytest.mark.integration
 def test_run_collections_evaluation_builds_metric_columns():
-    """Collections evaluation should score each row via batch_score()."""
+    """Collections evaluation should score each row via abatch_score()."""
     from ragas import EvaluationDataset
 
     records = [
@@ -135,7 +135,7 @@ def test_run_collections_evaluation_builds_metric_columns():
         async def ascore(self, user_input: str = "", response: str = "", reference: str = "", retrieved_contexts: list[str] | None = None):
             raise NotImplementedError
 
-        def batch_score(self, inputs):
+        async def abatch_score(self, inputs):
             self.batch_calls += 1
             assert inputs == [
                 {field: record[field] for field in self._fields}
@@ -193,7 +193,7 @@ def test_run_collections_evaluation_builds_metric_columns():
 
 @pytest.mark.integration
 def test_run_collections_evaluation_respects_max_workers():
-    """batch_score should receive ordered chunks bounded by RunConfig.max_workers."""
+    """abatch_score should receive ordered chunks bounded by RunConfig.max_workers."""
     from ragas import EvaluationDataset
     from ragas.run_config import RunConfig
 
@@ -229,7 +229,7 @@ def test_run_collections_evaluation_respects_max_workers():
         async def ascore(self, user_input: str = "", response: str = ""):
             raise NotImplementedError
 
-        def batch_score(self, inputs):
+        async def abatch_score(self, inputs):
             self.batch_calls.append(inputs)
             start = sum(len(call) for call in self.batch_calls) - len(inputs)
             chunk_values = self._values[start : start + len(inputs)]
@@ -269,6 +269,97 @@ def test_run_collections_evaluation_respects_max_workers():
 
 
 @pytest.mark.integration
+def test_run_collections_evaluation_uses_single_event_loop_for_chunks(monkeypatch):
+    """Multiple chunks must share one asyncio.run() so async HTTP clients stay bound."""
+    import asyncio
+    from ragas import EvaluationDataset
+    from ragas.run_config import RunConfig
+
+    records = [
+        {
+            "user_input": f"Question {idx}",
+            "response": f"Answer {idx}",
+            "retrieved_contexts": [f"Context {idx}"],
+            "reference": f"Reference {idx}",
+        }
+        for idx in range(5)
+    ]
+    eval_dataset = EvaluationDataset.from_list(records)
+
+    class FakeAsyncClient:
+        def __init__(self):
+            self.loop_ids: list[int] = []
+
+        async def request(self, *_args, **_kwargs):
+            self.loop_ids.append(id(asyncio.get_running_loop()))
+            return {"score": 1.0}
+
+    client = FakeAsyncClient()
+
+    class FakeMetric:
+        name = "answer_relevancy"
+
+        def __init__(self):
+            self.batch_calls = []
+
+        async def ascore(self, user_input: str = "", response: str = ""):
+            await client.request()
+            return type("MetricResult", (), {"value": 0.5})()
+
+        async def abatch_score(self, inputs):
+            self.batch_calls.append(inputs)
+            start = sum(len(call) for call in self.batch_calls) - len(inputs)
+            results = await asyncio.gather(
+                *[
+                    self.ascore(**input_dict)
+                    for input_dict in inputs
+                ]
+            )
+            return [
+                type("MetricResult", (), {"value": float(start + idx + 1)})()
+                for idx, _result in enumerate(results)
+            ]
+
+    fake_metric = FakeMetric()
+    asyncio_run_calls = []
+
+    def track_asyncio_run(coro):
+        asyncio_run_calls.append(coro)
+        return asyncio.get_event_loop_policy().new_event_loop().run_until_complete(coro)
+
+    from types import SimpleNamespace
+
+    metric_def = SimpleNamespace(name="answer_relevancy")
+    metric_def.factory = lambda _llm, _emb: fake_metric
+
+    import main as main_module
+
+    original_fields = main_module._metric_input_fields
+    original_asyncio_run = main_module.asyncio.run
+    main_module._metric_input_fields = lambda metric: ["user_input", "response"]
+    monkeypatch.setattr(main_module.asyncio, "run", track_asyncio_run)
+    try:
+        result = _run_collections_evaluation(
+            eval_dataset=eval_dataset,
+            metric_defs=[metric_def],
+            llm=object(),
+            embeddings=object(),
+            run_config=RunConfig(max_workers=2),
+        )
+    finally:
+        main_module._metric_input_fields = original_fields
+        monkeypatch.setattr(main_module.asyncio, "run", original_asyncio_run)
+
+    result_df = result.to_pandas()
+    assert list(result_df["answer_relevancy"]) == [1.0, 2.0, 3.0, 4.0, 5.0]
+    assert len(fake_metric.batch_calls) == 3
+    assert [len(chunk) for chunk in fake_metric.batch_calls] == [2, 2, 1]
+    assert len(asyncio_run_calls) == 1
+    assert len(client.loop_ids) == 5
+    assert len(set(client.loop_ids)) == 1
+
+
+@pytest.mark.integration
 def test_run_collections_evaluation_rejects_incomplete_records():
     """Validation must check every record, not only the first row."""
     from ragas import EvaluationDataset
@@ -300,8 +391,8 @@ def test_run_collections_evaluation_rejects_incomplete_records():
         ):
             raise NotImplementedError
 
-        def batch_score(self, inputs):
-            raise AssertionError("batch_score must not run when validation fails")
+        async def abatch_score(self, inputs):
+            raise AssertionError("abatch_score must not run when validation fails")
 
     from types import SimpleNamespace
 

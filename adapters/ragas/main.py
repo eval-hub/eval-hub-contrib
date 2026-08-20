@@ -18,6 +18,7 @@ completions/embeddings endpoints.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.metadata
 import inspect
 import json
@@ -188,18 +189,21 @@ def _run_collections_evaluation(
     else:
         max_workers = max(len(records), 1)
 
-    for metric_def in metric_defs:
-        metric = metric_def.factory(llm, embeddings)
-        fields = _metric_input_fields(metric)
-        _validate_metric_inputs(records, fields, metric_def.name)
-        inputs = _build_metric_inputs(records, fields)
+    async def _score_all_metrics() -> None:
+        for metric_def in metric_defs:
+            metric = metric_def.factory(llm, embeddings)
+            fields = _metric_input_fields(metric)
+            _validate_metric_inputs(records, fields, metric_def.name)
+            inputs = _build_metric_inputs(records, fields)
 
-        batch_results = []
-        for chunk_start in range(0, len(inputs), max_workers):
-            chunk = inputs[chunk_start : chunk_start + max_workers]
-            batch_results.extend(metric.batch_score(chunk))
-        column_name = getattr(metric, "name", metric_def.name)
-        dataframe[column_name] = [result.value for result in batch_results]
+            batch_results = []
+            for chunk_start in range(0, len(inputs), max_workers):
+                chunk = inputs[chunk_start : chunk_start + max_workers]
+                batch_results.extend(await metric.abatch_score(chunk))
+            column_name = getattr(metric, "name", metric_def.name)
+            dataframe[column_name] = [result.value for result in batch_results]
+
+    asyncio.run(_score_all_metrics())
 
     return _CollectionsEvaluationResult(dataframe=dataframe)
 
