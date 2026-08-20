@@ -192,6 +192,67 @@ def test_run_collections_evaluation_builds_metric_columns():
 
 
 @pytest.mark.integration
+def test_run_collections_evaluation_rejects_incomplete_records():
+    """Validation must check every record, not only the first row."""
+    from ragas import EvaluationDataset
+
+    records = [
+        {
+            "user_input": "What is AI?",
+            "response": "Artificial Intelligence",
+            "retrieved_contexts": ["AI is..."],
+            "reference": "AI stands for...",
+        },
+        {
+            "user_input": "What is ML?",
+            "response": "Machine Learning",
+            "retrieved_contexts": ["ML is..."],
+        },
+    ]
+    eval_dataset = EvaluationDataset.from_list(records)
+
+    class FakeMetric:
+        name = "faithfulness"
+
+        async def ascore(
+            self,
+            user_input: str = "",
+            response: str = "",
+            reference: str = "",
+            retrieved_contexts: list[str] | None = None,
+        ):
+            raise NotImplementedError
+
+        def batch_score(self, inputs):
+            raise AssertionError("batch_score must not run when validation fails")
+
+    from types import SimpleNamespace
+
+    metric_def = SimpleNamespace(name="faithfulness")
+    metric_def.factory = lambda _llm, _emb: FakeMetric()
+
+    import main as main_module
+
+    original_fields = main_module._metric_input_fields
+    main_module._metric_input_fields = lambda _metric: [
+        "user_input",
+        "response",
+        "reference",
+        "retrieved_contexts",
+    ]
+    try:
+        with pytest.raises(ValueError, match=r"record\[1\] missing \['reference'\]"):
+            _run_collections_evaluation(
+                eval_dataset=eval_dataset,
+                metric_defs=[metric_def],
+                llm=object(),
+                embeddings=object(),
+            )
+    finally:
+        main_module._metric_input_fields = original_fields
+
+
+@pytest.mark.integration
 def test_mode_suffixed_metric_columns(monkeypatch, tmp_path):
     """Metrics whose result column carries a mode suffix (e.g.
     factual_correctness(mode=f1)) are still extracted and reported under the

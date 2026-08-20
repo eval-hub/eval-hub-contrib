@@ -143,10 +143,31 @@ def _metric_input_fields(metric: Any) -> list[str]:
     ]
 
 
+def _validate_metric_inputs(
+    records: list[dict[str, Any]], fields: list[str], metric_name: str
+) -> None:
+    """Ensure every record contains all fields required by a metric."""
+    if not records:
+        return
+    invalid: list[tuple[int, list[str]]] = []
+    for idx, record in enumerate(records):
+        missing = [field for field in fields if field not in record]
+        if missing:
+            invalid.append((idx, missing))
+    if invalid:
+        details = "; ".join(
+            f"record[{idx}] missing {missing}" for idx, missing in invalid
+        )
+        raise ValueError(
+            f"Metric {metric_name} requires fields {fields}; "
+            f"dataset has incomplete records: {details}"
+        )
+
+
 def _build_metric_inputs(
     records: list[dict[str, Any]], fields: list[str]
 ) -> list[dict[str, Any]]:
-    return [{field: record[field] for field in fields if field in record} for record in records]
+    return [{field: record[field] for field in fields} for record in records]
 
 
 def _run_collections_evaluation(
@@ -165,13 +186,7 @@ def _run_collections_evaluation(
     for metric_def in metric_defs:
         metric = metric_def.factory(llm, embeddings)
         fields = _metric_input_fields(metric)
-        if records:
-            missing = [field for field in fields if field not in records[0]]
-            if missing:
-                raise ValueError(
-                    f"Metric {metric_def.name} requires fields {fields}, "
-                    f"but dataset is missing {missing} (columns: {list(records[0].keys())})"
-                )
+        _validate_metric_inputs(records, fields, metric_def.name)
         inputs = _build_metric_inputs(records, fields)
 
         batch_results = metric.batch_score(inputs)
