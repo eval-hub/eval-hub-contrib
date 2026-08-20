@@ -97,7 +97,7 @@ METRIC_MAPPING: dict[str, "_MetricDef"] = {
     d.name: d
     for d in [
         _MetricDef("answer_relevancy", lambda llm, emb: AnswerRelevancy(llm=llm, embeddings=emb)),
-        _MetricDef("answer_correctness", lambda llm, emb: AnswerCorrectness(llm=llm)),
+        _MetricDef("answer_correctness", lambda llm, emb: AnswerCorrectness(llm=llm, embeddings=emb)),
         _MetricDef("context_precision", lambda llm, emb: ContextPrecision(llm=llm)),
         _MetricDef("faithfulness", lambda llm, emb: Faithfulness(llm=llm)),
         _MetricDef("context_recall", lambda llm, emb: ContextRecall(llm=llm)),
