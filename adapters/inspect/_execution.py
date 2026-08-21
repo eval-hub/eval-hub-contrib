@@ -32,6 +32,7 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
     them silently drops whichever source loses.
 
       INSPECT_EVAL_MODEL  — main model for standard mode
+      INSPECT_EVAL_TIMEOUT — timeout(s) for the subprocess calling inspect eval
       OPENAI_BASE_URL     — endpoint for OpenAI-compatible APIs
       OPENAI_API_KEY      — key for OpenAI-compatible APIs
       ANTHROPIC_API_KEY   — key for Anthropic Messages API
@@ -127,6 +128,9 @@ def build_command(
             value = str(value).lower()
         cmd += ["-T", f"{key}={value}"]
 
+    for key, value in config.parameters.get("model_args", {}).items():
+        cmd += ["-M", f"{key}={value}"]
+
     return cmd
 
 
@@ -216,9 +220,13 @@ def _petri_task_flags(
 
 def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
     try:
-        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=7200)
+        # default: prevent long running benchmarks from timing out
+        timeout = env.get("INSPECT_EVAL_TIMEOUT", None)
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
-        raise RuntimeError("inspect eval timed out after 7200s.") from e
+        raise RuntimeError(f"inspect eval timed out after {timeout}.") from e
+    except (subprocess.SubprocessError, OSError):
+        logging.exception("Subprocess failed")
 
     if result.returncode != 0:
         logger.error(f"inspect eval stdout:\n{result.stdout[-3000:]}")
