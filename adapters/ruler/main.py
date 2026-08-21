@@ -1117,13 +1117,15 @@ def main() -> None:
     Reads EVALHUB_JOB_SPEC_PATH (default /meta/job.json), constructs
     JobSpec and RulerAdapter, runs the benchmark, and reports results.
     """
-    from evalhub.adapter import DefaultCallbacks  # noqa: PLC0415
+    from evalhub.adapter import DefaultCallbacks, configure_telemetry  # noqa: PLC0415
 
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
         level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+    configure_telemetry()
 
     try:
         job_spec_path = os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")
