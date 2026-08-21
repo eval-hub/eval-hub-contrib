@@ -299,16 +299,22 @@ def _stage_server_config(config_path: str) -> tuple[str, str]:
     return server_root, config_id
 
 
-def _wait_for_server(host: str, port: int, timeout: int = 60) -> None:
+def _wait_for_server(host: str, port: int, proc: subprocess.Popen,
+                     timeout: int = 60) -> None:
     url = f"http://{host}:{port}/v1/rails/configs"
     deadline = time.time() + timeout
     last_error = None
     while time.time() < deadline:
+        exit_code = proc.poll()
+        if exit_code is not None:
+            raise RuntimeError(
+                f"NeMo Guardrails server exited unexpectedly with code {exit_code}"
+            )
         try:
             r = requests.get(url, timeout=5)
             if r.status_code == 200:
                 return
-        except requests.ConnectionError as e:
+        except requests.RequestException as e:
             last_error = e
         time.sleep(1)
     raise TimeoutError(
@@ -402,7 +408,7 @@ def managed_server(config_path: str, port: int = 9999, host: str = "localhost",
     signal.signal(signal.SIGTERM, _sigterm_handler)
 
     try:
-        _wait_for_server(host, port, startup_timeout)
+        _wait_for_server(host, port, proc, startup_timeout)
         yield f"http://{host}:{port}", resolved_log_path
     finally:
         _cleanup()
@@ -659,8 +665,9 @@ def _print_result(i: int, total: int, sample: dict, result: dict, no_color: bool
         marker = _color("35", "x False Pos  ", no_color)
 
     idx = f"[{i + 1}/{total}]"
-    per_char = result.get("response_time_ms_per_character", 0)
-    line = f"  {idx:>10s} {marker} expected={expected_str:5s} got={predicted_str:8s} | {result['response_time_ms']:>5.0f}ms ({per_char:.2f}ms/char)"
+    per_char = result.get("response_time_ms_per_character")
+    per_char_str = f"{per_char:.2f}ms/char" if per_char is not None else "n/a"
+    line = f"  {idx:>10s} {marker} expected={expected_str:5s} got={predicted_str:8s} | {result['response_time_ms']:>5.0f}ms ({per_char_str})"
     line += f" | {repr(sample['prompt'])}"
     if result["error"]:
         line += f"\n{'':>20s}ERROR: {result['error'][:200]}"
@@ -728,16 +735,16 @@ def _compute_timing_stats(results: list[dict]) -> dict:
         }
 
     times_sorted = sorted(times)
-    per_char_sorted = sorted(per_char)
+    per_char_sorted = sorted(per_char) if per_char else []
     return {
         "mean_ms": round(statistics.mean(times), 1),
         "median_ms": round(statistics.median(times), 1),
         "p95_ms": round(_percentile(times_sorted, 0.95), 1),
         "total_ms": round(sum(times), 1),
         "per_character": {
-            "mean_ms": round(statistics.mean(per_char), 4),
-            "median_ms": round(statistics.median(per_char), 4),
-            "p95_ms": round(_percentile(per_char_sorted, 0.95), 4),
+            "mean_ms": round(statistics.mean(per_char), 4) if per_char else 0,
+            "median_ms": round(statistics.median(per_char), 4) if per_char else 0,
+            "p95_ms": round(_percentile(per_char_sorted, 0.95), 4) if per_char_sorted else 0,
         },
     }
 
