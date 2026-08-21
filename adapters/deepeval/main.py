@@ -225,10 +225,6 @@ def _resolve_judge_model(judge_name: str, judge_url: str) -> Any:
 
     creds = resolve_model_credentials()
     api_key = creds.api_key
-    if not api_key:
-        auth_value = creds.auth_headers.get("Authorization", "")
-        if auth_value.startswith("Bearer "):
-            api_key = auth_value.removeprefix("Bearer ").strip()
 
     url = judge_url.rstrip("/")
     if not url.endswith("/v1"):
