@@ -16,6 +16,7 @@ IMAGE_DEEPEVAL = $(REGISTRY)/community-deepeval:$(VERSION)
 IMAGE_RAGAS = $(REGISTRY)/community-ragas:$(VERSION)
 IMAGE_SWEBENCH = $(REGISTRY)/community-swebench:$(VERSION)
 IMAGE_RULER = $(REGISTRY)/community-ruler:$(VERSION)
+IMAGE_NEMO_GUARDRAILS = $(REGISTRY)/community-nemo-guardrails:$(VERSION)
 
 # Default target
 .PHONY: help
@@ -131,7 +132,7 @@ image-swebench:
 	@echo "✅ Built: $(IMAGE_SWEBENCH)"
 
 .PHONY: images
-images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler
+images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler image-nemo-guardrails
 	@echo "✅ All adapter images built"
 
 # Push targets
@@ -182,7 +183,7 @@ push-swebench:
 	@echo "✅ Pushed: $(IMAGE_SWEBENCH)"
 
 .PHONY: push-images
-push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench push-ruler
+push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench push-ruler push-nemo-guardrails
 	@echo "✅ All adapter images pushed"
 
 # Clean targets
@@ -233,7 +234,7 @@ clean-swebench:
 	@echo "✅ Removed: $(IMAGE_SWEBENCH)"
 
 .PHONY: clean-images
-clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench clean-ruler
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench clean-ruler clean-nemo-guardrails
 	@echo "✅ All adapter images removed"
 
 # Development targets
@@ -329,7 +330,7 @@ test-ragas:
 	@echo "✅ RAGAS tests passed"
 
 .PHONY: tests
-tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler
+tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler test-nemo-guardrails
 	@echo "✅ All adapter tests passed"
 .PHONY: test-swebench
 test-swebench:
@@ -371,3 +372,36 @@ test-ruler:
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ RULER tests passed"
+
+.PHONY: image-nemo-guardrails
+image-nemo-guardrails:
+	@echo "Building NeMo Guardrails adapter image..."
+	cd adapters/nemo-guardrails && \
+	$(BUILD_TOOL) build -t $(IMAGE_NEMO_GUARDRAILS) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_NEMO_GUARDRAILS)"
+
+.PHONY: push-nemo-guardrails
+push-nemo-guardrails:
+	@echo "Pushing NeMo Guardrails adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_NEMO_GUARDRAILS)
+	@echo "✅ Pushed: $(IMAGE_NEMO_GUARDRAILS)"
+
+.PHONY: clean-nemo-guardrails
+clean-nemo-guardrails:
+	@echo "Removing NeMo Guardrails adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_NEMO_GUARDRAILS) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_NEMO_GUARDRAILS)"
+
+.PHONY: build-and-push-nemo-guardrails
+build-and-push-nemo-guardrails: image-nemo-guardrails
+	$(MAKE) push-nemo-guardrails
+	@echo "✅ NeMo Guardrails adapter built and pushed"
+
+.PHONY: test-nemo-guardrails
+test-nemo-guardrails:
+	@echo "Running NeMo Guardrails adapter tests..."
+	cd adapters/nemo-guardrails && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ NeMo Guardrails tests passed"

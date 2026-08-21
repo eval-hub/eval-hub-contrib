@@ -20,6 +20,7 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [DeepEval](https://github.com/confident-ai/deepeval) | `quay.io/evalhub/community-deepeval:latest` | ✓ | LLM-as-judge evaluation: faithfulness, relevancy, hallucination, correctness, summarization, and multi-turn conversation metrics |
 | [RULER](https://github.com/NVIDIA/RULER) | `quay.io/evalhub/community-ruler:latest` | ✓ | NVIDIA RULER long-context benchmark — 13 synthetic tasks across needle-in-a-haystack, variable tracking, aggregation, and QA at configurable context lengths |
 | [WildGuard](https://arxiv.org/abs/2406.18495) | `quay.io/evalhub/community-wildguard:latest` | ✓ | AllenAI safety classification benchmark — evaluates a model's ability to classify prompt+response pairs as safe or unsafe, reporting accuracy and per-class recall |
+| [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) | `quay.io/eval-hub/community-nemo-guardrails:latest` | ✓ | Safety rail evaluation — prompt injection and toxicity detection benchmarks |
 
 ## Inspect AI Adapter
 
@@ -175,6 +176,7 @@ make image-inspect
 make image-deepeval
 make image-ragas
 make image-swebench
+make image-nemo-guardrails
 
 # Build all adapters
 make images
@@ -186,6 +188,7 @@ make test-deepeval
 make test-ragas
 make test-swebench
 make test-clear
+make test-nemo-guardrails
 make tests
 
 # Push to registry
@@ -195,6 +198,7 @@ make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-deepeval REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-ragas REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-swebench REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-nemo-guardrails REGISTRY=quay.io/your-org VERSION=v1.0.0
 ```
 
 ## Contributing
