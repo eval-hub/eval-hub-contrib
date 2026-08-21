@@ -217,10 +217,6 @@ def _openai_credentials(base_url: str) -> tuple[str, str]:
         url = f"{url}/v1"
     creds = resolve_model_credentials()
     api_key = creds.api_key
-    if not api_key:
-        auth_value = creds.auth_headers.get("Authorization", "")
-        if auth_value.startswith("Bearer "):
-            api_key = auth_value.removeprefix("Bearer ").strip()
     return url, api_key or "DUMMY"
 
 
