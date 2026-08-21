@@ -17,4 +17,4 @@ xxhash>=3.0.0,<4
 xxhash<4
 
 # EvalHub SDK (framework adapter with adapter extra only)
-eval-hub-sdk[adapter]==1.0.1
+eval-hub-sdk[adapter]==1.0.2
