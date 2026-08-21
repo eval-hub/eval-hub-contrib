@@ -827,7 +827,7 @@ def main() -> None:
     Note: The service URL for callbacks comes from job_spec.callback_url (mounted via ConfigMap)
     """
     import sys
-    from evalhub.adapter import DefaultCallbacks
+    from evalhub.adapter import DefaultCallbacks, configure_telemetry
 
     # Configure logging
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -835,6 +835,8 @@ def main() -> None:
         level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+    configure_telemetry()
 
     try:
         # Create adapter with job spec path from environment or default

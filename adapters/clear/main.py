@@ -33,6 +33,7 @@ from evalhub.adapter import (
     MessageInfo,
     OCIArtifactResult,
     OCIArtifactSpec,
+    configure_telemetry,
 )
 from evalhub.adapter.mlflow import MlflowClient as EvalHubMlflowClient
 from evalhub.adapter.auth import resolve_model_credentials
@@ -1031,6 +1032,8 @@ def main() -> None:
         level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+    configure_telemetry()
 
     try:
         job_spec_path = os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")

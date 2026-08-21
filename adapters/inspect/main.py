@@ -354,12 +354,15 @@ class InspectAdapter(FrameworkAdapter):
 def main() -> None:
     """Container entry point."""
     import sys
+    from evalhub.adapter import configure_telemetry
 
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
         level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+    configure_telemetry()
 
     try:
         from evalhub.adapter import DefaultCallbacks

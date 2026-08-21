@@ -43,6 +43,7 @@ from evalhub.adapter import (
     JobStatusUpdate,
     MessageInfo,
     OCIArtifactSpec,
+    configure_telemetry,
 )
 from evalhub.adapter.auth import resolve_model_credentials
 from evalhub.adapter.mlflow import MlflowArtifact
@@ -609,6 +610,8 @@ def main() -> None:
         level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+    configure_telemetry()
 
     try:
         job_spec_path = os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")
