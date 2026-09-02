@@ -88,6 +88,7 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     # Cybersecurity
     "inspect/cybench":                "inspect_evals/cybench",
     "inspect/cyberseceval-2":         "inspect_evals/cyberseceval_2",
+    "inspect/cyberseceval-2-pi":      "inspect_evals/cyse2_prompt_injection",
     "inspect/cybergym":               "inspect_evals/cybergym",
     # Coding
     "inspect/humaneval":              "inspect_evals/humaneval",
@@ -114,10 +115,13 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     "inspect/winogrande":             "inspect_evals/winogrande",
     "inspect/truthfulqa":             "inspect_evals/truthfulqa",
     "inspect/simpleqa":               "inspect_evals/simpleqa",
+    "inspect/hle":                    "inspect_evals/hle",
     # Agent capabilities
     "inspect/gaia":                   "inspect_evals/gaia",
     "inspect/agentdojo":              "inspect_evals/agentdojo",
     "inspect/theagentcompany":        "inspect_evals/theagentcompany",
+    "inspect/bfcl":                   "inspect_evals/bfcl",
+    "inspect/docvqa":                 "inspect_evals/docvqa",
     # Custom
     "inspect/custom":                 None,
 }

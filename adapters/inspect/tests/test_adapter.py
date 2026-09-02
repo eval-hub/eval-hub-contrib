@@ -224,6 +224,55 @@ def test_standard_command_no_model_flag(job_spec_path, tmp_path, monkeypatch):
     assert "ibm-granite/granite-3.3-8b-instruct" in env["INSPECT_EVAL_MODEL"]
 
 
+def test_standard_model_roles_injected(job_spec_path, tmp_path, monkeypatch):
+    """Standard mode: parameters.model_roles adds --model-role flags to command."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/hle"
+    adapter.job_spec.model.name = "ibm-granite/granite-3.3-8b-instruct"
+    adapter.job_spec.model.url = "http://vllm:8080/v1"
+    adapter.job_spec.parameters["model_roles"] = {
+        "grader": "openai/gpt-4o-mini",
+        "judge": "openai/gpt-4o",
+    }
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(adapter.job_spec, "standard", "inspect_evals/hle", tmp_path, None, env)
+    assert "--model-role" in cmd
+    roles = _parse_model_roles(cmd)
+    assert roles["grader"] == "openai/gpt-4o-mini"
+    assert roles["judge"] == "openai/gpt-4o"
+    assert "INSPECT_EVAL_MODEL" in env
+
+
+def test_standard_no_model_roles_when_absent(job_spec_path, tmp_path, monkeypatch):
+    """Standard mode: no --model-role flags when model_roles is not set."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/gsm8k"
+    adapter.job_spec.model.name = "ibm-granite/granite-3.3-8b-instruct"
+    adapter.job_spec.model.url = "http://vllm:8080/v1"
+    adapter.job_spec.parameters.pop("model_roles", None)
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(adapter.job_spec, "standard", "inspect_evals/gsm8k", tmp_path, None, env)
+    assert "--model-role" not in cmd
+
+
+def test_standard_model_roles_empty_dict_no_flags(job_spec_path, tmp_path, monkeypatch):
+    """Standard mode: empty model_roles dict produces no --model-role flags."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/gsm8k"
+    adapter.job_spec.model.name = "ibm-granite/granite-3.3-8b-instruct"
+    adapter.job_spec.model.url = "http://vllm:8080/v1"
+    adapter.job_spec.parameters["model_roles"] = {}
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(adapter.job_spec, "standard", "inspect_evals/gsm8k", tmp_path, None, env)
+    assert "--model-role" not in cmd
+
+
 def test_sample_limit_from_num_examples(job_spec_path, tmp_path, monkeypatch):
     """--limit uses JobSpec.num_examples when set."""
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
