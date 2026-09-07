@@ -1,0 +1,68 @@
+# Lighteval — Language Understanding Collection
+#
+# ⚠️  All GLUE benchmarks use logprob scoring → require PR #115 patched image.
+#     language_understanding meta-suite may also use logprob.
+#     All fail with standard lighteval image.
+#
+# ── Threshold Justification ──────────────────────────────────────────────────
+# GLUE CoLA (Warstadt et al. 2019): Grammatical acceptability.
+#   Top-10 <80B: 75–90%. Threshold 0.70 per accuracy-based lower bound.
+# GLUE SST-2 (Socher et al. 2013): Binary sentiment. Near-saturated for LLMs.
+#   Top-10 <80B: 93–97%. Threshold 0.88 = bottom of competitive range (sanity floor).
+#   Weight 0.5 — near-saturation means limited discrimination.
+# GLUE MRPC (Dolan & Brockett 2005): Paraphrase detection.
+#   Top-10 <80B: 86–92%. Threshold 0.80 per leaderboard lower bound.
+# language_understanding: meta-suite. Threshold 0.65 = approximate expected average.
+#
+# ── Weight Rationale ─────────────────────────────────────────────────────────
+# Weight 1.0 → cola, mrpc, language_understanding: Linguistic understanding signals.
+# Weight 0.5 → sst2: Near-saturated; down-weighted to avoid inflating aggregate.
+#
+# ── Global Pass Criteria ─────────────────────────────────────────────────────
+# cola ≥ 0.70 AND mrpc ≥ 0.80 (when PR #115 merged). sst2 is a regression floor.
+
+name: lighteval-language-understanding
+description: >
+  Language understanding suite via Lighteval (requires PR #115 patched image — all
+  benchmarks use logprob and fail with standard image). GLUE CoLA (Warstadt et al.
+  2019, threshold 0.70, weight 1.0 — grammatical acceptability), GLUE SST-2 (Socher
+  et al. 2013, threshold 0.88 = sanity floor, weight 0.5 — near-saturated sentiment),
+  GLUE MRPC (Dolan & Brockett 2005, threshold 0.80, weight 1.0 — paraphrase detection),
+  language_understanding meta-suite (threshold 0.65, weight 1.0). Global PASS when
+  fixed: cola>=0.70 AND mrpc>=0.80.
+category: language_understanding
+tags: [language, glue, nlu, lighteval]
+
+benchmarks:
+  # GLUE CoLA: grammatical acceptability. Top-10 <80B: 75–90%. Threshold 0.70.
+  - id: glue:cola
+    provider_id: lighteval
+    weight: 1.0
+    parameters: {}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.70}
+
+  # GLUE SST-2: binary sentiment. Near-saturated. Top-10 <80B: 93–97%.
+  # Threshold 0.88 = sanity floor. Weight 0.5 — minimal discrimination above this.
+  - id: glue:sst2
+    provider_id: lighteval
+    weight: 0.5
+    parameters: {}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.88}
+
+  # GLUE MRPC: paraphrase detection. Top-10 <80B: 86–92%. Threshold 0.80.
+  - id: glue:mrpc
+    provider_id: lighteval
+    weight: 1.0
+    parameters: {}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.80}
+
+  # language_understanding: meta-suite. Threshold 0.65 = approximate expected average.
+  - id: language_understanding
+    provider_id: lighteval
+    weight: 1.0
+    parameters: {}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.65}
