@@ -20,6 +20,7 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [DeepEval](https://github.com/confident-ai/deepeval) | `quay.io/evalhub/community-deepeval:latest` | ✓ | LLM-as-judge evaluation: faithfulness, relevancy, hallucination, correctness, summarization, and multi-turn conversation metrics |
 | [RULER](https://github.com/NVIDIA/RULER) | `quay.io/evalhub/community-ruler:latest` | ✓ | NVIDIA RULER long-context benchmark — 13 synthetic tasks across needle-in-a-haystack, variable tracking, aggregation, and QA at configurable context lengths |
 | [WildGuard](https://arxiv.org/abs/2406.18495) | `quay.io/evalhub/community-wildguard:latest` | ✓ | AllenAI safety classification benchmark — evaluates a model's ability to classify prompt+response pairs as safe or unsafe, reporting accuracy and per-class recall |
+| [IFBench](https://arxiv.org/abs/2507.02833) | `quay.io/evalhub/community-ifbench:latest` | ✓ | AllenAI precise instruction-following benchmark — 58 OOD verifiable constraints with programmatic scoring (prompt-level loose accuracy) |
 | [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) | `quay.io/eval-hub/community-nemo-guardrails:latest` | ✓ | Safety rail evaluation — prompt injection and toxicity detection benchmarks |
 
 ## Inspect AI Adapter
@@ -116,6 +117,39 @@ Score guide: 0.5 or below is near random chance; 0.85 or above is strong perform
 | `request_timeout` | `120` | Per-request timeout in seconds |
 
 See [adapters/wildguard/README.md](adapters/wildguard/README.md) for full documentation and example job specs.
+
+## IFBench Adapter
+
+The IFBench adapter integrates [IFBench](https://github.com/allenai/IFBench) (AllenAI, Apache 2.0) — a benchmark of 58 out-of-domain verifiable instruction constraints. The adapter loads the bundled IFBench test set (299 prompts), generates completions via an OpenAI-compatible endpoint, and scores responses with programmatic constraint checkers from the upstream `ifbench` package.
+
+**1 benchmark:**
+
+- **`ifbench`** — evaluates prompt-level instruction-following accuracy (strict and loose), plus instruction-level scores.
+
+**Metrics:**
+
+| Metric | Description |
+|---|---|
+| `accuracy` | Prompt-level accuracy for the configured `scoring_mode` (`overall_score`) |
+| `prompt_level_strict` | Prompt-level strict accuracy |
+| `prompt_level_loose` | Prompt-level loose accuracy (paper default) |
+| `inst_level_strict` | Instruction-level strict accuracy |
+| `inst_level_loose` | Instruction-level loose accuracy |
+
+Score guide: GPT-4o scores ~34% on this benchmark; pass threshold in curated collections is typically `0.05` (5%).
+
+**Key parameters:**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `scoring_mode` | `loose` | Primary scoring mode (`loose` or `strict`) |
+| `num_examples` | _(full set)_ | Cap the number of prompts (useful for smoke tests) |
+| `max_concurrent` | `4` | Concurrent API calls to the model endpoint |
+| `max_tokens` | `2048` | Max generation tokens per prompt |
+| `temperature` | `0.0` | Sampling temperature (paper uses 0) |
+| `request_timeout` | `120` | Per-request timeout in seconds |
+
+See [adapters/ifbench/README.md](adapters/ifbench/README.md) for full documentation and example job specs.
 
 ## JobPhase Lifecycle
 
