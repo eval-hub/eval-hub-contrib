@@ -90,6 +90,29 @@ parameters:
     default: null
     description: Base URL for embeddings endpoint (defaults to model URL)
 
+  - name: judge_model
+    type: string
+    default: null
+    description: >
+      Model used for LLM-based RAGAS metrics such as answer_relevancy and
+      answer_correctness (defaults to the evaluated model). Use a capable
+      structured-output model when evaluating smaller local models.
+
+  - name: judge_url
+    type: string
+    default: null
+    description: >
+      OpenAI-compatible base URL for the judge model (defaults to the evaluated
+      model URL). For OpenAI, use https://api.openai.com/v1.
+
+  - name: judge_api_key
+    type: string
+    default: null
+    description: >
+      Optional API key for the judge endpoint. Prefer injecting OPENAI_API_KEY
+      from a Kubernetes Secret or runtime environment; do not commit keys in
+      benchmark or job configuration.
+
   - name: max_tokens
     type: integer
     default: null
