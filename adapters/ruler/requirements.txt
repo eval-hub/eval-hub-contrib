@@ -21,6 +21,10 @@ wonderwords>=2.2
 nltk>=3.8
 numpy>=1.24.0
 
+# Paul Graham essay haystack generation
+beautifulsoup4>=4.12.0
+html2text>=2024.2.26
+
 # YAML config parsing
 pyyaml>=6.0
 

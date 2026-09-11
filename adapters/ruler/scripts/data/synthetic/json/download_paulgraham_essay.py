@@ -21,10 +21,14 @@ import html2text
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
-temp_folder_repo = 'essay_repo'
-temp_folder_html = 'essay_html'
-os.makedirs(temp_folder_repo, exist_ok=True)
-os.makedirs(temp_folder_html, exist_ok=True)
+DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+URLS_FILE = os.path.join(DATA_DIR, "PaulGrahamEssays_URLs.txt")
+OUTPUT_FILE = os.path.join(DATA_DIR, "PaulGrahamEssays.json")
+TEMP_REPO_DIR = os.path.join(DATA_DIR, "essay_repo")
+TEMP_HTML_DIR = os.path.join(DATA_DIR, "essay_html")
+
+os.makedirs(TEMP_REPO_DIR, exist_ok=True)
+os.makedirs(TEMP_HTML_DIR, exist_ok=True)
 
 h = html2text.HTML2Text()
 h.ignore_images = True
@@ -33,7 +37,7 @@ h.escape_all = True
 h.reference_links = False
 h.mark_code = False
 
-with open('PaulGrahamEssays_URLs.txt') as f:
+with open(URLS_FILE) as f:
     urls = [line.strip() for line in f]
 
 for url in tqdm(urls):
@@ -46,7 +50,7 @@ for url in tqdm(urls):
                 specific_tag = soup.find('font')
                 parsed = h.handle(str(specific_tag))
                 
-                with open(os.path.join(temp_folder_html, filename), 'w') as file:
+                with open(os.path.join(TEMP_HTML_DIR, filename), 'w') as file:
                     file.write(parsed)
         
         except Exception as e:
@@ -58,14 +62,14 @@ for url in tqdm(urls):
             with urllib.request.urlopen(url) as website:
                 content = website.read().decode('utf-8')
             
-            with open(os.path.join(temp_folder_repo, filename), 'w') as file:
+            with open(os.path.join(TEMP_REPO_DIR, filename), 'w') as file:
                 file.write(content)
                     
         except Exception as e:
             print(f"Fail download {filename}, ({e})")
 
-files_repo = sorted(glob.glob(os.path.join(temp_folder_repo,'*.txt')))
-files_html = sorted(glob.glob(os.path.join(temp_folder_html,'*.txt')))
+files_repo = sorted(glob.glob(os.path.join(TEMP_REPO_DIR, '*.txt')))
+files_html = sorted(glob.glob(os.path.join(TEMP_HTML_DIR, '*.txt')))
 print(f'Download {len(files_repo)} essays from `https://github.com/gkamradt/LLMTest_NeedleInAHaystack/`') 
 print(f'Download {len(files_html)} essays from `http://www.paulgraham.com/`') 
 
@@ -74,9 +78,12 @@ for file in files_repo + files_html:
     with open(file, 'r') as f:
         text += f.read()
         
-with open('PaulGrahamEssays.json', 'w') as f:
+if not files_repo and not files_html:
+    raise RuntimeError("No Paul Graham essays were downloaded")
+
+with open(OUTPUT_FILE, 'w') as f:
     json.dump({"text": text}, f)
 
 
-shutil.rmtree(temp_folder_repo)
-shutil.rmtree(temp_folder_html)
+shutil.rmtree(TEMP_REPO_DIR)
+shutil.rmtree(TEMP_HTML_DIR)
