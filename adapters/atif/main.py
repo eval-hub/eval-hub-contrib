@@ -1332,6 +1332,8 @@ class ATIFAdapter(FrameworkAdapter):
             raw_score = scores[name]
             if isinstance(raw_score, bool):
                 raise JudgeResponseError(f"custom criterion {name!r} score must be numeric")
+            if not isinstance(raw_score, (int, float)):
+                raise JudgeResponseError(f"custom criterion {name!r} score is not numeric")
             try:
                 score = float(raw_score)
             except (TypeError, ValueError) as exc:
@@ -1381,6 +1383,11 @@ class ATIFAdapter(FrameworkAdapter):
         if isinstance(raw_score, bool):
             raise JudgeResponseError(
                 "judge score must be numeric, not boolean "
+                f"for trajectory={trajectory_id!r}, step={step_id!r}"
+            )
+        if not isinstance(raw_score, (int, float)):
+            raise JudgeResponseError(
+                "judge score is not numeric "
                 f"for trajectory={trajectory_id!r}, step={step_id!r}"
             )
         try:

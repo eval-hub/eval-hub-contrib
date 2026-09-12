@@ -614,6 +614,18 @@ def test_custom_scoring_rejects_incomplete_judge_response(job_spec):
             adapter.run_benchmark_job(job_spec, callbacks)
 
 
+def test_custom_scoring_rejects_numeric_string():
+    rubric = {"criteria": [{"name": "quality", "description": "Overall quality"}]}
+
+    with pytest.raises(JudgeResponseError, match="not numeric"):
+        ATIFAdapter._parse_custom_score_response(
+            json.dumps({"scores": {"quality": "0.8"}}),
+            rubric,
+            trajectory_id="t1",
+            step_id="s1",
+        )
+
+
 @pytest.mark.parametrize("training_threshold", [-0.1, 1.1, float("nan"), True, "invalid"])
 def test_invalid_training_threshold_fails_fast(job_spec, training_threshold):
     adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
@@ -752,6 +764,7 @@ def test_invalid_failure_category_confidence_is_uncategorized(
         "not valid JSON",
         json.dumps({}),
         json.dumps({"score": "not-a-number"}),
+        json.dumps({"score": "0.8"}),
         json.dumps({"score": 1.1}),
     ],
 )
