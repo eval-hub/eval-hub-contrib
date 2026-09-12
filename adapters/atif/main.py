@@ -272,6 +272,15 @@ class ATIFAdapter(FrameworkAdapter):
         )
         atif_files = self._discover_atif_files(str(trajectory_path))
 
+        trajectories = self._load_trajectories(
+            atif_files,
+            max_file_bytes=max_file_bytes,
+            max_files=max_files,
+            max_steps_per_trajectory=max_steps,
+            max_subagent_depth=max_subagent_depth,
+            max_total_steps=max_total_steps,
+        )
+
         callbacks.report_status(
             JobStatusUpdate(
                 phase=JobPhase.RUNNING_EVALUATION,
@@ -283,14 +292,6 @@ class ATIFAdapter(FrameworkAdapter):
             )
         )
 
-        trajectories = self._load_trajectories(
-            atif_files,
-            max_file_bytes=max_file_bytes,
-            max_files=max_files,
-            max_steps_per_trajectory=max_steps,
-            max_subagent_depth=max_subagent_depth,
-            max_total_steps=max_total_steps,
-        )
         scored = asyncio.run(
             self._score_trajectories(
                 trajectories,
@@ -477,6 +478,16 @@ class ATIFAdapter(FrameworkAdapter):
         # EvalHub completion-event payload.  When training selection is enabled,
         # keep the eligible and ineligible cohorts separately addressable without
         # uploading a third, duplicate copy of the complete result tree.
+        callbacks.report_status(
+            JobStatusUpdate(
+                phase=JobPhase.PERSISTING_ARTIFACTS,
+                status=JobStatus.RUNNING,
+                message=MessageInfo(
+                    message="Persisting evaluation artifacts",
+                    message_code="persisting_artifacts",
+                ),
+            )
+        )
         mlflow = getattr(callbacks, "mlflow", None)
         if mlflow is not None:
             artifacts = self._build_mlflow_artifacts(result, training_threshold)

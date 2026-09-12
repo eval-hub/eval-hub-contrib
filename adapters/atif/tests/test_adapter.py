@@ -75,6 +75,7 @@ def test_atif_adapter_happy_path(job_spec):
         JobPhase.LOADING_DATA,
         JobPhase.RUNNING_EVALUATION,
         JobPhase.POST_PROCESSING,
+        JobPhase.PERSISTING_ARTIFACTS,
     ]
 
 
