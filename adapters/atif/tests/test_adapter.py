@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import ssl
 from pathlib import Path
 
 import httpx
@@ -1381,16 +1382,28 @@ def test_k8s_proxy_uses_job_model_and_reference_credential(job_spec, monkeypatch
     assert json.loads(request.content)["model"] == "cluster-judge"
 
 
-def test_local_judge_uses_configured_endpoint_and_ca_bundle(job_spec, monkeypatch):
+def test_local_judge_uses_configured_endpoint_and_ca_bundle(
+    job_spec, monkeypatch, tmp_path
+):
     adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
     adapter._active_job_spec = job_spec.model_copy(
         update={"model": job_spec.model.model_copy(update={"url": "https://judge.internal/v1"})}
     )
+    ca_cert_path = tmp_path / "ca.pem"
+    ca_cert_path.write_bytes(Path(ssl.get_default_verify_paths().cafile).read_bytes())
+    client_options = {}
+    real_async_client = httpx.AsyncClient
+
+    def capture_async_client(*args, **kwargs):
+        client_options.update(kwargs)
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr("main.httpx.AsyncClient", capture_async_client)
     monkeypatch.setenv("EVALHUB_MODE", "local")
     monkeypatch.setattr(
         "main.resolve_model_credentials",
         lambda: type(
-            "Credentials", (), {"api_key": "local-secret", "ca_cert_path": None}
+            "Credentials", (), {"api_key": "local-secret", "ca_cert_path": ca_cert_path}
         )(),
     )
     with respx.mock(assert_all_called=True) as mock:
@@ -1401,6 +1414,7 @@ def test_local_judge_uses_configured_endpoint_and_ca_bundle(job_spec, monkeypatc
     assert json.loads(response)["score"] == 0.9
     assert len(route.calls) == 1
     assert route.calls[0].request.headers["authorization"] == "Bearer api-key:ref"
+    assert client_options["verify"] == str(ca_cert_path)
 
 
 def test_judge_telemetry_exports_counts_latency_and_tokens(job_spec, monkeypatch):
