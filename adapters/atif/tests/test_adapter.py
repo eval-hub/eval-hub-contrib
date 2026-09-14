@@ -30,9 +30,19 @@ JOB_SPEC_PATH = Path(__file__).resolve().parent.parent / "meta" / "job.json"
 REFERENCE_REGISTRY_PATH = Path(__file__).resolve().parent / "fixtures" / "reference_registry.json"
 
 
+class FakeMlflow:
+    def __init__(self):
+        self.calls = []
+
+    def save(self, results, job_spec, artifacts=None):
+        self.calls.append((results, job_spec, artifacts or []))
+        return "mlflow-run-1"
+
+
 class FakeCallbacks(JobCallbacks):
     def __init__(self):
         self.status_updates = []
+        self.mlflow = FakeMlflow()
 
     def report_status(self, update):
         self.status_updates.append(update)
@@ -44,13 +54,13 @@ class FakeCallbacks(JobCallbacks):
         pass
 
 
-class FakeMlflow:
-    def __init__(self):
-        self.calls = []
-
-    def save(self, results, job_spec, artifacts=None):
-        self.calls.append((results, job_spec, artifacts or []))
-        return "mlflow-run-1"
+def _detailed_result(callbacks):
+    artifact = next(
+        artifact
+        for artifact in callbacks.mlflow.calls[-1][2]
+        if artifact.path == "atif/evaluation_results.json"
+    )
+    return json.loads(artifact.content)
 
 
 def test_atif_adapter_happy_path(job_spec):
@@ -71,7 +81,9 @@ def test_atif_adapter_happy_path(job_spec):
 
     assert result.overall_score == 0.7
     assert len(result.results) == 3
-    assert "atif_trajectories" in result.evaluation_metadata
+    assert "atif_trajectories" not in result.evaluation_metadata
+    assert "atif_trajectory_metadata" not in result.evaluation_metadata
+    assert "atif_training_manifest" not in result.evaluation_metadata
     assert [update.phase for update in callbacks.status_updates] == [
         JobPhase.INITIALIZING,
         JobPhase.LOADING_DATA,
@@ -103,7 +115,7 @@ def test_detailed_results_include_identity_pass_status_and_serialize(job_spec):
         )
         result = adapter.run_benchmark_job(job_spec, callbacks)
 
-    trajectory = result.evaluation_metadata["atif_trajectories"][0]
+    trajectory = _detailed_result(callbacks)["evaluation_metadata"]["atif_trajectories"][0]
     assert trajectory["trajectory_id"] == "t1"
     assert trajectory["aggregate_score"] == 0.7
     assert trajectory["completion_threshold"] == 0.65
@@ -111,9 +123,7 @@ def test_detailed_results_include_identity_pass_status_and_serialize(job_spec):
     assert [step["step_index"] for step in trajectory["steps"]] == [0, 1]
     assert all(step["trajectory_id"] == "t1" for step in trajectory["steps"])
     serialized = result.model_dump(mode="json")
-    assert json.loads(json.dumps(serialized))["evaluation_metadata"][
-        "atif_trajectories"
-    ][0]["passed"] is True
+    assert "atif_trajectories" not in serialized["evaluation_metadata"]
 
 
 def test_tool_names_are_preserved_in_step_results():
@@ -162,13 +172,11 @@ def test_training_eligibility_marks_trajectories_and_manifest(job_spec):
 
         result = adapter.run_benchmark_job(job_spec, callbacks)
 
-    trajectory = result.evaluation_metadata["atif_trajectories"][0]
-    assert trajectory["training_eligible"] is True
-    assert trajectory["source_path"].endswith("trajectory.json")
+    trajectory = result.trajectory_results[0]
+    assert trajectory.training_eligible is True
+    assert trajectory.source_path.endswith("trajectory.json")
     assert result.evaluation_metadata["atif_training_threshold"] == 0.65
-    assert result.evaluation_metadata["atif_training_manifest"] == [
-        trajectory["source_path"]
-    ]
+    assert "atif_training_manifest" not in result.evaluation_metadata
 
 
 def test_training_manifest_preserves_original_s3_source(monkeypatch):
@@ -446,7 +454,7 @@ def test_custom_scoring_aggregates_criterion_scores_and_keeps_prompt_data_bound(
     assert result.evaluation_metadata["atif_scoring_mode"] == "custom"
     assert result.evaluation_metadata["atif_custom_rubric"] == "answer_quality"
     assert result.evaluation_metadata["atif_custom_aggregation"] == "weighted_mean"
-    assert result.evaluation_metadata["atif_trajectories"][0]["steps"][0][
+    assert _detailed_result(callbacks)["evaluation_metadata"]["atif_trajectories"][0]["steps"][0][
         "criterion_scores"
     ] == {"correctness": 1.0, "clarity": 0.5}
     payload = json.loads(route.calls[0].request.content)["messages"][0]["content"]
@@ -670,7 +678,7 @@ def test_failure_categorization_for_low_scoring_step(job_spec):
 
         result = adapter.run_benchmark_job(job_spec, callbacks)
 
-    trajectory = result.evaluation_metadata["atif_trajectories"][0]
+    trajectory = _detailed_result(callbacks)["evaluation_metadata"]["atif_trajectories"][0]
     assert trajectory["detectable_failure_count"] == 1
     assert trajectory["categorized_failure_count"] == 1
     assert trajectory["steps"][0]["category"] == "reasoning_failure"
@@ -694,7 +702,7 @@ def test_invalid_failure_category_is_uncategorized_with_raw_response(job_spec):
 
         result = adapter.run_benchmark_job(job_spec, callbacks)
 
-    step = result.evaluation_metadata["atif_trajectories"][0]["steps"][0]
+    step = _detailed_result(callbacks)["evaluation_metadata"]["atif_trajectories"][0]["steps"][0]
     assert step["category"] == "uncategorized"
     assert step["categorization_status"] == "uncategorized"
     assert step["raw_judge_response"] == "not valid category JSON"
@@ -719,7 +727,7 @@ def test_categorization_judge_error_is_separate_from_invalid_response(job_spec):
 
         result = adapter.run_benchmark_job(job_spec, callbacks)
 
-    trajectory = result.evaluation_metadata["atif_trajectories"][0]
+    trajectory = _detailed_result(callbacks)["evaluation_metadata"]["atif_trajectories"][0]
     step = trajectory["steps"][0]
     assert step["category"] == "uncategorized"
     assert step["categorization_status"] == "judge_error"
@@ -767,7 +775,7 @@ def test_invalid_failure_category_confidence_is_uncategorized(
 
         result = adapter.run_benchmark_job(job_spec, callbacks)
 
-    step = result.evaluation_metadata["atif_trajectories"][0]["steps"][0]
+    step = _detailed_result(callbacks)["evaluation_metadata"]["atif_trajectories"][0]["steps"][0]
     assert step["category"] == "uncategorized"
     assert step["categorization_status"] == "uncategorized"
 
@@ -1032,7 +1040,7 @@ def test_subagent_trajectories_are_scored_recursively_and_flattened(job_spec, tm
         result = adapter.run_benchmark_job(job_spec, callbacks)
 
     assert result.overall_score == pytest.approx(0.5)
-    parent = result.evaluation_metadata["atif_trajectories"][0]
+    parent = _detailed_result(callbacks)["evaluation_metadata"]["atif_trajectories"][0]
     assert parent["subagent_trajectories"][0]["trajectory_id"] == "child"
     assert result.evaluation_metadata["atif_detectable_failure_count"] == 2
 
@@ -1127,7 +1135,7 @@ def test_parent_aggregate_uses_step_count_weighting(job_spec, tmp_path):
         )
         result = adapter.run_benchmark_job(spec, callbacks)
 
-    parent = result.evaluation_metadata["atif_trajectories"][0]
+    parent = _detailed_result(callbacks)["evaluation_metadata"]["atif_trajectories"][0]
     assert parent["aggregate_score"] == pytest.approx(0.75)
     assert parent["total_step_count"] == 4
 
@@ -1171,7 +1179,7 @@ def test_circular_agent_identity_is_logged_and_scored_in_isolation(
         with caplog.at_level(logging.WARNING):
             result = adapter.run_benchmark_job(spec, callbacks)
 
-    child_result = result.evaluation_metadata["atif_trajectories"][0][
+    child_result = _detailed_result(callbacks)["evaluation_metadata"]["atif_trajectories"][0][
         "subagent_trajectories"
     ][0]
     assert child_result["score"] == pytest.approx(0.6)

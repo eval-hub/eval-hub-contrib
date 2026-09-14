@@ -400,7 +400,7 @@ class ATIFAdapter(FrameworkAdapter):
             for item in self._flatten_scored_trajectories(scored)
         ]
 
-        result = JobResults(
+        detailed_result = JobResults(
             id=config.id,
             benchmark_id=config.benchmark_id,
             benchmark_index=config.benchmark_index,
@@ -473,6 +473,20 @@ class ATIFAdapter(FrameworkAdapter):
             },
             env_card=self._build_environment_card(trajectories),
         )
+        compact_result = detailed_result.model_copy(
+            update={
+                "evaluation_metadata": {
+                    key: value
+                    for key, value in detailed_result.evaluation_metadata.items()
+                    if key
+                    not in {
+                        "atif_trajectories",
+                        "atif_trajectory_metadata",
+                        "atif_training_manifest",
+                    }
+                }
+            }
+        )
 
         # Detailed results belong in MLflow as downloadable artifacts, not in the
         # EvalHub completion-event payload.  When training selection is enabled,
@@ -490,16 +504,18 @@ class ATIFAdapter(FrameworkAdapter):
         )
         mlflow = getattr(callbacks, "mlflow", None)
         if mlflow is not None:
-            artifacts = self._build_mlflow_artifacts(result, training_threshold)
+            artifacts = self._build_mlflow_artifacts(
+                detailed_result, training_threshold
+            )
             run_id = mlflow.save(
-                result,
+                compact_result,
                 config,
                 artifacts=artifacts,
             )
             if run_id:
-                result.mlflow_run_id = run_id
+                compact_result.mlflow_run_id = run_id
 
-        return result
+        return compact_result
 
     @staticmethod
     def _validate_job_spec(config: JobSpec) -> JobSpec:
