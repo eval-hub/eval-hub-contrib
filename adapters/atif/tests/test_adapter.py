@@ -1377,7 +1377,7 @@ def test_local_judge_uses_configured_endpoint_and_ca_bundle(job_spec, monkeypatc
     monkeypatch.setattr(
         "main.resolve_model_credentials",
         lambda: type(
-            "Credentials", (), {"api_key": None, "ca_cert_path": None}
+            "Credentials", (), {"api_key": "local-secret", "ca_cert_path": None}
         )(),
     )
     with respx.mock(assert_all_called=True) as mock:
@@ -1387,6 +1387,7 @@ def test_local_judge_uses_configured_endpoint_and_ca_bundle(job_spec, monkeypatc
         response = asyncio.run(adapter._judge_call({"request": "score"}))
     assert json.loads(response)["score"] == 0.9
     assert len(route.calls) == 1
+    assert route.calls[0].request.headers["authorization"] == "Bearer api-key:ref"
 
 
 def test_judge_telemetry_exports_counts_latency_and_tokens(job_spec, monkeypatch):

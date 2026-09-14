@@ -1464,12 +1464,7 @@ class ATIFAdapter(FrameworkAdapter):
         headers = {}
         job_spec = getattr(self, "_active_job_spec", self.job_spec)
         if credentials.api_key:
-            api_key = (
-                "api-key:ref"
-                if os.getenv("EVALHUB_MODE") == "k8s"
-                else credentials.api_key
-            )
-            headers["Authorization"] = f"Bearer {api_key}"
+            headers["Authorization"] = "Bearer api-key:ref"
         model_url = job_spec.model.url.strip().rstrip("/")
         if not model_url:
             raise ValueError("model.url is required for the ATIF judge")
