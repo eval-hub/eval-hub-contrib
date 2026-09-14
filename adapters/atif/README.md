@@ -94,7 +94,7 @@ Parameters are supplied through the EvalHub job's generic `parameters` object.
 | `concurrency_limit` | integer | `10` | Maximum number of top-level trajectories scored concurrently. Values below 1 are clamped to one for scoring. |
 | `max_file_bytes` | integer | `10485760` | Maximum size of an individual input file in bytes. Must be positive. |
 | `max_trajectory_files` | integer | `10000` | Maximum number of discovered JSON files. Must be positive. |
-| `max_steps_per_trajectory` | integer | `500` | Maximum number of steps in each trajectory, including nested subagents. |
+| `max_steps_per_trajectory` | integer | `500` | Maximum number of steps in each trajectory node, including nested subagent nodes. The complete trajectory tree is additionally limited by `max_total_steps`. |
 | `max_subagent_depth` | integer | `3` | Maximum embedded-subagent depth below a root trajectory. At the limit, child trajectories are scored without further descent. |
 | `max_total_steps` | integer | `10000` | Maximum number of steps in one complete trajectory tree. |
 | `subagent_aggregation` | string | `flat` | `flat` averages every scored trajectory, `hierarchical` averages each parent with its descendants, and `separate` reports only root scores in the overall aggregate while retaining nested results. |
