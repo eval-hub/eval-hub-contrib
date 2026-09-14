@@ -1299,6 +1299,22 @@ def test_retryable_5xx_is_retried(job_spec, monkeypatch):
     assert len(route.calls) == 3
 
 
+def test_judge_http_error_log_omits_response_body(job_spec, caplog):
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+    response_body = "sensitive judge error detail"
+
+    with respx.mock(assert_all_called=True) as mock:
+        mock.post("http://localhost:8080/v1/chat/completions").mock(
+            return_value=Response(400, text=response_body)
+        )
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(httpx.HTTPStatusError):
+                asyncio.run(adapter._judge_call({"request": "score"}))
+
+    assert "atif.judge.call.failed status=400 error_code=http_error" in caplog.text
+    assert response_body not in caplog.text
+
+
 def test_timeout_is_retried(job_spec, monkeypatch):
     adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
     async def no_sleep(_):

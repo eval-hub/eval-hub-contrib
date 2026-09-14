@@ -1562,9 +1562,8 @@ class ATIFAdapter(FrameworkAdapter):
                     continue
             if response.is_error:
                 logger.error(
-                    "atif.judge.call.failed status=%s body=%s",
+                    "atif.judge.call.failed status=%s error_code=http_error",
                     response.status_code,
-                    response.text[:500],
                 )
             response.raise_for_status()
             try:
