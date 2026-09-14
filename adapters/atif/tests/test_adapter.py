@@ -1140,15 +1140,18 @@ def test_parent_aggregate_uses_step_count_weighting(job_spec, tmp_path):
     assert parent["total_step_count"] == 4
 
 
-def test_circular_agent_identity_is_logged_and_scored_in_isolation(
+def test_same_named_agents_with_distinct_trajectory_ids_are_scored(
     job_spec, tmp_path, caplog
 ):
     trajectory = _valid_trajectory()
+    trajectory["steps"] = [trajectory["steps"][0]]
     trajectory["agent"]["name"] = "same-agent"
     child = _valid_trajectory()
+    child["steps"] = [child["steps"][0]]
     child["trajectory_id"] = "child"
     child["agent"]["name"] = "same-agent"
     grandchild = _valid_trajectory()
+    grandchild["steps"] = [grandchild["steps"][0]]
     grandchild["trajectory_id"] = "grandchild"
     grandchild["agent"]["name"] = "grandchild-agent"
     child["subagent_trajectories"] = [grandchild]
@@ -1173,7 +1176,6 @@ def test_circular_agent_identity_is_logged_and_scored_in_isolation(
                 Response(200, text=json.dumps({"score": 0.8})),
                 Response(200, text=json.dumps({"score": 0.8})),
                 Response(200, text=json.dumps({"score": 0.6})),
-                Response(200, text=json.dumps({"score": 0.6})),
             ]
         )
         with caplog.at_level(logging.WARNING):
@@ -1182,9 +1184,10 @@ def test_circular_agent_identity_is_logged_and_scored_in_isolation(
     child_result = _detailed_result(callbacks)["evaluation_metadata"]["atif_trajectories"][0][
         "subagent_trajectories"
     ][0]
-    assert child_result["score"] == pytest.approx(0.6)
-    assert child_result["subagent_trajectories"] == []
-    assert "circular delegation detected" in caplog.text
+    assert child_result["score"] == pytest.approx(0.8)
+    assert child_result["subagent_trajectories"][0]["trajectory_id"] == "grandchild"
+    assert child_result["subagent_trajectories"][0]["score"] == pytest.approx(0.6)
+    assert "circular delegation detected" not in caplog.text
 
 
 def test_judge_429_retry(job_spec):

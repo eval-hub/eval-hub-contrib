@@ -1059,15 +1059,16 @@ class ATIFAdapter(FrameworkAdapter):
             index: int,
             trajectory: dict[str, Any],
             depth: int = 0,
-            ancestors: frozenset[str] = frozenset(),
+            ancestors: frozenset[Any] = frozenset(),
             object_ancestors: frozenset[int] = frozenset(),
             descend: bool = True,
         ) -> dict[str, Any]:
             nonlocal first_done
             agent = trajectory.get("agent") or {}
             agent_name = agent.get("name", f"trajectory-{index}")
+            trajectory_id = trajectory.get("trajectory_id")
             object_id = id(trajectory)
-            circular = agent_name in ancestors
+            circular = trajectory_id is not None and trajectory_id in ancestors
             try:
                 if object_id in object_ancestors:
                     raise ATIFLoadError("cycle detected in nested subagent trajectories")
@@ -1124,7 +1125,7 @@ class ATIFAdapter(FrameworkAdapter):
                         child_index,
                         child,
                         depth + 1,
-                        ancestors | {agent_name},
+                        ancestors | ({trajectory_id} if trajectory_id is not None else set()),
                         object_ancestors | {object_id},
                         False,
                     )
@@ -1136,7 +1137,7 @@ class ATIFAdapter(FrameworkAdapter):
                         child_index,
                         child,
                         depth + 1,
-                        ancestors | {agent_name},
+                        ancestors | ({trajectory_id} if trajectory_id is not None else set()),
                         object_ancestors | {object_id},
                     )
                     for child_index, child in enumerate(nested)
