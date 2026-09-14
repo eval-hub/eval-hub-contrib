@@ -887,6 +887,8 @@ def test_load_v17_trajectory_extracts_atif_fields():
     assert card.custom["agent_name"] == "fixture-agent"
     assert card.custom["tool_definitions_count"] == 1
     assert card.custom["atif_schema_version"] == "ATIF-v1.7"
+    assert card.custom["trajectory_count"] == 1
+    assert "trajectories" not in card.custom
 
 
 def test_load_accepts_ticket_schema_version_alias(tmp_path: Path):

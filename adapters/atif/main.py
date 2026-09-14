@@ -629,8 +629,9 @@ class ATIFAdapter(FrameworkAdapter):
     ) -> EnvironmentCardMetadata:
         """Capture runtime context and expose ATIF identity in the Environment Card."""
         card = EnvironmentCardMetadata.capture(framework_name="ATIF")
-        metadata = [cls._extract_trajectory_metadata(item) for item in trajectories]
-        first = metadata[0] if metadata else {}
+        first = (
+            cls._extract_trajectory_metadata(trajectories[0]) if trajectories else {}
+        )
         return card.model_copy(
             update={
                 "model_id": first.get("model"),
@@ -641,8 +642,7 @@ class ATIFAdapter(FrameworkAdapter):
                     "agent_version": first.get("agent_version"),
                     "model": first.get("model"),
                     "tool_definitions_count": first.get("tool_definitions_count", 0),
-                    "trajectory_count": len(metadata),
-                    "trajectories": metadata,
+                    "trajectory_count": len(trajectories),
                 },
             }
         )
