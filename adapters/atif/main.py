@@ -1027,7 +1027,7 @@ class ATIFAdapter(FrameworkAdapter):
         self._judge_success_count = 0
         self._judge_error_count = 0
         self._judge_telemetry = _JudgeTelemetry(
-            getattr(self.job_spec, "id", None), scoring_mode
+            getattr(getattr(self, "_active_job_spec", None), "id", None), scoring_mode
         )
         self._judge_request_lock = asyncio.Lock()
         criteria = (
