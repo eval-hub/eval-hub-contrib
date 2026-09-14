@@ -1447,6 +1447,8 @@ class ATIFAdapter(FrameworkAdapter):
                 "raw_judge_response": raw_response,
                 "categorization_status": "uncategorized",
             }
+        except JudgeRequestLimitError:
+            raise
         except (httpx.HTTPError, RuntimeError) as exc:
             logger.warning("ATIF failure categorization judge call failed: %s", exc)
             result = {

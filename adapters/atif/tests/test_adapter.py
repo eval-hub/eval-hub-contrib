@@ -17,6 +17,7 @@ from main import (
     ATIFAdapter,
     ATIFLoadError,
     CustomRubricError,
+    JudgeRequestLimitError,
     JudgeResponseError,
     ReferenceRegistryError,
     _JudgeTelemetry,
@@ -725,6 +726,18 @@ def test_categorization_judge_error_is_separate_from_invalid_response(job_spec):
     assert result.evaluation_metadata["atif_uncategorized_failure_count"] == 1
     assert result.evaluation_metadata["atif_categorization_judge_error_count"] == 1
     assert result.evaluation_metadata["atif_failure_categorization_rate"] == 0.0
+
+
+def test_failure_categorization_propagates_judge_request_limit(job_spec, monkeypatch):
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+
+    async def raise_request_limit(payload):
+        raise JudgeRequestLimitError("judge request limit exceeded")
+
+    monkeypatch.setattr(adapter, "_judge_call", raise_request_limit)
+
+    with pytest.raises(JudgeRequestLimitError, match="request limit"):
+        asyncio.run(adapter._categorize_failure({}, 0.2, {}))
 
 
 @pytest.mark.parametrize(
