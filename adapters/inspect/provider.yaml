@@ -512,7 +512,7 @@ benchmarks:
     tags: [reasoning, math, inspect-evals]
 
   # Telecom (GSMA Open-Telco)
-  - id: inspect/telemath
+  - id: telemath
     name: TeleMath
     description: >
       Telecom-domain mathematical problem solving — 500 numerical Q&A pairs covering
@@ -531,7 +531,7 @@ benchmarks:
       threshold: 0.50
     tags: [telecom, math, reasoning, open-telco, inspect-ai]
 
-  - id: inspect/teleqna
+  - id: teleqna
     name: TeleQnA
     description: >
       Telecom domain knowledge — multiple-choice questions on standards, research,
@@ -550,7 +550,7 @@ benchmarks:
       threshold: 0.70
     tags: [telecom, knowledge, qa, open-telco, inspect-ai]
 
-  - id: inspect/telelogs
+  - id: telelogs
     name: TeleLogs
     description: >
       Root-cause analysis on 5G network data — models identify which of several
@@ -570,7 +570,7 @@ benchmarks:
       threshold: 0.25
     tags: [telecom, operations, rca, troubleshooting, open-telco, inspect-ai]
 
-  - id: inspect/3gpp-tsg
+  - id: 3gpp-tsg
     name: 3GPP-TSG
     description: >
       3GPP technical specification group classification — models identify the
