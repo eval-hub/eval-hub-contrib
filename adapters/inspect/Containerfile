@@ -5,11 +5,147 @@ USER 0
 
 WORKDIR /app
 
+# ── Python dependencies ───────────────────────────────────────────────────────
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ── NLTK data — bundled at build time ────────────────────────────────────────
+#
+# inspect_evals/makemesay/game.py::ensure_nltk_resource() needs three NLTK
+# datasets for word tokenization (punkt, punkt_tab) and lemmatization (wordnet).
+# It resolves the data directory via user_cache_dir("inspect_evals") from
+# platformdirs, which honours XDG_CACHE_HOME.
+#
+# Setting XDG_CACHE_HOME=/app/.cache makes the resolved path
+#   /app/.cache/inspect_evals/make_me_say/nltk_data
+# a fixed location inside the image layer. The RUN step below downloads all
+# three packages there at build time, so ensure_nltk_resource() finds the
+# data immediately and makes zero network calls at runtime.
+#
+# Airgapped deployments (no internet access during build):
+#
+# 1. On a connected host, pre-download the NLTK data into the build context:
+#
+#      python3 -c "
+#        import nltk, pathlib
+#        dest = pathlib.Path('nltk-data-airgap')
+#        for pkg in ('punkt', 'punkt_tab', 'wordnet'):
+#            nltk.download(pkg, download_dir=str(dest))
+#      "
+#
+# 2. Build this Containerfile with the --build-arg NLTK_AIRGAP=true flag.
+#    When NLTK_AIRGAP=true the RUN step below skips the network download and
+#    instead copies the data from the nltk-data-airgap/ directory in the build
+#    context (the COPY and RUN instructions always execute; the branch is
+#    selected inside the Python script via the NLTK_AIRGAP environment variable):
+#
+#      podman build --build-arg NLTK_AIRGAP=true -t community-inspect .
+#
+# The base image (registry.access.redhat.com/ubi9/python-312) must be
+# available from your internal registry; mirror it if needed.
+ENV XDG_CACHE_HOME=/app/.cache
+# Pin the inspect_evals cache root explicitly so the NLTK data path is
+# predictable regardless of the XDG_CACHE_HOME default and immune to
+# INSPECT_EVALS_CACHE_DIR overrides at runtime. The value here must match the
+# NLTK_DIR computed inside the RUN step below.
+ENV INSPECT_EVALS_CACHE_DIR=/app/.cache/inspect_evals
+# NLTK_AIRGAP=true  → skip network download; COPY nltk-data-airgap/ from build context instead.
+# NLTK_AIRGAP=false → download punkt, punkt_tab, wordnet from the internet (default).
+ARG NLTK_AIRGAP=false
+
+# Standard (connected) build: download exactly the three NLTK packages needed by
+# inspect_evals/makemesay/game.py::ensure_nltk_resource() — nothing else.
+#   punkt      -> tokenizers/punkt/     (word_tokenize, NLTK classic path)
+#   punkt_tab  -> tokenizers/punkt_tab/ (word_tokenize, NLTK >= 3.8)
+#   wordnet    -> corpora/wordnet/      (WordNetLemmatizer.lemmatize)
+# Each download is verified; the build fails if any package is missing or corrupt.
+# nltk.download() does not resolve transitive dependencies — only the named
+# package is fetched per call.
+COPY nltk-data-airgap/ /tmp/nltk-data-airgap/
+RUN python3 - <<'PYEOF'
+import nltk, pathlib, sys, os, shutil
+
+# Derive the NLTK data path from INSPECT_EVALS_CACHE_DIR (set by the ENV
+# instruction above) so the build path always matches the runtime path that
+# ensure_nltk_resource() in makemesay/game.py resolves via user_cache_dir().
+NLTK_DIR = pathlib.Path(os.environ['INSPECT_EVALS_CACHE_DIR']) / 'make_me_say' / 'nltk_data'
+NLTK_DIR.mkdir(parents=True, exist_ok=True)
+
+# Packages and their nltk.data.find() resource paths — exactly what
+# ensure_nltk_resource() in makemesay/game.py looks for at runtime.
+REQUIRED = {
+    'punkt':     'tokenizers/punkt',
+    'punkt_tab': 'tokenizers/punkt_tab',
+    'wordnet':   'corpora/wordnet',
+}
+
+# Register our data directory so nltk.data.find() resolves correctly.
+if str(NLTK_DIR) not in nltk.data.path:
+    nltk.data.path.insert(0, str(NLTK_DIR))
+
+airgap = os.environ.get('NLTK_AIRGAP', 'false').lower() == 'true'
+
+if airgap:
+    src = pathlib.Path('/tmp/nltk-data-airgap')
+    # Exclude .gitkeep placeholder — only real NLTK data packages count.
+    real_items = [p for p in src.iterdir() if p.name != '.gitkeep']
+    if not real_items:
+        print('FATAL: NLTK_AIRGAP=true but nltk-data-airgap/ is empty.\n'
+              'Pre-download NLTK data on a connected host:\n'
+              '  python3 -c "\n'
+              '    import nltk, pathlib\n'
+              '    dest = pathlib.Path(\'nltk-data-airgap\')\n'
+              '    for pkg in (\'punkt\', \'punkt_tab\', \'wordnet\'):\n'
+              '        nltk.download(pkg, download_dir=str(dest))\n'
+              '  "',
+              file=sys.stderr)
+        sys.exit(1)
+    # Copy pre-downloaded data from the build context staging area.
+    for item in real_items:
+        dest = NLTK_DIR / item.name
+        if dest.exists():
+            shutil.rmtree(dest) if dest.is_dir() else dest.unlink()
+        shutil.copytree(item, dest) if item.is_dir() else shutil.copy2(item, dest)
+    print(f'Airgap: copied NLTK data from {src} ({len(real_items)} items)')
+else:
+    for pkg in REQUIRED:
+        ok = nltk.download(pkg, download_dir=str(NLTK_DIR), quiet=False)
+        if not ok:
+            print(f'FATAL: nltk.download({pkg!r}) returned False', file=sys.stderr)
+            sys.exit(1)
+        print(f'Downloaded {pkg:12s}')
+
+# NLTK 3.9+ stores corpora as .zip files without auto-extracting.
+# ensure_nltk_resource() in makemesay/game.py calls
+#   nltk.data.find("corpora/wordnet", paths=[...])
+# which matches the directory form, not the zip — so we extract it explicitly.
+# punkt and punkt_tab are already in directory form after download.
+import zipfile
+for subdir in ('corpora',):
+    for zp in (NLTK_DIR / subdir).glob('*.zip'):
+        target = zp.with_suffix('')   # corpora/wordnet.zip -> corpora/wordnet
+        if not target.exists():
+            print(f'Extracting {zp.name} -> {target.name}/')
+            with zipfile.ZipFile(zp) as zf:
+                zf.extractall(zp.parent)
+
+# Verify using NLTK's own finder with the directory resource path —
+# matching exactly what ensure_nltk_resource() checks at runtime.
+for pkg, resource in REQUIRED.items():
+    try:
+        found = nltk.data.find(resource, paths=[str(NLTK_DIR)])
+        print(f'OK  {pkg:12s} -> {found}')
+    except LookupError:
+        print(f'FATAL: {pkg} not findable at {resource} in {NLTK_DIR}', file=sys.stderr)
+        sys.exit(1)
+
+print(f'\nNLTK data bundled at {NLTK_DIR}')
+PYEOF
+
+# ── Adapter source ────────────────────────────────────────────────────────────
 COPY *.py .
 
+# ── Permissions ───────────────────────────────────────────────────────────────
 RUN mkdir -p /tmp/.inspect_cache && \
     chmod -R 777 /tmp && \
     chown -R 1001:0 /app && \
@@ -17,12 +153,12 @@ RUN mkdir -p /tmp/.inspect_cache && \
     chown -R 1001:0 /opt/app-root && \
     chmod -R g+rwX /opt/app-root
 
+# ── Runtime environment ───────────────────────────────────────────────────────
 ENV PYTHONUNBUFFERED=1
 ENV EVALHUB_MODE=k8s
 ENV HOME=/tmp
 # Disable Inspect AI telemetry in container
 ENV INSPECT_NO_TELEMETRY=1
-
 USER 1001
 
 ENTRYPOINT ["python", "main.py"]
