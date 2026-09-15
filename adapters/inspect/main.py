@@ -245,6 +245,8 @@ class InspectAdapter(FrameworkAdapter):
         if mode == "standard" and config.benchmark_id == "inspect/custom":
             if not config.parameters.get("task"):
                 raise ValueError("inspect/custom requires a 'task' parameter.")
+            # replace generic inspect/custom with individual tasks name
+            config.benchmark_id = str(config.parameters.get("task"))
 
         task_args: dict[str, Any] = config.parameters.get("task_args", {})
         if any("dish" in k.lower() for k in task_args):
