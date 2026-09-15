@@ -26,8 +26,8 @@ This directory is the **eval-hub community adapter** for **[IBM CLEAR](https://g
 
 | Requirement | Notes |
 |-------------|-------|
-| **Python 3.13+** | Create a virtualenv from `adapters/clear`: `python3 -m venv .venv && pip install -r requirements.txt` |
-| **IBM CLEAR** | Installed from Git by `requirements.txt` (currently **`2.0.0-rc.2`**); PyPI wheels omit the agentic pipeline |
+| **Python 3.11+** | Create a virtualenv from `adapters/clear`: `python3 -m venv .venv && pip install -r requirements.txt` |
+| **IBM CLEAR** | Installed via `clear-eval[tool-calls]>=2.0.0` from PyPI (includes agentic pipeline and SPARC/tool-call analysis) |
 | **OpenAI-compatible inference endpoint** | Used as the **judge model** (`model.url`, e.g. an Ollama, vLLM, or OpenAI-API-compatible server). Supply `OPENAI_API_KEY` only when your endpoint requires it |
 | **Agent traces** | One or more `*.json` trace files from a **LangGraph + MLflow-autologged** agent run — see [`examples/docs/02-agent-traces.md`](examples/docs/02-agent-traces.md) |
 | **Eval Hub** *(deployed only)* | A running Eval Hub instance with the `ibm-clear` provider registered and traces staged from S3 — see [`examples/docs/04-deployed-eval-hub.md`](examples/docs/04-deployed-eval-hub.md) |
@@ -68,15 +68,19 @@ Summary:
   "experiment_name": "my-mlflow-experiment",
   "model": {
     "url": "https://your-inference-endpoint.example.com/v1",
-    "name": "your-model-name"
+    "name": "your-model-name",
+    "auth": {
+      "secret_ref": "judge-llm-api-key"
+    }
   },
   "parameters": {
-    "data_dir": "input-trace",
-    "eval_model_name": "openai/your-model-name",
+    "eval_model_name": "your-model-name",
     "provider": "openai",
     "agent_framework": "langgraph",
     "observability_framework": "mlflow",
-    "inference_backend": "litellm"
+    "inference_backend": "litellm",
+    "mlflow_traces_experiment_name": "your-agent-traces-experiment",
+    "separate_tools": false
   },
   "callback_url": "http://localhost:8080"
 }
@@ -105,15 +109,16 @@ Example (dummy host, token, and secret names):
 ```bash
 curl -sS -X POST 'https://evalhub.example.com/api/v1/evaluations/jobs' \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer eyJhbGciOiJub3QtYS1yZWFsLXRva2Vu' \
+  -H 'Authorization: Bearer <YOUR_TOKEN>' \
   -H 'X-Tenant: your-namespace' \
   -d '{
-  "experiment_name": "clear-agentic-eval-example",
+  "name": "clear-eval-run",
+  "experiment_name": "clear-agentic-eval-results",
   "model": {
-    "url": "http://127.0.0.1:8000/v1",
-    "name": "example-model",
+    "url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "name": "gemini-2.5-flash",
     "auth": {
-      "secret_ref": "my-openai-api-key-secret"
+      "secret_ref": "judge-llm-api-key"
     }
   },
   "benchmarks": [
@@ -121,25 +126,16 @@ curl -sS -X POST 'https://evalhub.example.com/api/v1/evaluations/jobs' \
       "id": "agentic-evaluation",
       "provider_id": "ibm-clear",
       "parameters": {
-        "data_dir": "input-trace",
-        "eval_model_name": "openai/example-model",
+        "eval_model_name": "gemini-2.5-flash",
         "provider": "openai",
         "agent_framework": "langgraph",
         "observability_framework": "mlflow",
-        "inference_backend": "litellm"
+        "inference_backend": "litellm",
+        "mlflow_traces_experiment_name": "your-agent-traces-experiment",
+        "separate_tools": false
       }
     }
-  ],
-  "test_data_ref": {
-    "s3": {
-      "bucket": "clear-traces",
-      "path": "traces/",
-      "secret_ref": {
-        "name": "clear-traces-bucket",
-        "namespace": "your-namespace"
-      }
-    }
-  }
+  ]
 }'
 ```
 
@@ -154,7 +150,7 @@ podman build -f Containerfile -t quay.io/evalhub/community-ibm-clear:latest .
 
 From repo root: `podman build -f eval-hub-contrib/adapters/clear/Containerfile -t quay.io/evalhub/community-ibm-clear:latest eval-hub-contrib/adapters/clear`
 
-Bump the CLEAR archive URL in `requirements.txt` when you adopt a newer IBM/CLEAR revision. Pin the container image tag in your eval-hub provider definition when you want immutable pulls.
+Bump the `clear-eval` version in `requirements.txt` when you adopt a newer IBM CLEAR release. Pin the container image tag in your eval-hub provider definition when you want immutable pulls.
 
 ## `parameters.inference_backend` and credentials
 
@@ -169,6 +165,14 @@ Prefer **`model.auth.secret_ref`** on the job so credentials stay in a **Kuberne
 ## MLflow
 
 Configure **`MLFLOW_TRACKING_URI`** (and any other MLflow env) on the runtime. On the job, set **`experiment_name`** or **`parameters.mlflow_experiment_name`**. When set, the adapter uploads **`clear_results.json`**, **`metrics_summary.json`**, and HTML artifacts when present. **Local runs use the same rules** as cluster runs: upload is skipped if there is no experiment name or **`MLFLOW_TRACKING_URI`** is unset. Longer notes: [`examples/docs/03-local-run.md`](examples/docs/03-local-run.md).
+
+**Fetching traces from MLflow:** Set **`parameters.mlflow_traces_experiment_name`** to the MLflow experiment containing your agent traces. The adapter uses the `eval-hub-sdk` MLflow client to fetch and convert traces into the format CLEAR expects. Optionally limit with **`parameters.mlflow_traces_max_results`**.
+
+**Workspace override (OpenShift AI):** When the EvalHub sidecar sets `MLFLOW_WORKSPACE` to the tenant namespace but traces live in a different workspace, set **`parameters.mlflow_workspace`** to override it. The adapter will bypass the sidecar proxy and talk directly to the MLflow service. Optionally set **`parameters.mlflow_route_url`** to specify the MLflow route explicitly.
+
+## SPARC (Tool-Call Analysis)
+
+Set **`parameters.separate_tools: true`** to enable SPARC mode. In this mode, CLEAR separates tool-call spans from the main LLM reasoning and evaluates tool usage quality independently—covering issues like unnecessary tool calls, incorrect parameters, and missing tool invocations. When `false` (default), tool calls are analyzed inline as part of the standard step-by-step evaluation.
 
 ## Layout
 

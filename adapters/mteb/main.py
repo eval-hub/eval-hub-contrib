@@ -51,6 +51,7 @@ from evalhub.adapter import (
     JobStatusUpdate,
     MessageInfo,
     OCIArtifactSpec,
+    configure_telemetry,
 )
 
 # Configure module logger
@@ -953,6 +954,8 @@ def main() -> None:
         level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+    configure_telemetry()
 
     try:
         # Create adapter with job spec path from environment or default

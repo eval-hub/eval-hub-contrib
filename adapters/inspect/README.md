@@ -83,10 +83,10 @@ All 38 Petri judge dimensions are captured as individual metrics.
 
 | Benchmark ID | Description |
 |---|---|
-| `inspect/telemath` | Telecom numerical math reasoning. Set `full=true` for `GSMA/ot-full` (500 Q&A); cap with `num_examples`. |
-| `inspect/teleqna` | Telecom multiple-choice domain knowledge. Set `full=true`; optional `subject` (default `full`). |
-| `inspect/telelogs` | 5G root-cause analysis. Set `full=true`; `eval_type` soft (default) or hard. |
-| `inspect/3gpp-tsg` | 3GPP working-group classification. Set `full=true`; cap with `num_examples`. |
+| `telemath` | Telecom numerical math reasoning. Set `full=true` for `GSMA/ot-full` (500 Q&A); cap with `num_examples`. |
+| `teleqna` | Telecom multiple-choice domain knowledge. Set `full=true`; optional `subject` (default `full`). |
+| `telelogs` | 5G root-cause analysis. Set `full=true`; `eval_type` soft (default) or hard. |
+| `3gpp-tsg` | 3GPP working-group classification. Set `full=true`; cap with `num_examples`. |
 
 ### Knowledge & Reasoning
 
@@ -120,7 +120,7 @@ Petri and Bloom modes do not use a sandbox.
 ### HuggingFace datasets
 
 Some inspect-evals benchmarks (e.g. `humaneval`, `mmlu`) and Open-Telco tasks
-(`inspect/telemath`) download datasets from the HuggingFace Hub. The adapter reads an
+(`telemath`) download datasets from the HuggingFace Hub. The adapter reads an
 `hf-token` secret mounted at `/var/run/secrets/model/hf-token` and injects it as
 `HF_TOKEN` automatically. In EvalHub jobs, set `model.auth.secret_ref` to a Kubernetes
 Secret that includes the `hf-token` key (alongside `api-key` if needed).

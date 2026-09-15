@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, create_autospec
 import pytest
 
 from evalhub.adapter import JobCallbacks, JobPhase, JobResults, OCIArtifactResult
+from evalhub.models import ResultType
 from main import LightEvalAdapter
 
 # Canned output matching LightEval's results JSON structure.
@@ -98,6 +99,13 @@ def test_lighteval_happy_path(adapter, mock_callbacks, monkeypatch, mock_hf_api)
     # Overall score and example count
     assert results.overall_score == 0.78
     assert results.num_examples_evaluated == 5
+
+    # All metrics declared as NUMERIC — lighteval corpus_level_fn always produces float
+    assert results.metrics_schema is not None
+    assert len(results.metrics_schema) == len(results.results)
+    assert all(s.type == ResultType.NUMERIC for s in results.metrics_schema)
+    schema_names = {s.name for s in results.metrics_schema}
+    assert "boolq.accuracy" in schema_names
 
     # Callback lifecycle phases
     phases = [c.args[0].phase for c in mock_callbacks.report_status.call_args_list]

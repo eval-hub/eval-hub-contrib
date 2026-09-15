@@ -1,0 +1,20 @@
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+# ifbench is installed from git in requirements.txt; pip clone needs git in the image.
+USER 0
+RUN dnf install -y git && dnf clean all
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY _evaluation.py main.py provider.yaml ./
+COPY meta/job.json /meta/job.json
+
+ENV PYTHONUNBUFFERED=1
+ENV EVALHUB_MODE=k8s
+
+USER 1001
+
+ENTRYPOINT ["python", "main.py"]

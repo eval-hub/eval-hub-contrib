@@ -141,6 +141,7 @@ def test_clear_happy_path(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(main, "_run_clear_unified_pipeline", fake_pipeline)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     results = adapter.run_benchmark_job(config, callbacks)
 

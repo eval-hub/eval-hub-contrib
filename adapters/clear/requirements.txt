@@ -1,6 +1,4 @@
 eval-hub-sdk[adapter]>=0.4.1
-# IBM CLEAR with tool-call (SPARC) support. Set parameters.separate_tools: true to enable.
-clear_eval[tool-calls] @ git+https://github.com/IBM/clear.git@main_with_sparc
-
+clear-eval[tool-calls]>=2.0.0
 pandas>=2.0.0
 pydantic>=2.0.0

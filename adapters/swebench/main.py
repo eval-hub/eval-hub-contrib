@@ -42,6 +42,7 @@ from evalhub.adapter import (
     MessageInfo,
     OCIArtifactSpec,
     OCIArtifactResult,
+    configure_telemetry,
 )
 from evalhub.models.api import OCICoordinates
 from evalhub.adapter.mlflow import MlflowArtifact
@@ -444,6 +445,8 @@ class SWEBenchAdapter(FrameworkAdapter):
 
 def main() -> None:
     """Standard eval-hub adapter entry point."""
+    configure_telemetry()
+
     try:
         job_spec_path = os.getenv(
             "EVALHUB_JOB_SPEC_PATH", "/meta/job.json"

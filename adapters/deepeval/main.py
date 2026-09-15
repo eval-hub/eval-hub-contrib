@@ -43,6 +43,7 @@ from evalhub.adapter import (
     JobStatusUpdate,
     MessageInfo,
     OCIArtifactSpec,
+    configure_telemetry,
 )
 from evalhub.adapter.auth import resolve_model_credentials
 from evalhub.adapter.mlflow import MlflowArtifact
@@ -224,10 +225,6 @@ def _resolve_judge_model(judge_name: str, judge_url: str) -> Any:
 
     creds = resolve_model_credentials()
     api_key = creds.api_key
-    if not api_key:
-        auth_value = creds.auth_headers.get("Authorization", "")
-        if auth_value.startswith("Bearer "):
-            api_key = auth_value.removeprefix("Bearer ").strip()
 
     url = judge_url.rstrip("/")
     if not url.endswith("/v1"):
@@ -613,6 +610,8 @@ def main() -> None:
         level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+    configure_telemetry()
 
     try:
         job_spec_path = os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")

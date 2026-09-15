@@ -123,8 +123,11 @@ class GuideLLMAdapter(FrameworkAdapter):
             )
             results_data = self._parse_results(config)
 
-            # Extract overall score (requests per second or throughput)
-            overall_score = results_data.get("requests_per_second")
+            # Use the server-configured primary metric when available,
+            # falling back to requests_per_second for backward compatibility.
+            ps = getattr(config, "primary_score", None)
+            ps_metric = ps.metric if ps else None
+            overall_score = results_data.get(ps_metric or "requests_per_second")
 
             # Create evaluation results with performance metrics
             evaluation_results = []
@@ -588,7 +591,7 @@ def main() -> None:
 
     Note: The service URL for callbacks comes from job_spec.callback_url (mounted via ConfigMap)
     """
-    from evalhub.adapter import DefaultCallbacks
+    from evalhub.adapter import DefaultCallbacks, configure_telemetry
 
     # Configure logging
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -596,6 +599,8 @@ def main() -> None:
         level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+    configure_telemetry()
 
     try:
         # Create adapter with job spec path from environment or default

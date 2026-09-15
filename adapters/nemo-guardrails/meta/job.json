@@ -1,0 +1,20 @@
+{
+  "id": "prompt-injection-test-001",
+  "provider_id": "nemo-guardrails",
+  "benchmark_id": "prompt_injection",
+  "benchmark_index": 0,
+  "experiment_name": "prompt-injection-eval",
+  "model": {
+    "url": "http://localhost:9999",
+    "name": "nemo-guardrails"
+  },
+  "parameters": {
+    "nemo_config": "/path/to/nemo_configs/prompt_injection_deberta",
+    "server_port": 9999,
+    "server_host": "localhost",
+    "startup_timeout": 120,
+    "workers": 1,
+    "verbose": false
+  },
+  "callback_url": "http://localhost:8080"
+}

@@ -116,14 +116,14 @@ def test_mteb_local_stsbenchmark(tmp_path, mock_sidecar):
     for ev in events:
         assert ev["path"] == expected_path
 
-    # Extract states from the events
-    states = [
-        ev["body"]["benchmark_status_event"]["state"]
+    # Extract statuses from the events
+    statuses = [
+        ev["body"]["benchmark_status_event"]["status"]
         for ev in events
         if "benchmark_status_event" in ev["body"]
     ]
-    assert "running" in states, f"Expected 'running' state in events, got {states}"
-    assert states[-1] == "completed", f"Last event should be 'completed', got {states[-1]}"
+    assert "running" in statuses, f"Expected 'running' status in events, got {statuses}"
+    assert statuses[-1] == "completed", f"Last event should be 'completed', got {statuses[-1]}"
 
     # The final completed event should carry metrics with a strong score
     final_event = events[-1]["body"]["benchmark_status_event"]

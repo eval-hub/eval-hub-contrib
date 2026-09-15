@@ -37,6 +37,7 @@ from evalhub.adapter import (
     read_model_auth_key,
     resolve_model_credentials,
 )
+from evalhub.models import MetricSchema, ResultType
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class LightEvalAdapter(FrameworkAdapter):
         "commonsense_reasoning": ["hellaswag", "winogrande", "openbookqa", "arc:easy"],
         "scientific_reasoning": ["arc:easy", "arc:challenge"],
         "physical_commonsense": ["piqa"],
-        "truthfulness": ["truthfulqa:mc", "truthfulqa:generation"],
+        "truthfulness": ["truthfulqa:mc", "truthfulqa:gen"],
         "math": ["gsm8k", "math:algebra", "math:counting_and_probability"],
         "knowledge": ["mmlu", "triviaqa"],
         "language_understanding": ["glue:cola", "glue:sst2", "glue:mrpc"],
@@ -117,7 +118,7 @@ class LightEvalAdapter(FrameworkAdapter):
 
             config_tasks = lighteval_results.get("config_tasks", {})
 
-            evaluation_results = self._extract_evaluation_results(
+            evaluation_results, metrics_schema = self._extract_evaluation_results(
                 lighteval_results, config.benchmark_id
             )
             overall_score = self._compute_overall_score(evaluation_results)
@@ -177,6 +178,7 @@ class LightEvalAdapter(FrameworkAdapter):
                 benchmark_index=config.benchmark_index,
                 model_name=config.model.name,
                 results=evaluation_results,
+                metrics_schema=metrics_schema,
                 overall_score=overall_score,
                 num_examples_evaluated=num_evaluated,
                 duration_seconds=duration,
@@ -451,7 +453,7 @@ class LightEvalAdapter(FrameworkAdapter):
 
     def _extract_evaluation_results(
         self, lighteval_results: dict[str, Any], benchmark_id: str
-    ) -> list[EvaluationResult]:
+    ) -> tuple[list[EvaluationResult], list[MetricSchema]]:
         """Extract structured evaluation results from LightEval output.
 
         LightEval results format:
@@ -470,9 +472,11 @@ class LightEvalAdapter(FrameworkAdapter):
             benchmark_id: Benchmark identifier for context
 
         Returns:
-            List of structured EvaluationResult objects
+            Tuple of (EvaluationResult list, MetricSchema list). String-valued
+            metrics are declared as CATEGORICAL; all others as NUMERIC.
         """
         evaluation_results = []
+        metrics_schema = []
 
         # Extract results dict
         results_dict = lighteval_results.get("results", lighteval_results)
@@ -489,6 +493,14 @@ class LightEvalAdapter(FrameworkAdapter):
                 stderr_key = f"{metric_name}_stderr"
                 stderr = task_metrics.get(stderr_key)
 
+                is_numeric = isinstance(metric_value, (int, float))
+                if not is_numeric:
+                    logger.warning(
+                        f"Unexpected non-numeric metric value for {metric_name!r} "
+                        f"in task {task_name!r}: {type(metric_value).__name__!r} — skipping"
+                    )
+                    continue
+
                 confidence_interval = None
                 if stderr is not None:
                     # 95% confidence interval: value ± 1.96 * stderr
@@ -498,19 +510,15 @@ class LightEvalAdapter(FrameworkAdapter):
                         float(metric_value) + margin,
                     )
 
-                # Determine metric type
-                metric_type = "float"
-                if isinstance(metric_value, int):
-                    metric_type = "int"
-                elif isinstance(metric_value, str):
-                    metric_type = "string"
+                metric_type = "int" if isinstance(metric_value, int) else "float"
 
                 clean_metric = self._normalise_metric_name(metric_name)
                 clean_task = self._normalise_task_name(task_name)
+                full_name = f"{clean_task}.{clean_metric}"
 
                 evaluation_results.append(
                     EvaluationResult(
-                        metric_name=f"{clean_task}.{clean_metric}",
+                        metric_name=full_name,
                         metric_value=metric_value,
                         metric_type=metric_type,
                         confidence_interval=confidence_interval,
@@ -522,9 +530,10 @@ class LightEvalAdapter(FrameworkAdapter):
                         },
                     )
                 )
+                metrics_schema.append(MetricSchema(name=full_name, type=ResultType.NUMERIC))
 
         logger.info(f"Extracted {len(evaluation_results)} metrics from LightEval results")
-        return evaluation_results
+        return evaluation_results, metrics_schema
 
     @staticmethod
     def _normalise_task_name(task_name: str) -> str:
@@ -818,7 +827,7 @@ def main() -> None:
     Note: The service URL for callbacks comes from job_spec.callback_url (mounted via ConfigMap)
     """
     import sys
-    from evalhub.adapter import DefaultCallbacks
+    from evalhub.adapter import DefaultCallbacks, configure_telemetry
 
     # Configure logging
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -826,6 +835,8 @@ def main() -> None:
         level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+    configure_telemetry()
 
     try:
         # Create adapter with job spec path from environment or default

@@ -88,6 +88,7 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     # Cybersecurity
     "inspect/cybench":                "inspect_evals/cybench",
     "inspect/cyberseceval-2":         "inspect_evals/cyberseceval_2",
+    "inspect/cyberseceval-2-pi":      "inspect_evals/cyse2_prompt_injection",
     "inspect/cybergym":               "inspect_evals/cybergym",
     # Coding
     "inspect/humaneval":              "inspect_evals/humaneval",
@@ -100,10 +101,10 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     "inspect/aime2024":               "inspect_evals/aime2024",
     "inspect/aime2025":               "inspect_evals/aime2025",
     # Telecom (GSMA Open-Telco / gsma-labs/evals)
-    "inspect/telemath":               "evals/telemath",
-    "inspect/teleqna":                "evals/teleqna",
-    "inspect/telelogs":               "evals/telelogs",
-    "inspect/3gpp-tsg":               "evals/three_gpp",
+    "telemath":                       "evals/telemath",
+    "teleqna":                        "evals/teleqna",
+    "telelogs":                       "evals/telelogs",
+    "3gpp-tsg":                       "evals/three_gpp",
     # Knowledge & reasoning
     "inspect/mmlu":                   "inspect_evals/mmlu",
     "inspect/mmlu-pro":               "inspect_evals/mmlu_pro",
@@ -114,10 +115,13 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     "inspect/winogrande":             "inspect_evals/winogrande",
     "inspect/truthfulqa":             "inspect_evals/truthfulqa",
     "inspect/simpleqa":               "inspect_evals/simpleqa",
+    "inspect/hle":                    "inspect_evals/hle",
     # Agent capabilities
     "inspect/gaia":                   "inspect_evals/gaia",
     "inspect/agentdojo":              "inspect_evals/agentdojo",
     "inspect/theagentcompany":        "inspect_evals/theagentcompany",
+    "inspect/bfcl":                   "inspect_evals/bfcl",
+    "inspect/docvqa":                 "inspect_evals/docvqa",
     # Custom
     "inspect/custom":                 None,
 }
