@@ -107,6 +107,19 @@ def build_command(
         if sandbox not in ("none", None):
             cmd += ["--sandbox", sandbox]
 
+        # Optional model-role overrides for benchmarks that use judge/grader
+        # models (e.g. HLE defaults to an OpenRouter judge). Provider YAML can
+        # specify parameters.model_roles: {grader: "openai/gpt-4o-mini"} to
+        # override at runtime without changing inspect-evals upstream defaults.
+        model_roles = config.parameters.get("model_roles") or {}
+        if not isinstance(model_roles, dict):
+            raise ValueError(
+                f"parameters.model_roles must be a dict (got {type(model_roles).__name__}). "
+                "Example: model_roles: {grader: openai/gpt-4o-mini}"
+            )
+        for role, spec in model_roles.items():
+            cmd += ["--model-role", f"{role}={spec}"]
+
     max_tasks = config.parameters.get("max_tasks")
     if max_tasks:
         cmd += ["--max-tasks", str(max_tasks)]
