@@ -2,7 +2,7 @@ eval-hub-sdk[adapter]>=1.0.2
 inspect-ai>=0.3.260
 openai>=2.0.0
 inspect-evals[math,bfcl]>=0.1.0
-git+https://github.com/josejg/instruction_following_eval.git
+git+https://github.com/josejg/instruction_following_eval.git@0c495b2f95155e8b10acb919ae283bfb4d5be6e2
 inspect-petri>=3.0.0
 petri-bloom>=0.1.0
 # GSMA Open-Telco Inspect tasks (TeleMath, TeleQnA, …) — registers as evals/*
