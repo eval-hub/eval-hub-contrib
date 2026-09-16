@@ -122,8 +122,10 @@ Petri and Bloom modes do not use a sandbox.
 Some inspect-evals benchmarks (e.g. `humaneval`, `mmlu`) and Open-Telco tasks
 (`inspect/telemath`) download datasets from the HuggingFace Hub. The adapter reads an
 `hf-token` secret mounted at `/var/run/secrets/model/hf-token` and injects it as
-`HF_TOKEN` automatically. In EvalHub jobs, set `model.auth.secret_ref` to a Kubernetes
-Secret that includes the `hf-token` key (alongside `api-key` if needed).
+`HF_TOKEN` and `HUGGING_FACE_HUB_TOKEN` (with retry while the projected volume
+appears). Sidecar `:ref` placeholders are ignored. In EvalHub jobs, set
+`model.auth.secret_ref` to a Kubernetes Secret that includes the `hf-token` key
+(alongside `api-key` if needed).
 
 ### Sample limits
 
