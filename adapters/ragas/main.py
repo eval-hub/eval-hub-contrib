@@ -211,22 +211,42 @@ def _run_collections_evaluation(
 # ---------------------------------------------------------------------------
 # OpenAI-compatible LLM wrapper
 # ---------------------------------------------------------------------------
-def _openai_credentials(base_url: str) -> tuple[str, str]:
+def _openai_credentials(
+    base_url: str,
+    api_key_override: str | None = None,
+    *,
+    use_model_credentials: bool = True,
+) -> tuple[str, str]:
     url = base_url.rstrip("/")
     if not url.endswith("/v1"):
         url = f"{url}/v1"
-    creds = resolve_model_credentials()
-    api_key = creds.api_key
+    if api_key_override:
+        return url, api_key_override
+    if use_model_credentials:
+        creds = resolve_model_credentials()
+        api_key = creds.api_key
+    else:
+        # A separate judge endpoint must not attempt to use the evaluated
+        # model's mounted credential. External endpoints use an explicit
+        # judge_api_key or OPENAI_API_KEY instead.
+        api_key = os.getenv("OPENAI_API_KEY")
     return url, api_key or "DUMMY"
 
 
-def _async_openai_client(base_url: str) -> Any:
+def _async_openai_client(
+    base_url: str,
+    api_key: str | None = None,
+    *,
+    use_model_credentials: bool = True,
+) -> Any:
     if not _HAS_OPENAI:
         raise RuntimeError(
             "openai package is required — install with: pip install openai>=1.0.0"
         )
-    url, api_key = _openai_credentials(base_url)
-    return AsyncOpenAI(base_url=url, api_key=api_key)
+    url, resolved_api_key = _openai_credentials(
+        base_url, api_key, use_model_credentials=use_model_credentials
+    )
+    return AsyncOpenAI(base_url=url, api_key=resolved_api_key)
 
 
 def _create_ragas_llm(
@@ -235,6 +255,8 @@ def _create_ragas_llm(
     *,
     max_tokens: int | None = None,
     temperature: float | None = None,
+    api_key: str | None = None,
+    use_model_credentials: bool = True,
 ) -> Any:
     """Build an InstructorLLM for ragas.metrics.collections via llm_factory."""
     from ragas.llms import llm_factory
@@ -247,7 +269,9 @@ def _create_ragas_llm(
 
     # Pass raw AsyncOpenAI — llm_factory patches with instructor internally.
     # Do not pre-patch or pass mode= (conflicts with llm_factory's own instructor setup).
-    client = _async_openai_client(base_url)
+    client = _async_openai_client(
+        base_url, api_key, use_model_credentials=use_model_credentials
+    )
     return llm_factory(model_id, client=client, **kwargs)
 
 
@@ -398,6 +422,10 @@ class RagasAdapter(FrameworkAdapter):
             metric_defs = self._resolve_metrics(bc)
             model_url = config.model.url.strip().rstrip("/")
             model_name = config.model.name
+            judge_model = bc.get("judge_model") or model_name
+            judge_url = (bc.get("judge_url") or model_url).strip().rstrip("/")
+            judge_api_key = bc.get("judge_api_key")
+            judge_uses_model_credentials = judge_url == model_url
             embedding_model = bc.get("embedding_model") or model_name
             embedding_url = bc.get("embedding_url") or model_url
 
@@ -424,10 +452,12 @@ class RagasAdapter(FrameworkAdapter):
             max_workers = min(max(int(bc.get("max_workers") or 1), 1), 10)
             run_config = RunConfig(max_workers=max_workers)
             llm = _create_ragas_llm(
-                model_url,
-                model_name,
+                judge_url,
+                judge_model,
                 max_tokens=bc.get("max_tokens"),
                 temperature=bc.get("temperature"),
+                api_key=judge_api_key,
+                use_model_credentials=judge_uses_model_credentials,
             )
             embeddings = _create_ragas_embeddings(
                 embedding_url,
@@ -537,7 +567,8 @@ class RagasAdapter(FrameworkAdapter):
                 evaluation_metadata={
                     "framework": "ragas",
                     "ragas_version": importlib.metadata.version("ragas"),
-                    "judge_llm": model_name,
+                    "judge_llm": judge_model,
+                    "judge_url": judge_url,
                     "embedding_model": embedding_model,
                     "data_path": str(data_path),
                     "metrics": [d.name for d in metric_defs],

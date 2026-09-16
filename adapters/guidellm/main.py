@@ -123,8 +123,11 @@ class GuideLLMAdapter(FrameworkAdapter):
             )
             results_data = self._parse_results(config)
 
-            # Extract overall score (requests per second or throughput)
-            overall_score = results_data.get("requests_per_second")
+            # Use the server-configured primary metric when available,
+            # falling back to requests_per_second for backward compatibility.
+            ps = getattr(config, "primary_score", None)
+            ps_metric = ps.metric if ps else None
+            overall_score = results_data.get(ps_metric or "requests_per_second")
 
             # Create evaluation results with performance metrics
             evaluation_results = []

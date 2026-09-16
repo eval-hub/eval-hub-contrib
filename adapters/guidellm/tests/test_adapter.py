@@ -6,6 +6,7 @@ The subprocess method is monkeypatched and results are seeded on disk.
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from unittest.mock import create_autospec
@@ -76,3 +77,34 @@ def test_guidellm_happy_path(monkeypatch):
     assert phases[0] == JobPhase.INITIALIZING
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
+
+
+@pytest.mark.integration
+def test_guidellm_primary_score_override(monkeypatch):
+    """overall_score uses primary_score.metric when the server provides one."""
+    adapter = GuideLLMAdapter(job_spec_path="meta/job.json")
+
+    callbacks = create_autospec(JobCallbacks)
+    callbacks.create_oci_artifact.return_value = OCIArtifactResult(
+        digest="sha256:fake", reference="fake:latest",
+    )
+
+    def fake_run_guidellm(cmd):
+        (adapter.results_dir / "benchmarks.json").write_text(
+            json.dumps(CANNED_BENCHMARKS)
+        )
+
+    monkeypatch.setattr(adapter, "_run_guidellm", fake_run_guidellm)
+
+    # Simulate the primary_score field that eval-hub-sdk#188 adds to JobSpec.
+    # Use object.__setattr__ to bypass Pydantic model validation since
+    # the installed SDK version may not have this field yet.
+    object.__setattr__(
+        adapter.job_spec,
+        "primary_score",
+        SimpleNamespace(metric="output_tokens_per_second", lower_is_better=False),
+    )
+
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    assert results.overall_score == 420.0

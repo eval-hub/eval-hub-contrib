@@ -1,0 +1,90 @@
+# IFBench — provider definition for eval-hub.
+# IFBench evaluates precise instruction-following generalization on 58 OOD constraints.
+#
+# Upstream: https://github.com/allenai/IFBench
+# Paper: https://arxiv.org/abs/2507.02833
+
+id: ifbench
+name: IFBench
+description: >
+  IFBench (AllenAI) evaluates precise instruction-following generalization using 58
+  out-of-domain verifiable constraints. The adapter loads the bundled IFBench test set,
+  generates model completions via an OpenAI-compatible endpoint, and scores responses
+  with programmatic constraint checkers. Primary metric is prompt-level loose accuracy,
+  matching the IFBench paper reporting convention.
+type: community
+
+runtime:
+  k8s:
+    image: quay.io/evalhub/community-ifbench:latest
+    image_pull_policy: always
+    entrypoint:
+      - python
+      - main.py
+    cpu_request: 100m
+    memory_request: 512Mi
+    cpu_limit: 2000m
+    memory_limit: 4Gi
+  local: null
+
+benchmarks:
+  - id: ifbench
+    name: IFBench OOD Instruction Following
+    description: >
+      Evaluates the model on the IFBench test split (299 prompts, 58 OOD constraint
+      types). Reports prompt-level accuracy (primary), plus strict/loose prompt-level
+      and instruction-level scores. overall_score equals prompt-level accuracy for the
+      configured scoring_mode (default: loose).
+    category: instruction_following
+    metrics:
+      - accuracy
+      - prompt_level_strict
+      - prompt_level_loose
+      - inst_level_strict
+      - inst_level_loose
+      - n_evaluated
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.05
+    tags:
+      - instruction-following
+      - ifbench
+      - allenai
+      - verifiable-constraints
+      - curated
+
+parameters:
+  - name: scoring_mode
+    type: string
+    default: loose
+    description: >
+      Primary scoring mode for overall_score and accuracy metric. Use "loose" (paper
+      default) or "strict".
+
+  - name: num_examples
+    type: integer
+    description: >
+      Optional cap on the number of IFBench prompts evaluated. Useful for smoke tests.
+
+  - name: max_concurrent
+    type: integer
+    default: 4
+    description: Maximum number of concurrent API calls to the model endpoint.
+
+  - name: max_tokens
+    type: integer
+    default: 2048
+    description: >
+      Maximum tokens generated per prompt. Increase for reasoning/thinking models.
+
+  - name: temperature
+    type: number
+    default: 0.0
+    description: Sampling temperature for generation. Paper uses 0.
+
+  - name: request_timeout
+    type: integer
+    default: 120
+    description: Per-request timeout in seconds for the OpenAI-compatible API call.

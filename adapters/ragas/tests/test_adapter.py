@@ -11,7 +11,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, create_autospec
 
 from evalhub.adapter import JobCallbacks, JobPhase, OCIArtifactResult
-from main import METRIC_MAPPING, RagasAdapter, _run_collections_evaluation
+from main import (
+    METRIC_MAPPING,
+    RagasAdapter,
+    _openai_credentials,
+    _run_collections_evaluation,
+)
 
 _PROVIDER_YAML = Path(__file__).resolve().parent.parent / "provider.yaml"
 
@@ -38,6 +43,38 @@ def test_metric_mapping_covers_provider_yaml():
         assert METRIC_MAPPING[name].name == name, (
             f"METRIC_MAPPING[{name!r}].name == {METRIC_MAPPING[name].name!r}; key and .name have drifted"
         )
+
+
+def test_provider_declares_separate_judge_parameters():
+    data = yaml.safe_load(_PROVIDER_YAML.read_text())
+    parameters = {parameter["name"] for parameter in data.get("parameters", [])}
+    assert {"judge_model", "judge_url", "judge_api_key"} <= parameters
+
+
+def test_external_judge_does_not_resolve_model_credentials(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+
+    def fail_if_called():
+        raise AssertionError("model credentials must not be resolved for an external judge")
+
+    monkeypatch.setattr("main.resolve_model_credentials", fail_if_called)
+
+    assert _openai_credentials(
+        "https://api.openai.com/v1", use_model_credentials=False
+    ) == ("https://api.openai.com/v1", "env-key")
+
+
+def test_model_endpoint_still_uses_mounted_credentials(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-env-key")
+    monkeypatch.setattr(
+        "main.resolve_model_credentials",
+        lambda: type("Credentials", (), {"api_key": "mounted-key"})(),
+    )
+
+    assert _openai_credentials("http://localhost:8000") == (
+        "http://localhost:8000/v1",
+        "mounted-key",
+    )
 
 
 def _make_mock_ragas_result(metric_names, n_rows=5):
@@ -102,6 +139,52 @@ def test_ragas_happy_path(monkeypatch, tmp_path):
     assert "judge_llm" in meta, "Eval Card missing judge_llm"
     assert meta["judge_llm"] == adapter.job_spec.model.name
     assert "embedding_model" in meta, "Eval Card missing embedding_model"
+
+
+@pytest.mark.integration
+def test_separate_judge_is_used_for_llm_metrics(monkeypatch, tmp_path):
+    adapter = RagasAdapter(job_spec_path="meta/job.json")
+    adapter.job_spec.parameters.update(
+        {
+            "judge_model": "gpt-4o-mini",
+            "judge_url": "https://api.openai.com/v1",
+            "judge_api_key": "test-key",
+        }
+    )
+    callbacks = create_autospec(JobCallbacks)
+    created = {}
+
+    def fake_create_llm(base_url, model_id, **kwargs):
+        created.update(base_url=base_url, model_id=model_id, kwargs=kwargs)
+        return object()
+
+    monkeypatch.setattr("main._create_ragas_llm", fake_create_llm)
+    monkeypatch.setattr("main._create_ragas_embeddings", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        adapter,
+        "_run_ragas",
+        lambda **kwargs: _make_mock_ragas_result(["answer_relevancy"], n_rows=1),
+    )
+    dataset_file = tmp_path / "dataset.jsonl"
+    dataset_file.write_text(
+        '{"user_input": "What is AI?", "response": "Artificial Intelligence", "retrieved_contexts": ["AI is..."], "reference": "AI stands for..."}\n'
+    )
+    monkeypatch.setattr("main._resolve_data_path", lambda config: dataset_file)
+
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    assert created == {
+        "base_url": "https://api.openai.com/v1",
+        "model_id": "gpt-4o-mini",
+        "kwargs": {
+            "max_tokens": 512,
+            "temperature": 0.1,
+            "api_key": "test-key",
+            "use_model_credentials": False,
+        },
+    }
+    assert results.evaluation_metadata["judge_llm"] == "gpt-4o-mini"
+    assert results.evaluation_metadata["judge_url"] == "https://api.openai.com/v1"
 
 
 @pytest.mark.integration

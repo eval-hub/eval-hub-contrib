@@ -552,6 +552,10 @@ class RulerAdapter(FrameworkAdapter):
             logger.info(f"Reusing existing dataset: {output_file}")
             return output_file
 
+        task_config = self._load_task_config(task_id)
+        if task_config.get("args", {}).get("type_haystack") == "essay":
+            self._ensure_essay_haystack(timeout=timeout)
+
         prepare_script = self.SCRIPTS_DIR / "data" / "prepare.py"
         pythonpath = os.pathsep.join(
             filter(None, [
@@ -586,6 +590,29 @@ class RulerAdapter(FrameworkAdapter):
             )
         logger.debug(f"Data generation stdout: {result.stdout}")
         return output_file
+
+    def _ensure_essay_haystack(self, timeout: int) -> None:
+        """Download the essay haystack lazily when an essay task needs it."""
+        essay_file = self.SCRIPTS_DIR / "data" / "synthetic" / "json" / "PaulGrahamEssays.json"
+        if essay_file.exists() and essay_file.stat().st_size > 0:
+            return
+
+        downloader = essay_file.parent / "download_paulgraham_essay.py"
+        logger.info("Essay haystack is missing; downloading RULER essay data")
+        result = subprocess.run(
+            [sys.executable, str(downloader)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Failed to download RULER essay haystack. "
+                "The runtime must have network access to GitHub and Paul Graham.\n"
+                f"{result.stderr}"
+            )
+        if not essay_file.exists() or essay_file.stat().st_size == 0:
+            raise RuntimeError("RULER essay downloader completed without creating essay data")
 
     def _run_api_inference(
         self,
