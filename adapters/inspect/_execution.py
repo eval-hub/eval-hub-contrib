@@ -11,6 +11,12 @@ from evalhub.adapter.auth import resolve_model_credentials
 
 from _benchmarks import PETRI_SEED_MAP
 from _hf_auth import apply_hf_hub_auth, refresh_hf_hub_auth
+from _hf_offline import (
+    TEST_DATA_DIR,
+    configure_hf_offline_environment,
+    ensure_test_data_ready_for_offline,
+    should_use_hf_offline,
+)
 from _routing import _is_ollama_endpoint, role_model_spec, route_model, select_client, target_model_spec
 
 logger = logging.getLogger(__name__)
@@ -66,8 +72,17 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
         client = select_client(env, endpoint_url=config.model.url)
         env["INSPECT_EVAL_MODEL"] = route_model(config.model.name, client)
 
-    # Gated datasets (Open-Telco, humaneval, mmlu, …) need Hub auth in the inspect subprocess.
-    apply_hf_hub_auth(env)
+    # Staged S3/PVC/git test data (test_data_ref) or tokenizer+/test_data layout → offline Hub.
+    if should_use_hf_offline(p):
+        configure_hf_offline_environment(TEST_DATA_DIR, env)
+        logger.info(
+            "HF offline mode: HF_HOME=%s (staged test data), Hub downloads disabled",
+            TEST_DATA_DIR,
+        )
+
+    # Gated datasets (Open-Telco, humaneval, mmlu, …) need Hub auth when not offline.
+    if env.get("HF_HUB_OFFLINE") != "1":
+        apply_hf_hub_auth(env)
 
     env["INSPECT_NO_TELEMETRY"] = "1"
     return env
