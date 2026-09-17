@@ -1,0 +1,412 @@
+# Knowledge & Reasoning Collection — knowledge-reasoning-v1
+#
+# Evaluates two complementary capabilities:
+#   (1) What the model knows — factual breadth (MMLU, 57 subjects), domain depth
+#       (MMLU-Pro, 10-choice), expert knowledge (GPQA), factual calibration
+#       (TruthfulQA), contamination-resistant factual recall (SimpleQA)
+#   (2) How the model reasons — multi-step (BBH, 23 tasks), soft narrative (MuSR),
+#       science reasoning (ARC), commonsense inference (HellaSwag, WinoGrande)
+#
+# This collection COMPLEMENTS reasoning-v1, which focuses on math and competition
+# reasoning (GSM8K, MATH-500, AIME, GPQA Diamond). knowledge-reasoning-v1 targets
+# knowledge breadth, commonsense, and logical reasoning — the capabilities that
+# determine whether an AI can function reliably as a knowledge-worker assistant.
+#
+# ── Provider Notes ─────────────────────────────────────────────────────────────
+#
+# This collection uses two providers:
+#
+#   lm_evaluation_harness (STABLE — no known vLLM compatibility issues):
+#     mmlu_cot_llama, leaderboard_mmlu_pro, leaderboard_bbh, leaderboard_musr,
+#     leaderboard_gpqa, truthfulqa_mc1
+#     → Run these immediately on any vLLM-backed endpoint.
+#
+#   inspect (⚠️  G9 — see warning below):
+#     inspect/simpleqa, inspect/winogrande, inspect/hellaswag, inspect/arc
+#     → Thresholds are correct; use when G9 is resolved.
+#
+# ⚠️  G9: community-inspect:latest routes inspect-evals benchmarks through the
+# Responses API. All inspect/* entries below currently fail on vLLM endpoints
+# with BadRequestError. Petri/Bloom alignment benchmarks are unaffected.
+# For a fully stable run today, use only the lm_evaluation_harness benchmarks
+# (items 1–6). The full 10-benchmark collection applies once G9 is fixed.
+#
+# ── Benchmark Selection Rationale ──────────────────────────────────────────────
+#
+# Deduplication decisions vs. existing collections:
+#   • MMLU is present in both this collection (mmlu_cot_llama via LMEval) and
+#     inspect (inspect/mmlu). LMEval is used to avoid G9 and provide a stable gate.
+#   • BBH is present via LMEval (leaderboard_bbh). The inspect/bbh version is not
+#     included to avoid duplication; LMEval acc_norm is the leaderboard-compatible metric.
+#   • GPQA appears in reasoning-v1 (lighteval gpqa:diamond, pass@k). Here we use
+#     leaderboard_gpqa (LMEval, acc_norm, 0-shot) — different scoring path; both are valid.
+#   • TruthfulQA: inspect/truthfulqa (MC1, choice/accuracy) is available but G9-blocked.
+#     truthfulqa_mc1 via LMEval (mc1_acc) is used as the stable equivalent.
+#   • ARC, HellaSwag, WinoGrande: not available as English benchmarks in the TrustyAI
+#     LMEval provider — Inspect is the only current path.
+#   • SimpleQA: not in LMEval TrustyAI provider; Inspect is the only path (G9 noted).
+#
+# ── Threshold Justification ──────────────────────────────────────────────────
+#
+# Thresholds are set at the lower bound of the top-10 open-weight models < 80B
+# as observed on the Open LLM Leaderboard v2 (HuggingFace, accessed 2026-08).
+# This marks the boundary between "production-capable" and "insufficient" —
+# achievable for well-tuned 8B models, but excluding genuinely incapable models.
+# Sources: original papers, Open LLM Leaderboard v2, llm-stats.com.
+#
+# --- Knowledge benchmarks ---
+#
+#   MMLU (mmlu_cot_llama):
+#     Hendrycks et al. 2021. 57 academic subjects, 14K MCQ.
+#     Random = 25%, human expert = 90%.
+#     Top-10 <80B: 82–88%. Typical 8B (Qwen3, Llama-3.1): 63–76%.
+#     Threshold 0.70 = midpoint between the 8B floor and frontier (0.85–0.90).
+#     Below this, cross-domain knowledge gaps appear in >30% of subject areas.
+#     5-shot CoT (fewshot_as_multiturn) per standard LMEval leaderboard protocol.
+#     Metric: exact_match (generated answer matched against correct option letter).
+#
+#   MMLU-Pro (leaderboard_mmlu_pro):
+#     Wang et al. 2024. 10-choice questions; harder than MMLU — filters surface recall.
+#     Random = 10%, non-expert human = 61.4%.
+#     Top-10 <80B: 65–75%. Typical 8B: 25–35%.
+#     Threshold 0.45 = lower bound of competitive 8B-class range.
+#     Metric: acc_norm (length-normalised log-likelihood over 10 choices).
+#     ⚠️  Metric note: paper reports raw accuracy; acc_norm reads 2–5 pts higher on
+#     10-choice tasks. This threshold is calibrated for acc_norm. For Inspect path
+#     (choice/accuracy), lower threshold to 0.42.
+#
+#   GPQA (leaderboard_gpqa):
+#     Rein et al. 2023. 198 graduate-level expert MCQ: biology, chemistry, physics.
+#     Non-expert human = 34%. PhD-expert human = 70%.
+#     Top-10 <80B: 50–65%. Typical 8B: 28–33%.
+#     Threshold 0.40 = above non-expert human (0.34); marks minimum scientific
+#     reasoning capability for professional deployment.
+#     Metric: acc_norm.
+#
+#   TruthfulQA (truthfulqa_mc1):
+#     Lin et al. 2022. 817 questions humans often answer falsely due to
+#     misconceptions, conspiracy theories, and popular myths.
+#     Human = 94%, GPT-3 baseline = 58%.
+#     Top-10 <80B: 60–80%. Typical 8B: 37–45%.
+#     Threshold 0.50 = paper-recommended competency floor; above this, the model
+#     demonstrates factual calibration beyond pure memorisation.
+#     Mandatory gate: below 0.50, the model reproduces common false beliefs at
+#     rates incompatible with knowledge-worker deployment.
+#     Metric: mc1_acc (single-best-answer MC format).
+#     ⚠️  Metric note: mc2 (multi-true) runs 0.10–0.15 higher for the same model —
+#     do NOT mix mc1 and mc2 results in cross-collection comparisons.
+#
+#   SimpleQA (inspect/simpleqa):
+#     OpenAI 2024. 4,326 adversarially collected short-answer factoid questions.
+#     Collected to be resistant to GPT-4o — near-zero random baseline.
+#     Human = 94%. Frontier (GPT-4o, Claude 3.5 Sonnet): 0.28–0.47.
+#     Threshold 0.30 = minimum factual recall floor; below this, the model fails on
+#     questions frontier-class models reliably answer.
+#     Metric: match/accuracy (primary = 'correct' field; excludes 'not_attempted').
+#     ⚠️  Metric note: Inspect also reports simpleqa/f_score (harmonic mean of correct
+#     and correct_given_attempted), which reads 0.05–0.10 higher. Use match/accuracy
+#     (= 'correct') as the threshold gate, not the F-score.
+#     ⚠️  G9 applicable.
+#
+# --- Reasoning benchmarks ---
+#
+#   BBH (leaderboard_bbh):
+#     Suzgun et al. 2023. 23 challenging tasks requiring multi-step reasoning chains
+#     across causal judgement, logical deduction, object tracking, word sorting, etc.
+#     Human = 88%. Top-10 <80B: 75–90%. Typical 8B: 35–45%.
+#     Threshold 0.55 = enterprise floor for multi-step reasoning; below this,
+#     models fail >50% of task types under chain-of-thought requirements.
+#     Mandatory gate.
+#     Metric: acc_norm.
+#     ⚠️  BBH metric note: three scoring paths exist —
+#       (a) paper: normalised exact_match across 23 tasks;
+#       (b) inspect/bbh: bbh_scorer/all (hybrid choice + match, ~0.03–0.05 lower);
+#       (c) LMEval leaderboard_bbh: acc_norm (used here, leaderboard-compatible).
+#     Threshold 0.55 applies to LMEval acc_norm. For Inspect path, lower to 0.52.
+#
+#   MuSR (leaderboard_musr):
+#     Sprague et al. 2023. Multi-step soft reasoning over free-text narratives
+#     (murder mystery suspects, team allocation, object placement).
+#     Random = 33–50% (task-dependent). Frontier: 0.50–0.62. Typical 8B: 0.35–0.43.
+#     Threshold 0.45 = minimum to demonstrate narrative chain-of-thought coherence.
+#     High discriminating power: frontier barely exceeds this, making small improvements
+#     visible. Contrast with BBH which has a wider spread.
+#     Metric: acc_norm.
+#
+#   HellaSwag (inspect/hellaswag):
+#     Zellers et al. 2019. Choose the most plausible continuation for an activity
+#     description (ActivityNet captions + WikiHow).
+#     Near-saturated for instruction-tuned >7B models.
+#     Top-10 <80B: 83–92%. Typical 8B: 73–82%.
+#     Threshold 0.80 = sanity floor only; any competitive model clears this.
+#     Weight 1.0 (down-weighted): near-saturation limits discriminating power.
+#     Metric: choice/accuracy. ⚠️  G9 applicable.
+#
+#   WinoGrande (inspect/winogrande):
+#     Sakaguchi et al. 2021. 1,267 expert-crafted Winograd schema pronoun resolution
+#     problems, deliberately designed to defeat surface-level heuristics.
+#     Random = 50%. Top-10 <80B: 80–90%. Typical 8B: 65–73%.
+#     Threshold 0.75 = midpoint between 8B floor (0.65) and frontier (0.87–0.92).
+#     Anti-shortcut design makes this a reliable commonsense reasoning signal.
+#     Metric: choice/accuracy. ⚠️  G9 applicable.
+#
+#   ARC (inspect/arc):
+#     Clark et al. 2018. AI2 Reasoning Challenge — science questions requiring
+#     reasoning beyond rote recall (combined Easy + Challenge splits).
+#     Random = 25%. Top-10 <80B: 85–93%. Typical 8B: 75–85%.
+#     Threshold 0.72 = lower bound of competitive 8B range; screens models unable
+#     to apply basic scientific reasoning over memorised facts.
+#     Metric: choice/accuracy. ⚠️  G9 applicable.
+#
+# ── Weight Rationale ─────────────────────────────────────────────────────────
+#
+#   Weight 2.0 → mmlu_cot_llama, leaderboard_mmlu_pro, leaderboard_bbh:
+#                Highest breadth and calibration; primary knowledge + reasoning gates.
+#                These three define whether a model is "knowledge-capable".
+#
+#   Weight 1.5 → leaderboard_gpqa, leaderboard_musr, truthfulqa_mc1, inspect/simpleqa:
+#                Strong single-dimension signals: expert depth, narrative reasoning,
+#                factual calibration, and contamination-resistant factual recall.
+#                None are individually sufficient as the sole gate, but together they
+#                provide strong evidence of production readiness.
+#
+#   Weight 1.0 → inspect/hellaswag, inspect/winogrande, inspect/arc:
+#                Near-saturated (HellaSwag) or narrower scope; included for breadth
+#                coverage and commonsense/science signal. Down-weighted to limit their
+#                contribution to the collection aggregate relative to core gates.
+#
+# ── Global Pass Criteria ─────────────────────────────────────────────────────
+#
+# Collection PASS requires ALL THREE mandatory benchmarks to pass:
+#   (1) leaderboard_mmlu_pro ≥ 0.45  — domain knowledge depth gate
+#   (2) leaderboard_bbh ≥ 0.55       — multi-step reasoning gate
+#   (3) truthfulqa_mc1 ≥ 0.50        — factual calibration gate
+# Plus AT LEAST 3 of the remaining 7 benchmarks must pass their thresholds.
+# Rationale: a model that fails the knowledge depth, multi-step reasoning, AND
+# factual calibration gates simultaneously is not suitable for knowledge-worker
+# tasks regardless of commonsense scores.
+#
+# ── Usage ─────────────────────────────────────────────────────────────────────
+#
+# Full run (all 10 benchmarks; Inspect benchmarks require G9 fix):
+#   evalhub collections create --file collections/knowledge-reasoning-v1.yaml
+#   evalhub collections run knowledge-reasoning-v1 \
+#     --model-url http://<model-service>.<namespace>.svc.cluster.local:8080/v1 \
+#     --model-name <model-id>
+#
+# Stable subset (6 lm_evaluation_harness benchmarks only, no G9 dependency):
+#   Run the collection; inspect/* benchmarks will be skipped or fail gracefully
+#   until the G9 fix lands in community-inspect:latest.
+
+name: knowledge-reasoning-v1
+description: >
+  Knowledge and reasoning suite combining lm_evaluation_harness (stable) and Inspect AI
+  (pending G9 fix) benchmarks across five dimensions: (1) knowledge breadth: MMLU
+  (Hendrycks et al. 2021, 57 subjects, threshold 0.70 = 8B midpoint, weight 2.0 — CoT
+  5-shot); (2) domain depth: MMLU-Pro (Wang et al. 2024, 10-choice, threshold 0.45 =
+  competitive 8B floor, weight 2.0, acc_norm); (3) expert knowledge: GPQA (Rein et al.
+  2023, threshold 0.40 = above non-expert human 0.34, weight 1.5, acc_norm); (4) factual
+  calibration: TruthfulQA MC1 (Lin et al. 2022, threshold 0.50 = paper competency floor,
+  weight 1.5, mc1_acc — mandatory gate; ⚠️ do not mix with mc2 leaderboards); (5)
+  anti-contamination factual recall: SimpleQA (OpenAI 2024, threshold 0.30, weight 1.5,
+  ⚠️ G9). Multi-step reasoning: BBH (Suzgun et al. 2023, threshold 0.55 = enterprise
+  floor, weight 2.0, acc_norm — mandatory gate) and MuSR (Sprague et al. 2023, threshold
+  0.45, weight 1.5, acc_norm). Commonsense: HellaSwag (threshold 0.80 sanity floor,
+  weight 1.0 — near-saturated, ⚠️ G9), WinoGrande (Sakaguchi et al. 2021, threshold 0.75,
+  weight 1.0, ⚠️ G9), ARC (Clark et al. 2018, threshold 0.72, weight 1.0, ⚠️ G9). Global
+  PASS: mmlu_pro>=0.45 AND bbh>=0.55 AND truthfulqa>=0.50 plus >=3 of remaining 7.
+  Complements reasoning-v1 (math-heavy); targets knowledge-worker AI deployment gate.
+category: knowledge
+tags:
+  - knowledge
+  - reasoning
+  - factuality
+  - commonsense
+  - multi-step
+  - mmlu
+  - bbh
+  - lm-evaluation-harness
+  - inspect
+
+pass_criteria:
+  # Weighted average across all 10 benchmarks (weights 2/2/2/1.5/1.5/1.5/1/1/1/1.5).
+  # Mandatory gates: mmlu_pro>=0.45, bbh>=0.55, truthfulqa>=0.50 (see comments above).
+  threshold: 0.55
+
+benchmarks:
+  # ── Knowledge breadth (lm_evaluation_harness, STABLE) ───────────────────────
+  #
+  # MMLU: 57-subject cross-domain knowledge. Primary breadth gate.
+  # Hendrycks et al. 2021. Top-10 <80B: 82–88%. Typical 8B: 63–76%.
+  # Threshold 0.70 = midpoint between 8B floor and frontier (0.85–0.90).
+  # 5-shot CoT (fewshot_as_multiturn) per standard LMEval leaderboard protocol.
+  - id: mmlu_cot_llama
+    provider_id: lm_evaluation_harness
+    weight: 2.0
+    primary_score:
+      metric: exact_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.70
+    parameters:
+      num_fewshot: 5
+      apply_chat_template: true
+      fewshot_as_multiturn: true
+
+  # MMLU-Pro: 10-choice; harder than MMLU — filters surface-level recall.
+  # Wang et al. 2024. Random=10%, non-expert human=61.4%. Top-10 <80B: 65–75%.
+  # Threshold 0.45 = lower bound of competitive 8B range. Mandatory gate.
+  # Metric acc_norm reads 2–5 pts higher than raw accuracy on 10-choice tasks.
+  - id: leaderboard_mmlu_pro
+    provider_id: lm_evaluation_harness
+    weight: 2.0
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.45   # MANDATORY: domain knowledge depth gate
+    parameters:
+      num_fewshot: 0
+      apply_chat_template: true
+
+  # ── Multi-step reasoning (lm_evaluation_harness, STABLE) ────────────────────
+  #
+  # BBH: 23 hard reasoning tasks — causal judgement, object tracking, word sorting.
+  # Suzgun et al. 2023. Human=88%. Top-10 <80B: 75–90%. Typical 8B: 35–45%.
+  # Threshold 0.55 = enterprise floor; below this, >50% of task types fail.
+  # Mandatory gate. Metric acc_norm (leaderboard-compatible path).
+  - id: leaderboard_bbh
+    provider_id: lm_evaluation_harness
+    weight: 2.0
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.55   # MANDATORY: multi-step reasoning gate
+    parameters:
+      num_fewshot: 0
+      apply_chat_template: true
+
+  # MuSR: Narrative reasoning — murder mysteries, team allocation, object placement.
+  # Sprague et al. 2023. Random=33–50%. Frontier: 0.50–0.62. Typical 8B: 0.35–0.43.
+  # Threshold 0.45 = minimum narrative chain coherence; high discriminating power
+  # (frontier barely exceeds this vs. BBH's wider spread).
+  - id: leaderboard_musr
+    provider_id: lm_evaluation_harness
+    weight: 1.5
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.45
+    parameters:
+      num_fewshot: 0
+      apply_chat_template: true
+
+  # ── Expert scientific knowledge (lm_evaluation_harness, STABLE) ─────────────
+  #
+  # GPQA: Graduate-level MCQ in biology, chemistry, physics.
+  # Rein et al. 2023. Non-expert human=34%. PhD expert=70%. Top-10 <80B: 50–65%.
+  # Threshold 0.40 = above non-expert human (0.34); marks minimal scientific depth.
+  - id: leaderboard_gpqa
+    provider_id: lm_evaluation_harness
+    weight: 1.5
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.40
+    parameters:
+      num_fewshot: 0
+      apply_chat_template: true
+
+  # ── Factual calibration (lm_evaluation_harness, STABLE) ─────────────────────
+  #
+  # TruthfulQA MC1: Does the model reproduce common misconceptions?
+  # Lin et al. 2022. Human=94%. GPT-3=58%. Top-10 <80B: 60–80%. Typical 8B: 37–45%.
+  # Threshold 0.50 = paper competency floor (Lin et al. recommendation).
+  # Mandatory gate: below 0.50, the model repeats popular falsehoods at rates
+  # incompatible with knowledge-worker deployment.
+  # ⚠️ mc2 leaderboard scores run 0.10–0.15 higher — do NOT mix with mc2 results.
+  - id: truthfulqa_mc1
+    provider_id: lm_evaluation_harness
+    weight: 1.5
+    primary_score:
+      metric: mc1_acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.50   # MANDATORY: factual calibration gate
+    parameters:
+      num_fewshot: 0
+      apply_chat_template: true
+
+  # ── Contamination-resistant factual recall (inspect, ⚠️  G9) ─────────────────
+  #
+  # SimpleQA: 4,326 short-answer factoid questions, adversarially collected against
+  # GPT-4o to resist data contamination. Near-zero random baseline. Human=94%.
+  # Frontier (GPT-4o, Claude 3.5 Sonnet): 0.28–0.47. Threshold 0.30.
+  # Metric: match/accuracy = 'correct' field only (excludes not_attempted).
+  # ⚠️ Do not use simpleqa/f_score as threshold — it reads 0.05–0.10 higher.
+  # ⚠️  G9: fails on vLLM (Responses API). Activate once G9 is resolved.
+  - id: inspect/simpleqa
+    provider_id: inspect
+    weight: 1.5
+    primary_score:
+      metric: match/accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.30
+    parameters:
+      max_samples: 100
+
+  # ── Commonsense reasoning (inspect, ⚠️  G9) ─────────────────────────────────
+  #
+  # WinoGrande: 1,267 expert-crafted Winograd schema pronoun resolution problems.
+  # Anti-shortcut design: balanced binary choice, no surface heuristics valid.
+  # Sakaguchi et al. 2021. Random=50%. Top-10 <80B: 80–90%. Typical 8B: 65–73%.
+  # Threshold 0.75 = midpoint between 8B floor and frontier (0.87–0.92).
+  # ⚠️  G9: fails on vLLM. Activate once G9 is resolved.
+  - id: inspect/winogrande
+    provider_id: inspect
+    weight: 1.0
+    primary_score:
+      metric: choice/accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.75
+    parameters:
+      max_samples: 100
+
+  # HellaSwag: Plausibility ranking over activity-description continuations.
+  # Zellers et al. 2019. Near-saturated for instruction-tuned >7B models.
+  # Top-10 <80B: 83–92%. Typical 8B: 73–82%. Threshold 0.80 = sanity floor only.
+  # Weight 1.0 (down-weighted): near-saturation limits discrimination above this floor.
+  # ⚠️  G9: fails on vLLM. Activate once G9 is resolved.
+  - id: inspect/hellaswag
+    provider_id: inspect
+    weight: 1.0
+    primary_score:
+      metric: choice/accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.80
+    parameters:
+      max_samples: 100
+
+  # ── Science knowledge + reasoning (inspect, ⚠️  G9) ─────────────────────────
+  #
+  # ARC: AI2 Reasoning Challenge — science MCQ requiring reasoning over facts.
+  # Clark et al. 2018. Combined Easy + Challenge splits. Random=25%.
+  # Top-10 <80B: 85–93%. Typical 8B: 75–85%.
+  # Threshold 0.72 = lower bound of competitive 8B range.
+  # ⚠️  G9: fails on vLLM. Activate once G9 is resolved.
+  - id: inspect/arc
+    provider_id: inspect
+    weight: 1.0
+    primary_score:
+      metric: choice/accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.72
+    parameters:
+      max_samples: 100

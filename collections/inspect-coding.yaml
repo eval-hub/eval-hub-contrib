@@ -1,0 +1,71 @@
+# Inspect AI — Coding Collection
+#
+# ⚠️  G9: humaneval and mbpp currently fail on vLLM (Responses API format).
+# ⚠️  swe-bench and bigcodebench require Docker in the container sandbox (not present).
+# Thresholds are correct for when both issues are fixed.
+# lcb:codegeneration_v6 via lighteval (lighteval-code collection) works now.
+#
+# ── Threshold Justification ──────────────────────────────────────────────────
+# HumanEval (Chen et al. 2021): Python function synthesis. Top-10 <80B: 85–97%.
+#   Typical 8B: 72–92%. Threshold 0.65 = lower bound competitive 8B per leaderboard.
+#   Primary gate.
+# MBPP (Austin et al. 2021): Broader Python programming, 374 problems.
+#   Top-10 <80B: 75–90%. Typical 8B: 60–76%. Threshold 0.55 per llm-stats.com.
+# SWE-bench (Jimenez et al. 2024): Real GitHub issues. Agent-pipeline-dependent.
+#   Top-10 <80B with scaffolding: 28–55%. Model-only: 4–15%.
+#   Threshold 0.10 = minimum bar for model-only eval without Docker sandbox.
+# BigCodeBench (Zhuo et al. 2024): 1140 library function-calling tasks.
+#   Top-10 <80B: 58–82%. Typical 8B: 48–65%.
+#   Threshold 0.45 per benchmarkingagents.com lower bound.
+#
+# ── Weight Rationale ─────────────────────────────────────────────────────────
+# Weight 2.0 → humaneval: Canonical benchmark; best historical calibration.
+# Weight 1.5 → mbpp, swe-bench, bigcodebench: Strong complementary signals.
+#
+# ── Global Pass Criteria ─────────────────────────────────────────────────────
+# humaneval ≥ 0.65 AND ≥ 1 of {mbpp, bigcodebench} (when G9 + Docker fixed).
+
+name: inspect-coding
+description: >
+  Coding suite via Inspect AI. HumanEval (Chen et al. 2021, threshold 0.65 = leaderboard
+  lower bound, weight 2.0 — primary gate), MBPP (Austin et al. 2021, threshold 0.55,
+  weight 1.5), SWE-bench (Jimenez et al. 2024, threshold 0.10 model-only, weight 1.5 —
+  needs Docker), BigCodeBench (Zhuo et al. 2024, threshold 0.45, weight 1.5 — needs
+  Docker). WARNING G9: humaneval/mbpp fail on vLLM. WARNING: swe-bench/bigcodebench
+  need Docker sandbox not present in community-inspect. Use lighteval-code for
+  LiveCodeBench in the interim.
+category: coding
+tags: [coding, python, software-engineering, inspect]
+
+benchmarks:
+  # HumanEval: 164 Python function synthesis problems. Top-10 <80B: 85–97%. Threshold 0.65.
+  - id: inspect/humaneval
+    provider_id: inspect
+    weight: 2.0
+    parameters: {max_samples: 100}
+    primary_score: {metric: verify/accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.65}
+
+  # MBPP: 374 Python programming problems. Top-10 <80B: 75–90%. Threshold 0.55.
+  - id: inspect/mbpp
+    provider_id: inspect
+    weight: 1.5
+    parameters: {max_samples: 50}
+    primary_score: {metric: accuracy/accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.55}
+
+  # SWE-bench: real GitHub issues. Model-only threshold 0.10. Requires Docker sandbox.
+  - id: inspect/swe-bench
+    provider_id: inspect
+    weight: 1.5
+    parameters: {max_samples: 10}
+    primary_score: {metric: accuracy/accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.10}
+
+  # BigCodeBench: library function calling. Top-10 <80B: 58–82%. Threshold 0.45. Requires Docker.
+  - id: inspect/bigcodebench
+    provider_id: inspect
+    weight: 1.5
+    parameters: {max_samples: 50}
+    primary_score: {metric: accuracy/accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.45}
