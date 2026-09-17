@@ -18,6 +18,7 @@ permissions:
 
 jobs:
   test:
+    if: github.repository == 'eval-hub/eval-hub-contrib'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

@@ -1,59 +1,36 @@
-name: Build and push adapter images
+name: Build and push all adapter images
 
 on:
-  push:
-    branches: [main, 'v*']
-    paths: ['adapters/**']
   workflow_dispatch:
-    inputs:
-      adapter:
-        description: 'Adapter to build (leave empty for change-detection)'
-        required: false
-        type: string
 
 env:
   REGISTRY: quay.io/evalhub
 
 jobs:
-  detect:
+  build:
     if: github.repository == 'eval-hub/eval-hub-contrib'
     runs-on: ubuntu-latest
-    outputs:
-      adapters: ${{ steps.find.outputs.adapters }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 2
-
-      - id: find
-        run: |
-          if [[ -n "${{ inputs.adapter }}" ]]; then
-            adapters='["${{ inputs.adapter }}"]'
-          else
-            adapters=$(git diff --name-only HEAD~1 HEAD \
-              | grep '^adapters/' \
-              | cut -d/ -f2 \
-              | sort -u \
-              | while read -r dir; do
-                  [ -f "adapters/${dir}/Containerfile" ] && echo "$dir"
-                done \
-              | jq -R -s -c 'split("\n") | map(select(. != ""))')
-          fi
-          echo "adapters=${adapters}" >> "$GITHUB_OUTPUT"
-          echo "Will build: ${adapters}"
-
-  build:
-    needs: detect
-    if: github.repository == 'eval-hub/eval-hub-contrib' && needs.detect.outputs.adapters != '[]'
-    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter:
+          - clear
+          - deepeval
+          - guidellm
+          - ifbench
+          - inspect
+          - lighteval
+          - mteb
+          - nemo-guardrails
+          - ragas
+          - ruler
+          - swebench
+          - wildguard
     concurrency:
       group: push-${{ matrix.adapter }}-${{ github.ref_name }}
       cancel-in-progress: false
-    strategy:
-      matrix:
-        adapter: ${{ fromJson(needs.detect.outputs.adapters) }}
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v7
 
@@ -63,19 +40,16 @@ jobs:
           ADAPTER: ${{ matrix.adapter }}
           BRANCH: ${{ github.ref_name }}
         run: |
-          # Validate adapter name: directory names are lowercase letters, digits, and hyphens only.
+          # Validate adapter names before using them in paths or image names.
           if [[ ! "$ADAPTER" =~ ^[a-z0-9-]+$ ]]; then
             echo "::error::Invalid adapter name: '${ADAPTER}'" >&2
             exit 1
           fi
-          # Mapping of adapter directory name -> image name suffix.
-          # Omit an entry to default to community-<adapter>.
           declare -A IMAGE_MAP=(
             [clear]=ibm-clear
           )
           suffix="${IMAGE_MAP[$ADAPTER]:-$ADAPTER}"
           echo "name=community-${suffix}" >> "$GITHUB_OUTPUT"
-          # main -> latest; v* branches -> branch name (e.g. v0.5)
           if [[ "$BRANCH" == "main" ]]; then
             echo "channel=latest" >> "$GITHUB_OUTPUT"
           else

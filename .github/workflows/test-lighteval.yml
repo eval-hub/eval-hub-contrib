@@ -11,6 +11,7 @@ on:
 
 jobs:
   test:
+    if: github.repository == 'eval-hub/eval-hub-contrib'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -30,6 +31,7 @@ jobs:
         run: pytest tests/ -v -m "not local"  # keep lightweight testing isolated which can mock the installation and run of real benchmark code
 
   test-local:
+    if: github.repository == 'eval-hub/eval-hub-contrib'
     runs-on: ubuntu-latest
     env:
       OLLAMA_MODELS: /home/runner/.ollama-models
@@ -64,6 +66,7 @@ jobs:
         run: pytest tests/ -v -s --log-cli-level=INFO -m "local and openai_endpoint"
 
   test-local-vllm-cpu:
+    if: github.repository == 'eval-hub/eval-hub-contrib'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
