@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import _hf_offline  # noqa: F401 — seeds HF offline env from job spec before other imports
+import _hf_offline  # noqa: F401 — seeds HF cache paths from /test_data before other imports
 
 from evalhub.adapter import (
     EnvironmentCardMetadata,
@@ -56,7 +56,6 @@ from _benchmarks import (
 )
 from _bloom import bloom_prepare
 from _execution import build_command, build_env, get_inspect_version, redact_cmd, run_inspect
-from _hf_offline import ensure_test_data_ready_for_offline
 from _results import compute_overall_score, extract_results, parse_log
 from _routing import (
     build_role_spec,
@@ -105,10 +104,6 @@ class InspectAdapter(FrameworkAdapter):
             )
 
             self._validate_config(config, mode)
-            ensure_test_data_ready_for_offline(
-                config.parameters if isinstance(config.parameters, dict) else {},
-                job_spec_path=os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json"),
-            )
             work_dir = Path(tempfile.mkdtemp(prefix=f"inspect_{mode}_"))
             log_dir = work_dir / "logs"
             log_dir.mkdir()
