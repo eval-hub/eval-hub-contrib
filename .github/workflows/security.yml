@@ -15,7 +15,6 @@ permissions:
 
 jobs:
   codeql:
-    if: github.repository == 'eval-hub/eval-hub-contrib'
     name: CodeQL Analysis
     runs-on: ubuntu-latest
 
