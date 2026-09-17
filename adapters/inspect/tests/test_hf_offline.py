@@ -1,12 +1,16 @@
-"""Tests for Hugging Face staged-cache pinning to /test_data."""
+"""Tests for Hugging Face offline detection and env configuration."""
 
+import json
 from pathlib import Path
 
-from _execution import build_env
+import pytest
+
 from _hf_offline import (
-    configure_hf_staged_cache_environment,
-    should_pin_hf_cache_to_test_data,
+    configure_hf_offline_environment,
+    job_spec_requests_test_data,
+    should_use_hf_offline,
 )
+from _execution import build_env
 
 
 def _touch(p: Path) -> None:
@@ -14,49 +18,72 @@ def _touch(p: Path) -> None:
     p.write_text("{}", encoding="utf-8")
 
 
-def test_pin_when_test_data_mount_non_empty(tmp_path: Path) -> None:
+@pytest.fixture
+def fake_test_data(tmp_path: Path) -> Path:
+    root = tmp_path / "test_data"
+    tok = root / "tokenizer"
+    tok.mkdir(parents=True)
+    _touch(tok / "config.json")
+    bundle = root / "GSMA--ot-full--telemath"
+    bundle.mkdir(parents=True)
+    _touch(bundle / "dataset_dict.json")
+    return root
+
+
+def test_infer_offline_from_tokenizer_and_bundle(fake_test_data: Path) -> None:
+    tok = fake_test_data / "tokenizer"
+    params = {"tokenizer": str(tok.resolve())}
+    assert should_use_hf_offline(params, test_data_root=fake_test_data)
+
+
+def test_infer_offline_from_test_data_ref_in_job_spec(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "test_data"
+    root.mkdir()
+    _touch(root / "hub" / "datasets--GSMA--ot-full" / "refs" / "main")
+
+    spec = {
+        "test_data_ref": {
+            "s3": {"bucket": "mlpipeline", "key": "offline", "secret_ref": "minio-test"},
+        },
+    }
+    monkeypatch.setattr(
+        "_hf_offline._read_job_spec_dict_from_path",
+        lambda _path: spec,
+    )
+
+    assert job_spec_requests_test_data("/meta/job.json")
+    assert should_use_hf_offline({}, job_spec_path="/meta/job.json", test_data_root=root)
+
+
+def test_no_offline_without_test_data_ref_or_tokenizer(tmp_path: Path) -> None:
     root = tmp_path / "test_data"
     root.mkdir()
     _touch(root / "placeholder.txt")
-    assert should_pin_hf_cache_to_test_data(root)
+    assert not should_use_hf_offline({}, test_data_root=root)
 
 
-def test_no_pin_when_test_data_missing_or_empty(tmp_path: Path) -> None:
-    assert not should_pin_hf_cache_to_test_data(tmp_path / "missing")
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    assert not should_pin_hf_cache_to_test_data(empty)
-
-
-def test_build_env_pins_hf_home_without_offline_flags(
-    monkeypatch, tmp_path: Path, job_spec_path
-) -> None:
+def test_build_env_sets_hf_offline(monkeypatch, fake_test_data: Path, job_spec_path) -> None:
     from main import InspectAdapter
 
     import _execution as execution_mod
     import _hf_offline as hf_offline_mod
 
-    root = tmp_path / "test_data"
-    root.mkdir()
-    _touch(root / "hub" / "datasets--GSMA--ot-full" / "refs" / "main")
-
-    monkeypatch.setattr(hf_offline_mod, "TEST_DATA_DIR", str(root))
-    monkeypatch.setattr(execution_mod, "TEST_DATA_DIR", str(root))
+    monkeypatch.setattr(hf_offline_mod, "TEST_DATA_DIR", str(fake_test_data))
+    monkeypatch.setattr(execution_mod, "TEST_DATA_DIR", str(fake_test_data))
 
     adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.parameters["tokenizer"] = str((fake_test_data / "tokenizer").resolve())
     env = build_env(adapter.job_spec, "standard")
-    assert env.get("HF_HOME") == str(root)
-    assert env.get("HF_HUB_CACHE") == str(root / "hub")
-    assert env.get("HF_DATASETS_CACHE") == str(root / "datasets")
-    assert env.get("HF_HUB_OFFLINE") is None
+    assert env.get("HF_HUB_OFFLINE") == "1"
+    assert env.get("HF_HOME") == str(fake_test_data)
 
 
-def test_configure_hf_staged_cache_environment_sets_paths_only(tmp_path: Path) -> None:
+def test_configure_hf_offline_environment_updates_os_environ(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / "cache"
     root.mkdir()
-    env: dict[str, str] = {"HF_HUB_OFFLINE": "1"}
-    configure_hf_staged_cache_environment(str(root), env)
+    env: dict[str, str] = {}
+    configure_hf_offline_environment(str(root), env)
     assert env["HF_HOME"] == str(root)
     assert env["HF_HUB_CACHE"] == str(root / "hub")
     assert env["HF_DATASETS_CACHE"] == str(root / "datasets")
-    assert "HF_HUB_OFFLINE" not in env
+    assert env["HF_HUB_OFFLINE"] == "1"

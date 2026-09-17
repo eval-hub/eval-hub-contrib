@@ -120,17 +120,17 @@ Petri and Bloom modes do not use a sandbox.
 ### HuggingFace datasets
 
 Some inspect-evals benchmarks (e.g. `humaneval`, `mmlu`) and Open-Telco tasks
-(`telemath`) load datasets via Hugging Face (`datasets` / the Hub).
+(`telemath`) load datasets from the HuggingFace Hub unless offline data is staged.
 
-When Eval Hub stages data with **`test_data_ref`** (S3, PVC, or git) into a
-non-empty **`/test_data`** mount, the adapter points **`HF_HOME`**, **`HF_HUB_CACHE`**,
-and **`HF_DATASETS_CACHE`** at that directory for the `inspect eval` subprocess.
-Libraries resolve datasets from the mount first; on cache miss they may download
-from the Hub (or fail on air-gapped clusters). Hub auth is still applied when
-a model **`hf-token`** is configured.
+On disconnected clusters, configure **`test_data_ref.s3`** (or PVC/git) on the
+benchmark so Eval Hub syncs a Hugging Face cache layout into **`/test_data`**.
+The adapter then sets **`HF_HOME`**, **`HF_HUB_OFFLINE`**, and related env vars
+for the `inspect eval` subprocess (same approach as the lm-evaluation-harness
+adapter). Disconnected FVT jobs also set **`parameters.tokenizer`** to
+`/test_data/tokenizer` alongside **`test_data_ref`**; either signal enables
+offline mode when `/test_data` is populated.
 
-When `/test_data` is empty or absent, caches use default locations and datasets
-load from the Hub as usual. The adapter reads an
+When online, the adapter reads an
 `hf-token` secret mounted at `/var/run/secrets/model/hf-token` and injects it as
 `HF_TOKEN` and `HUGGING_FACE_HUB_TOKEN` (with retry while the projected volume
 appears). Sidecar `:ref` placeholders are ignored. In EvalHub jobs, set
