@@ -65,7 +65,7 @@ agent:
     - wildguard
   hints:
     - "The model endpoint must support OpenAI-compatible chat completions (POST /v1/chat/completions)"
-    - "promptfoo-redteam requires a generation_provider capable of producing adversarial test content; if unset, promptfoo falls back to its own default model and OPENAI_API_KEY must be available"
+    - "promptfoo-redteam requires a generation_provider capable of producing adversarial test content AND grading responses (two independent promptfoo defaults); if unset, both fall back to promptfoo's own default model and OPENAI_API_KEY must be available"
     - "promptfoo-redteam never calls promptfoo's hosted cloud service — PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=1 is always set by this adapter"
     - "Use promptfoo-eval's config_yaml parameter to pass through an existing promptfoo project's config verbatim instead of generating one from prompts/tests"
   result_interpretation:
@@ -238,11 +238,17 @@ parameters:
     type: string
     default: null
     description: >
-      promptfoo provider ID used to generate adversarial test content (passed
-      as `redteam generate --provider`). If unset, promptfoo falls back to its
-      own default model, which requires OPENAI_API_KEY to be present in the
-      adapter's environment. For regulated/air-gapped deployments, set this to
-      an internally-hosted model so no external generation call is made.
+      promptfoo provider ID used both to generate adversarial test content
+      (passed as `redteam generate --provider`) AND to grade the resulting
+      responses (passed as `eval --grader`). These are two independent
+      promptfoo concerns that default separately — verified against a live
+      cluster: grading silently defaults to a hardcoded hosted model name
+      unrelated to --provider, and every graded test reports as failed
+      (pass=false) if that model isn't reachable. Leaving this unset makes
+      BOTH generation and grading fall back to promptfoo's own default model,
+      which requires OPENAI_API_KEY. For regulated/air-gapped deployments,
+      set this to an internally-hosted model so no external call is made for
+      either step.
 
   # --- common parameters ---
   - name: max_concurrency

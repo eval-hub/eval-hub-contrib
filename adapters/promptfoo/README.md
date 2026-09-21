@@ -9,10 +9,11 @@ LLM testing tool, exposing two benchmarks against an EvalHub-provided model endp
   (financial, medical, insurance, telecom, real estate) that complement rather than
   duplicate Garak's probe set — see "Garak overlap" below.
 
-Every completed job persists promptfoo's own native `eval.json` (via
-`promptfoo export eval <id> -o eval.json`, verified byte-identical to the `-o` flag on
-`eval`/`redteam run` themselves) through three independent paths, so results can always
-be reopened in promptfoo's own viewer via `promptfoo import`:
+Every completed job persists promptfoo's own native `eval.json` (written directly via
+`promptfoo eval -o eval.json` — verified byte-identical to `promptfoo export eval <id>
+-o eval.json`, see "Verified operational constraints" below for why the direct `-o` form
+is used instead) through three independent paths, so results can always be reopened in
+promptfoo's own viewer via `promptfoo import`:
 
 1. Always embedded in `JobResults.additional_info["promptfoo_eval_json"]` (size-gated,
    see `PROMPTFOO_EVAL_JSON_MAX_BYTES` in `main.py`)
@@ -38,11 +39,26 @@ These were confirmed by actually running promptfoo, not read from documentation 
   `{id: "openai:chat:<model>", config: {apiBaseUrl, apiKey}}` — verified against a real
   unreachable-endpoint run (promptfoo retried 4x then reported `errors: 1`, not a config
   parse failure).
-- **`export eval <id> -o eval.json` output is byte-identical** to using `-o` directly on
-  `eval`/`redteam run`. The adapter always goes through the explicit export step for
-  uniformity across both benchmarks.
+- **promptfoo suppresses its decorated stdout results table (including the `(ID:
+  eval-...)` line) when stdout is not a TTY**, as in any container — confirmed by a real
+  failure on a live OpenShift cluster: `promptfoo eval` exited 0 with fully empty stdout.
+  The adapter never parses CLI stdout for an eval ID; it always writes `eval.json`
+  directly via `-o` on the final `eval` step (verified byte-identical to `promptfoo
+  export eval <id> -o eval.json`) and reads `evalId` back out of the JSON itself.
+  `promptfoo-redteam` runs `redteam generate -w` (writes generated tests back into the
+  same config file) followed by a plain `eval -o eval.json` against it — never `redteam
+  run`, which has no flag for writing full eval.json results.
 - **Redteam result rows carry `metadata.pluginId` and `metadata.severity`** — used for
   the per-plugin pass-rate breakdown in `additional_info`.
+- **Red-team GRADING uses its own separate default model, independent of
+  `--provider`.** `redteam generate --provider X` only controls attack generation. The
+  subsequent `eval` step's grading defaults to a hardcoded model name unrelated to `X`
+  and, if unreachable, every graded test silently reports `pass=false` against a 404 —
+  not a genuine vulnerability finding, a broken grading pipeline. The adapter passes
+  `generation_provider` as `eval --grader` too so both steps route to the same
+  operator-configured model. Confirmed live: on wbos (2026-09-21), red-team results
+  against a real vLLM endpoint were 100% "failed" until this fix — the grader was 404ing
+  against `gpt-5.5-2026-04-23`, which doesn't exist on that cluster.
 
 ## Garak overlap (verified, not assumed)
 

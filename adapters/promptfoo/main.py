@@ -8,11 +8,15 @@ open-source LLM testing tool, exposing two benchmarks:
 - promptfoo-redteam: promptfoo's red-team plugin catalog (OWASP LLM Top 10
   and beyond)
 
-Every completed job persists promptfoo's own native eval.json (obtained via
-``promptfoo export eval <id> -o eval.json``, verified byte-identical to the
-``-o`` flag on ``eval``/``redteam run`` themselves) through three independent
-paths, so results can always be reopened in promptfoo's own viewer via
-``promptfoo import``, regardless of which EvalHub exports the job configured:
+Every completed job persists promptfoo's own native eval.json (written
+directly via ``promptfoo eval -o eval.json`` — verified byte-identical to
+``promptfoo export eval <id> -o eval.json``, but far more robust: promptfoo
+suppresses its decorated stdout results table entirely when stdout is not a
+TTY, as in a container, so parsing stdout for an eval ID to export
+afterwards is NOT reliable — confirmed by a real failure on a live
+OpenShift cluster, 2026-09-21) through three independent paths, so results
+can always be reopened in promptfoo's own viewer via ``promptfoo import``,
+regardless of which EvalHub exports the job configured:
 
 1. Always embedded in ``JobResults.additional_info["promptfoo_eval_json"]``,
    size-gated by ``PROMPTFOO_EVAL_JSON_MAX_BYTES`` (the /events payload has no
@@ -41,7 +45,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -87,8 +90,6 @@ _ADAPTER_VERSION = "0.1.0"
 # revisit once real payload-size limits are confirmed against a live
 # eval-hub deployment.
 PROMPTFOO_EVAL_JSON_MAX_BYTES = 5_000_000
-
-_EVAL_ID_RE = re.compile(r"\(ID:\s*(eval-\S+)\)")
 
 _OWASP_DEFAULT_PLUGINS = [
     "excessive-agency",
@@ -252,31 +253,6 @@ def _run_promptfoo_cli(
     if result.stderr:
         logger.warning("promptfoo stderr:\n%s", result.stderr)
     return result
-
-
-def _extract_eval_id(stdout: str) -> str:
-    match = _EVAL_ID_RE.search(stdout)
-    if not match:
-        raise RuntimeError(
-            "Could not find an eval ID in promptfoo output; expected a line "
-            "containing '(ID: eval-...)'"
-        )
-    return match.group(1)
-
-
-def _export_eval_json(eval_id: str, cwd: Path) -> tuple[dict[str, Any], bytes]:
-    """Run `promptfoo export eval <id> -o eval.json` and return (parsed, raw bytes)."""
-    out_path = cwd / "eval.json"
-    result = _run_promptfoo_cli(
-        ["export", "eval", eval_id, "-o", str(out_path)], cwd=cwd, timeout=300
-    )
-    if result.returncode != 0 or not out_path.exists():
-        raise RuntimeError(
-            f"promptfoo export eval failed (exit {result.returncode})\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-    raw = out_path.read_bytes()
-    return json.loads(raw), raw
 
 
 # ---------------------------------------------------------------------------
@@ -519,63 +495,78 @@ class PromptfooAdapter(FrameworkAdapter):
                 )
             )
 
+            generation_provider = (
+                (config.parameters or {}).get("generation_provider")
+                if is_redteam
+                else None
+            )
             if is_redteam:
-                generation_provider = (config.parameters or {}).get(
-                    "generation_provider"
-                )
-                run_args = [
+                # promptfoo redteam test-case generation is always a separate
+                # step from `eval` here (never `redteam run`, which does not
+                # expose a way to write full eval.json results — only the
+                # generated-tests file). `-w` writes the generated tests back
+                # into config_path itself, so the subsequent `eval -c
+                # config_path` step below picks them up directly.
+                gen_args = [
                     "redteam",
-                    "run",
+                    "generate",
                     "-c",
                     str(config_path),
+                    "-w",
                     "--no-cache",
                     "--no-progress-bar",
                     "--force",
                 ]
                 if generation_provider:
-                    # `redteam run` does generation+eval in one step and does not
-                    # expose --provider directly; run generate (with -w to write
-                    # the generated tests back into config_path itself) then eval
-                    # against that same file, so the generation provider can be
-                    # controlled explicitly.
-                    gen_args = [
-                        "redteam",
-                        "generate",
-                        "-c",
-                        str(config_path),
-                        "-w",
-                        "--no-cache",
-                        "--no-progress-bar",
-                        "--force",
-                        "--provider",
-                        generation_provider,
-                    ]
-                    gen_result = _run_promptfoo_cli(gen_args, cwd=work_dir)
-                    if gen_result.returncode != 0:
-                        raise RuntimeError(
-                            f"promptfoo redteam generate failed (exit {gen_result.returncode})\n"
-                            f"stdout: {gen_result.stdout}\nstderr: {gen_result.stderr}"
-                        )
-                    run_args = [
-                        "eval",
-                        "-c",
-                        str(config_path),
-                        "--no-cache",
-                        "--no-progress-bar",
-                    ]
-                result = _run_promptfoo_cli(run_args, cwd=work_dir)
-            else:
-                result = _run_promptfoo_cli(
-                    ["eval", "-c", str(config_path), "--no-cache", "--no-progress-bar"],
-                    cwd=work_dir,
-                )
+                    gen_args += ["--provider", generation_provider]
+                gen_result = _run_promptfoo_cli(gen_args, cwd=work_dir)
+                if gen_result.returncode != 0:
+                    raise RuntimeError(
+                        f"promptfoo redteam generate failed (exit {gen_result.returncode})\n"
+                        f"stdout: {gen_result.stdout}\nstderr: {gen_result.stderr}"
+                    )
 
+            # Always finish with a plain `eval` writing eval.json directly via
+            # -o — verified byte-identical to `export eval <id> -o eval.json`
+            # (see README), and far more robust than parsing promptfoo's
+            # decorated stdout table for an eval ID: promptfoo suppresses that
+            # table entirely when stdout is not a TTY (as in a container),
+            # leaving stdout empty even on a fully successful run.
+            eval_json_path = work_dir / "eval.json"
+            eval_args = [
+                "eval",
+                "-c",
+                str(config_path),
+                "-o",
+                str(eval_json_path),
+                "--no-cache",
+                "--no-progress-bar",
+            ]
+            # CRITICAL, verified against a live OpenShift cluster (2026-09-21):
+            # red-team GRADING uses its own separate default model
+            # ("gpt-5.5-2026-04-23"), entirely independent of --provider above
+            # (which only controls attack generation). Left unset, every
+            # graded test silently reports pass=false/graderError=true
+            # against a 404 from whatever OPENAI_BASE_URL happens to resolve
+            # to — that's a broken grading pipeline, not a genuine safety
+            # finding, and it fails silently (exit 0, CLI reports these as
+            # ordinary "failed" tests). Reuse generation_provider as the
+            # grader too: an operator who configured an internal model for
+            # attack generation (the air-gapped/regulated case this parameter
+            # exists for) wants that same model doing the grading, not an
+            # unreachable hosted default.
+            if is_redteam and generation_provider:
+                eval_args += ["--grader", generation_provider]
+            result = _run_promptfoo_cli(eval_args, cwd=work_dir)
             if result.returncode != 0:
                 raise RuntimeError(
                     f"promptfoo CLI failed (exit {result.returncode})\nstdout: {result.stdout}\nstderr: {result.stderr}"
                 )
-
-            eval_id = _extract_eval_id(result.stdout)
+            if not eval_json_path.exists():
+                raise RuntimeError(
+                    f"promptfoo eval completed (exit 0) but did not write {eval_json_path}\n"
+                    f"stdout: {result.stdout}\nstderr: {result.stderr}"
+                )
 
             callbacks.report_status(
                 JobStatusUpdate(
@@ -589,9 +580,11 @@ class PromptfooAdapter(FrameworkAdapter):
                 )
             )
 
-            eval_json, eval_json_raw = _export_eval_json(eval_id, cwd=work_dir)
+            eval_json_raw = eval_json_path.read_bytes()
+            eval_json = json.loads(eval_json_raw)
             evaluation_results, pass_rate, n_evaluated = _compute_metrics(eval_json)
 
+            eval_id = eval_json.get("evalId", "unknown")
             additional_info: dict[str, Any] = {"promptfoo_eval_id": eval_id}
             if is_redteam:
                 breakdown = _compute_plugin_breakdown(eval_json)

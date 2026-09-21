@@ -4,10 +4,15 @@ WORKDIR /app
 
 USER 0
 
-# promptfoo is a Node.js CLI; pin the exact version verified against this
-# adapter (see main.py PROMPTFOO_VERSION) rather than tracking @latest.
-RUN dnf module enable -y nodejs:20 \
-    && dnf install -y nodejs \
+# promptfoo is a Node.js CLI; pin the exact promptfoo version verified
+# against this adapter (see main.py PROMPTFOO_VERSION) rather than tracking
+# @latest. Do NOT force a specific nodejs module stream here — the UBI9
+# python-311 base image already ships with a nodejs module stream enabled
+# (verified: nodejs:22 on the image built 2026-09-21), and re-enabling a
+# different stream fails with "It is not possible to switch enabled streams
+# of a module". Installing without specifying a stream uses whatever the
+# base image already has, which is new enough for promptfoo.
+RUN dnf install -y nodejs \
     && dnf clean all \
     && npm install -g promptfoo@0.123.1 \
     && npm cache clean --force

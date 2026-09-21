@@ -24,7 +24,6 @@ from main import (
     _build_target_provider,
     _compute_metrics,
     _compute_plugin_breakdown,
-    _extract_eval_id,
     _resolve_api_key,
 )
 
@@ -160,26 +159,6 @@ def test_build_redteam_config_custom_plugins():
 
 
 # ---------------------------------------------------------------------------
-# Unit tests: eval ID extraction
-# ---------------------------------------------------------------------------
-
-
-def test_extract_eval_id_eval_complete():
-    stdout = "some output\n✓ Eval complete (ID: eval-Piu-2026-09-21T15:41:24)\nmore"
-    assert _extract_eval_id(stdout) == "eval-Piu-2026-09-21T15:41:24"
-
-
-def test_extract_eval_id_redteam_complete():
-    stdout = "✓ Red team complete (ID: eval-RBy-2026-09-21T15:46:08)"
-    assert _extract_eval_id(stdout) == "eval-RBy-2026-09-21T15:46:08"
-
-
-def test_extract_eval_id_missing_raises():
-    with pytest.raises(RuntimeError, match="eval ID"):
-        _extract_eval_id("nothing useful here")
-
-
-# ---------------------------------------------------------------------------
 # Unit tests: metrics extraction (real promptfoo 0.123.1 eval.json shape)
 # ---------------------------------------------------------------------------
 
@@ -262,17 +241,15 @@ def test_promptfoo_eval_happy_path(monkeypatch, tmp_path):
     config.benchmark_id = "promptfoo-eval"
 
     eval_json = _eval_json(successes=2, failures=0, errors=0)
-    eval_id = "eval-Fake-2026-09-21T00:00:00"
+    eval_id = eval_json["evalId"]
 
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600):
         if args[0] == "eval":
-            return _FakeCompletedProcess(0, f"✓ Eval complete (ID: {eval_id})")
-        if args[0] == "export":
             out_path = Path(args[args.index("-o") + 1])
             out_path.write_text(json.dumps(eval_json))
-            return _FakeCompletedProcess(0, "exported")
+            return _FakeCompletedProcess(0, "")
         raise AssertionError(f"unexpected promptfoo invocation: {args}")
 
     monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
@@ -328,17 +305,16 @@ def test_promptfoo_redteam_happy_path(monkeypatch):
         },
     ]
     eval_json = _eval_json(1, 1, 0, plugin_rows=rows)
-    eval_id = "eval-FakeRT-2026-09-21T00:00:00"
 
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600):
-        if args[0] == "redteam" and args[1] == "run":
-            return _FakeCompletedProcess(0, f"✓ Red team complete (ID: {eval_id})")
-        if args[0] == "export":
+        if args[0] == "redteam" and args[1] == "generate":
+            return _FakeCompletedProcess(0, "")
+        if args[0] == "eval":
             out_path = Path(args[args.index("-o") + 1])
             out_path.write_text(json.dumps(eval_json))
-            return _FakeCompletedProcess(0, "exported")
+            return _FakeCompletedProcess(0, "")
         raise AssertionError(f"unexpected promptfoo invocation: {args}")
 
     monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
@@ -354,6 +330,79 @@ def test_promptfoo_redteam_happy_path(monkeypatch):
         "sql-injection"
     ] == pytest.approx(0.5)
     assert results.additional_info["severity_by_plugin"]["sql-injection"] == "high"
+
+
+@pytest.mark.integration
+def test_promptfoo_redteam_passes_grader_when_generation_provider_set(monkeypatch):
+    """Regression test for a live-cluster finding (2026-09-21): promptfoo's
+    redteam GRADING step uses its own hardcoded default model, entirely
+    independent of --provider (which only controls attack generation). Left
+    unset, grading 404s against a nonexistent hosted model and every test
+    silently reports as failed. generation_provider must also be passed as
+    --grader on the final eval step."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam"
+    config.parameters = {
+        "plugins": ["sql-injection"],
+        "num_tests_per_plugin": 1,
+        "generation_provider": "openai:chat:internal-model",
+    }
+
+    eval_json = _eval_json(1, 0, 0)
+    seen_eval_args = []
+
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600):
+        if args[0] == "redteam" and args[1] == "generate":
+            assert "--provider" in args
+            assert args[args.index("--provider") + 1] == "openai:chat:internal-model"
+            return _FakeCompletedProcess(0, "")
+        if args[0] == "eval":
+            seen_eval_args.extend(args)
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.write_text(json.dumps(eval_json))
+            return _FakeCompletedProcess(0, "")
+        raise AssertionError(f"unexpected promptfoo invocation: {args}")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    adapter.run_benchmark_job(config, callbacks)
+
+    assert "--grader" in seen_eval_args
+    assert (
+        seen_eval_args[seen_eval_args.index("--grader") + 1]
+        == "openai:chat:internal-model"
+    )
+
+
+def test_promptfoo_eval_does_not_pass_grader_flag(monkeypatch):
+    """--grader is a redteam-specific concern; promptfoo-eval must never pass it."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-eval"
+
+    eval_json = _eval_json(1, 0, 0)
+    seen_eval_args = []
+
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600):
+        seen_eval_args.extend(args)
+        out_path = Path(args[args.index("-o") + 1])
+        out_path.write_text(json.dumps(eval_json))
+        return _FakeCompletedProcess(0, "")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    adapter.run_benchmark_job(config, callbacks)
+
+    assert "--grader" not in seen_eval_args
 
 
 @pytest.mark.integration
@@ -380,3 +429,29 @@ def test_promptfoo_cli_failure_reports_failed_status(monkeypatch):
         if c.args[0].status == JobStatus.FAILED
     ]
     assert len(failed_statuses) == 1
+
+
+@pytest.mark.integration
+def test_promptfoo_exit_zero_no_output_file_raises(monkeypatch):
+    """Regression test: on a real OpenShift cluster (2026-09-21), `promptfoo eval`
+    exited 0 with completely empty stdout — it suppresses its decorated results
+    table when stdout is not a TTY (as in a container), which broke the original
+    stdout-ID-parsing approach. The fix writes eval.json directly via `-o` and
+    must fail loudly, not silently, if that file is somehow still missing."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-eval"
+
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600):
+        # Exit 0, empty stdout, but never writes the -o path — exactly what
+        # was observed against the real cluster before this fix.
+        return _FakeCompletedProcess(0, "")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    with pytest.raises(RuntimeError, match="did not write"):
+        adapter.run_benchmark_job(config, callbacks)
