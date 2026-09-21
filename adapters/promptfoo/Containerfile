@@ -1,0 +1,26 @@
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+WORKDIR /app
+
+USER 0
+
+# promptfoo is a Node.js CLI; pin the exact version verified against this
+# adapter (see main.py PROMPTFOO_VERSION) rather than tracking @latest.
+RUN dnf module enable -y nodejs:20 \
+    && dnf install -y nodejs \
+    && dnf clean all \
+    && npm install -g promptfoo@0.123.1 \
+    && npm cache clean --force
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY main.py .
+
+ENV PYTHONUNBUFFERED=1 \
+    EVALHUB_MODE=k8s \
+    PROMPTFOO_DISABLE_TELEMETRY=1
+
+USER 1001
+
+ENTRYPOINT ["python", "main.py"]

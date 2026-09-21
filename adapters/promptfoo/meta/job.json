@@ -1,0 +1,17 @@
+{
+  "id": "test-job-001",
+  "provider_id": "promptfoo",
+  "benchmark_id": "promptfoo-eval",
+  "benchmark_index": 0,
+  "model": {
+    "url": "http://localhost:8080/v1",
+    "name": "meta-llama/llama-3.1-8b-instruct"
+  },
+  "parameters": {
+    "prompts": ["Say hello to {{name}}"],
+    "tests": [
+      {"vars": {"name": "World"}, "assert": [{"type": "contains", "value": "World"}]}
+    ]
+  },
+  "callback_url": "http://localhost:8081"
+}

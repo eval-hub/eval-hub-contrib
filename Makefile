@@ -17,6 +17,7 @@ IMAGE_RAGAS = $(REGISTRY)/community-ragas:$(VERSION)
 IMAGE_SWEBENCH = $(REGISTRY)/community-swebench:$(VERSION)
 IMAGE_RULER = $(REGISTRY)/community-ruler:$(VERSION)
 IMAGE_NEMO_GUARDRAILS = $(REGISTRY)/community-nemo-guardrails:$(VERSION)
+IMAGE_PROMPTFOO = $(REGISTRY)/community-promptfoo:$(VERSION)
 
 # Default target
 .PHONY: help
@@ -405,3 +406,35 @@ test-nemo-guardrails:
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ NeMo Guardrails tests passed"
+
+.PHONY: image-promptfoo
+image-promptfoo:
+	@echo "Building promptfoo adapter image..."
+	cd adapters/promptfoo && \
+	$(BUILD_TOOL) build -t $(IMAGE_PROMPTFOO) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_PROMPTFOO)"
+
+.PHONY: push-promptfoo
+push-promptfoo:
+	@echo "Pushing promptfoo adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_PROMPTFOO)
+	@echo "✅ Pushed: $(IMAGE_PROMPTFOO)"
+
+.PHONY: clean-promptfoo
+clean-promptfoo:
+	@echo "Removing promptfoo adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_PROMPTFOO) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_PROMPTFOO)"
+
+.PHONY: build-and-push-promptfoo
+build-and-push-promptfoo: image-promptfoo push-promptfoo
+	@echo "✅ promptfoo adapter built and pushed"
+
+.PHONY: test-promptfoo
+test-promptfoo:
+	@echo "Running promptfoo adapter tests..."
+	cd adapters/promptfoo && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ promptfoo tests passed"

@@ -1,0 +1,28 @@
+name: Test promptfoo
+
+on:
+  push:
+    branches: [main]
+    paths: ['adapters/promptfoo/**']
+  pull_request:
+    branches: [main]
+    paths: ['adapters/promptfoo/**']
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        working-directory: adapters/promptfoo
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+      - name: Run tests
+        working-directory: adapters/promptfoo
+        run: pytest tests/ -v

@@ -1,0 +1,2 @@
+eval-hub-sdk[adapter]>=1.0.2
+pyyaml
