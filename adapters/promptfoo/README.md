@@ -17,7 +17,11 @@ promptfoo's own viewer via `promptfoo import`:
 
 1. Always embedded in `JobResults.additional_info["promptfoo_eval_json"]` (size-gated,
    see `PROMPTFOO_EVAL_JSON_MAX_BYTES` in `main.py`)
-2. Attached as an MLflow artifact when `job_spec.experiment_name` is set
+2. Attached as an MLflow artifact when `job_spec.experiment_name` is set — **verified
+   working end-to-end against a real RHOAI MLflow instance on wbos, 2026-09-21**: run
+   created, 6 metrics + 16 EvalCard/EnvironmentCard params logged, `eval.json` PUT as a
+   real artifact and independently re-fetched via the MLflow API to confirm it matches
+   the live run byte-for-byte. See "MLflow: verified working, with required RBAC" below.
 3. Attached as an OCI artifact when `config.exports.oci` is set
 
 ## Verified operational constraints (promptfoo 0.123.1, checked 2026-09-21)
@@ -59,6 +63,57 @@ These were confirmed by actually running promptfoo, not read from documentation 
   operator-configured model. Confirmed live: on wbos (2026-09-21), red-team results
   against a real vLLM endpoint were 100% "failed" until this fix — the grader was 404ing
   against `gpt-5.5-2026-04-23`, which doesn't exist on that cluster.
+
+## MLflow: verified working, with required RBAC (wbos, 2026-09-21)
+
+`callbacks.mlflow.save()` was exercised for real against RHOAI's MLflow (deployed via the
+`mlflow.opendatahub.io/v1` `MLflow` CR — see
+[williamcaban/evalhub-demo](https://github.com/williamcaban/evalhub-demo)'s
+`03-mlflow/mlflow-rhoai-cr.yaml`), not just code-reviewed. Three things had to be right,
+none of which are adapter code changes — this is deployment/RBAC guidance for anyone
+running this adapter in `EVALHUB_MODE=local` (a bare k8s Job, not behind a full EvalHub
+CR/server):
+
+1. **`MLFLOW_TRACKING_URI` needs the `/mlflow` path prefix.** The MLflow CR's
+   `status.address.url` is the source of truth — e.g.
+   `https://mlflow.redhat-ods-applications.svc:8443/mlflow`, not just `...svc:8443`.
+   Hitting the bare host without the prefix produces a confusing generic 404 (not a
+   clean "not found" JSON error), which is easy to misread as a workspace-provisioning
+   problem when it's actually just a wrong base URL.
+2. **`MLFLOW_WORKSPACE=<namespace>` is required and just needs to name a real k8s
+   namespace** — no separate workspace-provisioning step, CR, or namespace label was
+   needed once the URL was correct. (Do not confuse this with the RHOAI 3.5
+   *EvalHub-server-mediated* MLflow result-commit defect documented in
+   `evalhub-demo/docs/mlflow-lessons-learned.md` — that's a different code path, through
+   a full EvalHub CR/server, which was not deployed or tested here. This adapter's
+   `EVALHUB_MODE=local` path calls MLflow directly via the SDK's own `MlflowClient` and
+   never touches that code at all.)
+3. **The calling identity needs RBAC on `mlflow.kubeflow.org/{experiments,runs}`** (a
+   pseudo-resource MLflow's own auth layer checks via SubjectAccessReview, same pattern
+   as `evalhub-demo/02-rbac.yaml` — but that file only grants `experiments`, which is
+   sufficient for its use case because EvalHub's own service account handles the actual
+   MLflow calls with broader RBAC. This adapter's direct client, running as whatever
+   ServiceAccount the Job uses, needs `get/list/create` on `experiments` AND
+   `get/list/create/update` on `runs` — without `runs`, experiment lookup succeeds but
+   `runs/create` 403s.) Minimal Role:
+   ```yaml
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: Role
+   metadata:
+     name: mlflow-experiment-access
+   rules:
+   - apiGroups: [mlflow.kubeflow.org]
+     resources: [experiments, runs]
+     verbs: [get, list, create, update]
+   ```
+   bound to the Job's ServiceAccount via a matching RoleBinding.
+
+With all three in place: `promptfoo eval` → 6 metrics + 16 EvalCard/EnvironmentCard
+params logged → `eval.json` PUT as a real MLflow artifact → independently re-fetched via
+`GET .../mlflow-artifacts/artifacts/...` and confirmed byte-identical to the live run.
+`MLFLOW_TRACKING_TOKEN_PATH=/var/run/secrets/kubernetes.io/serviceaccount/token` (the
+pod's own projected SA token) was sufficient auth; `MLFLOW_TRACKING_INSECURE_TLS=true`
+was needed for this cluster's self-signed service cert.
 
 ## Garak overlap (verified, not assumed)
 
