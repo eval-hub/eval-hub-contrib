@@ -17,11 +17,13 @@ promptfoo's own viewer via `promptfoo import`:
 
 1. Always embedded in `JobResults.additional_info["promptfoo_eval_json"]` (size-gated,
    see `PROMPTFOO_EVAL_JSON_MAX_BYTES` in `main.py`)
-2. Attached as an MLflow artifact when `job_spec.experiment_name` is set — **verified
-   working end-to-end against a real RHOAI MLflow instance on wbos, 2026-09-21**: run
-   created, 6 metrics + 16 EvalCard/EnvironmentCard params logged, `eval.json` PUT as a
+2. Attached as an MLflow artifact when `job_spec.experiment_name` is set — verified
+   end-to-end against a running RHOAI MLflow deployment (see [Working with
+   model registries and
+   MLflow](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/latest/html/working_with_mlflow/index)):
+   run created, metrics and EvalCard/EnvironmentCard params logged, `eval.json` PUT as a
    real artifact and independently re-fetched via the MLflow API to confirm it matches
-   the live run byte-for-byte. See "MLflow: verified working, with required RBAC" below.
+   the run byte-for-byte. See "MLflow: verified working, with required RBAC" below.
 3. Attached as an OCI artifact when `config.exports.oci` is set
 
 ## Verified operational constraints (promptfoo 0.123.1, checked 2026-09-21)
@@ -60,42 +62,39 @@ These were confirmed by actually running promptfoo, not read from documentation 
   and, if unreachable, every graded test silently reports `pass=false` against a 404 —
   not a genuine vulnerability finding, a broken grading pipeline. The adapter passes
   `generation_provider` as `eval --grader` too so both steps route to the same
-  operator-configured model. Confirmed live: on wbos (2026-09-21), red-team results
-  against a real vLLM endpoint were 100% "failed" until this fix — the grader was 404ing
-  against `gpt-5.5-2026-04-23`, which doesn't exist on that cluster.
+  operator-configured model. Confirmed live against a real model endpoint: red-team
+  results were 100% "failed" until this fix — the grader was 404ing against a default
+  model name (`gpt-5.5-2026-04-23` as of promptfoo 0.123.1) that doesn't exist on a
+  typical self-hosted deployment.
 
-## MLflow: verified working, with required RBAC (wbos, 2026-09-21)
+## MLflow: verified working, with required RBAC
 
-`callbacks.mlflow.save()` was exercised for real against RHOAI's MLflow (deployed via the
-`mlflow.opendatahub.io/v1` `MLflow` CR — see
-[williamcaban/evalhub-demo](https://github.com/williamcaban/evalhub-demo)'s
-`03-mlflow/mlflow-rhoai-cr.yaml`), not just code-reviewed. Three things had to be right,
-none of which are adapter code changes — this is deployment/RBAC guidance for anyone
-running this adapter in `EVALHUB_MODE=local` (a bare k8s Job, not behind a full EvalHub
-CR/server):
+`callbacks.mlflow.save()` was exercised end-to-end against a running RHOAI MLflow
+deployment (deployed via the `mlflow.opendatahub.io/v1` `MLflow` custom resource — see
+[Working with model registries and
+MLflow](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/latest/html/working_with_mlflow/index)),
+not just code-reviewed. Three things had to be right, none of which are adapter code
+changes — this is deployment/RBAC guidance for anyone running this adapter in
+`EVALHUB_MODE=local` (a bare k8s Job, not behind a full EvalHub CR/server):
 
-1. **`MLFLOW_TRACKING_URI` needs the `/mlflow` path prefix.** The MLflow CR's
-   `status.address.url` is the source of truth — e.g.
-   `https://mlflow.redhat-ods-applications.svc:8443/mlflow`, not just `...svc:8443`.
-   Hitting the bare host without the prefix produces a confusing generic 404 (not a
-   clean "not found" JSON error), which is easy to misread as a workspace-provisioning
-   problem when it's actually just a wrong base URL.
+1. **`MLFLOW_TRACKING_URI` needs the tracking-server path prefix reported by the
+   MLflow CR itself.** Read it from `status.address.url` rather than assuming a bare
+   `https://<mlflow-service>:8443` — RHOAI's MLflow deployment serves its API under a
+   path prefix (e.g. `.../mlflow`), and hitting the bare host without it produces a
+   confusing generic 404 (not a clean "not found" JSON error), which is easy to misread
+   as a workspace-provisioning problem when it's actually just a wrong base URL.
 2. **`MLFLOW_WORKSPACE=<namespace>` is required and just needs to name a real k8s
    namespace** — no separate workspace-provisioning step, CR, or namespace label was
-   needed once the URL was correct. (Do not confuse this with the RHOAI 3.5
-   *EvalHub-server-mediated* MLflow result-commit defect documented in
-   `evalhub-demo/docs/mlflow-lessons-learned.md` — that's a different code path, through
-   a full EvalHub CR/server, which was not deployed or tested here. This adapter's
-   `EVALHUB_MODE=local` path calls MLflow directly via the SDK's own `MlflowClient` and
-   never touches that code at all.)
+   needed once the URL was correct. RHOAI's MLflow uses namespace-based multi-tenancy;
+   see the linked MLflow-on-RHOAI docs for the full model. (This is a different code
+   path from MLflow result-commit as mediated by a full EvalHub CR/server — this
+   adapter's `EVALHUB_MODE=local` path calls MLflow directly via the SDK's own
+   `MlflowClient` and never goes through an EvalHub server at all.)
 3. **The calling identity needs RBAC on `mlflow.kubeflow.org/{experiments,runs}`** (a
-   pseudo-resource MLflow's own auth layer checks via SubjectAccessReview, same pattern
-   as `evalhub-demo/02-rbac.yaml` — but that file only grants `experiments`, which is
-   sufficient for its use case because EvalHub's own service account handles the actual
-   MLflow calls with broader RBAC. This adapter's direct client, running as whatever
-   ServiceAccount the Job uses, needs `get/list/create` on `experiments` AND
-   `get/list/create/update` on `runs` — without `runs`, experiment lookup succeeds but
-   `runs/create` 403s.) Minimal Role:
+   pseudo-resource RHOAI's MLflow auth layer checks via SubjectAccessReview). A
+   ServiceAccount with only `experiments` access can look up/create an experiment but
+   gets a 403 on `runs/create` — both resources need `get/list/create` (`runs` also
+   needs `update`, used when finalizing a run). Minimal Role:
    ```yaml
    apiVersion: rbac.authorization.k8s.io/v1
    kind: Role
@@ -108,12 +107,13 @@ CR/server):
    ```
    bound to the Job's ServiceAccount via a matching RoleBinding.
 
-With all three in place: `promptfoo eval` → 6 metrics + 16 EvalCard/EnvironmentCard
-params logged → `eval.json` PUT as a real MLflow artifact → independently re-fetched via
-`GET .../mlflow-artifacts/artifacts/...` and confirmed byte-identical to the live run.
+With all three in place: `promptfoo eval` → metrics + EvalCard/EnvironmentCard params
+logged → `eval.json` PUT as a real MLflow artifact → independently re-fetched via
+`GET .../mlflow-artifacts/artifacts/...` and confirmed byte-identical to the run.
 `MLFLOW_TRACKING_TOKEN_PATH=/var/run/secrets/kubernetes.io/serviceaccount/token` (the
-pod's own projected SA token) was sufficient auth; `MLFLOW_TRACKING_INSECURE_TLS=true`
-was needed for this cluster's self-signed service cert.
+pod's own projected ServiceAccount token) was sufficient auth; a cluster with a
+self-signed service certificate additionally needs
+`MLFLOW_TRACKING_INSECURE_TLS=true` (or a proper CA bundle in production).
 
 ## Garak overlap (verified, not assumed)
 
