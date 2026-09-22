@@ -331,7 +331,7 @@ test-ragas:
 	@echo "✅ RAGAS tests passed"
 
 .PHONY: tests
-tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler test-nemo-guardrails test-promptfoo
+tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler test-nemo-guardrails test-promptfoo test-swebench
 	@echo "✅ All adapter tests passed"
 .PHONY: test-swebench
 test-swebench:
