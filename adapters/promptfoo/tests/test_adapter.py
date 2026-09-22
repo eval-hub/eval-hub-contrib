@@ -27,6 +27,7 @@ from evalhub.models.api import OCICoordinates
 from main import (
     PromptfooAdapter,
     _build_eval_config,
+    _build_evaluate_options,
     _build_redteam_config,
     _build_target_provider,
     _compute_metrics,
@@ -92,18 +93,26 @@ def test_build_target_provider_appends_v1():
     config = MagicMock()
     config.model.url = "http://localhost:8080"
     config.model.name = "my-model"
-    provider = _build_target_provider(config, "sk-test", request_timeout=60)
+    provider = _build_target_provider(config, "sk-test")
     assert provider["id"] == "openai:chat:my-model"
     assert provider["config"]["apiBaseUrl"] == "http://localhost:8080/v1"
     assert provider["config"]["apiKey"] == "sk-test"
-    assert provider["config"]["timeoutMs"] == 60_000
 
 
 def test_build_target_provider_missing_url_raises():
     config = MagicMock()
     config.model.url = ""
     with pytest.raises(ValueError, match="model.url"):
-        _build_target_provider(config, "key", 60)
+        _build_target_provider(config, "key")
+
+
+def test_build_evaluate_options():
+    """Regression test: promptfoo 0.123.1's OpenAI provider family does not
+    consume a per-provider config.timeoutMs — the per-test timeout that
+    actually applies is the top-level evaluateOptions.timeoutMs, read at
+    the evaluator level (verified against promptfoo's own source)."""
+    opts = _build_evaluate_options(request_timeout=60, max_concurrency=8)
+    assert opts == {"maxConcurrency": 8, "timeoutMs": 60_000}
 
 
 def test_build_eval_config_from_prompts_and_tests():
@@ -114,17 +123,19 @@ def test_build_eval_config_from_prompts_and_tests():
         "tests": [{"vars": {"name": "World"}}],
     }
     provider = {"id": "openai:chat:m"}
-    pf_config = _build_eval_config(config, provider)
+    evaluate_options = {"maxConcurrency": 4, "timeoutMs": 120_000}
+    pf_config = _build_eval_config(config, provider, evaluate_options)
     assert pf_config["prompts"] == ["hi {{name}}"]
     assert pf_config["providers"] == [provider]
     assert pf_config["tests"] == [{"vars": {"name": "World"}}]
+    assert pf_config["evaluateOptions"] == evaluate_options
 
 
 def test_build_eval_config_missing_params_raises():
     config = MagicMock()
     config.parameters = {}
     with pytest.raises(ValueError, match="config_yaml"):
-        _build_eval_config(config, {"id": "p"})
+        _build_eval_config(config, {"id": "p"}, {})
 
 
 def test_build_eval_config_passthrough_overwrites_providers():
@@ -134,9 +145,12 @@ def test_build_eval_config_passthrough_overwrites_providers():
         "config_yaml": "description: mine\nproviders:\n  - id: should-be-replaced\ntests:\n  - vars: {}\n"
     }
     provider = {"id": "openai:chat:m"}
-    pf_config = _build_eval_config(config, provider)
+    pf_config = _build_eval_config(
+        config, provider, {"maxConcurrency": 4, "timeoutMs": 120_000}
+    )
     assert pf_config["providers"] == [provider]
     assert pf_config["description"] == "mine"
+    assert pf_config["evaluateOptions"] == {"maxConcurrency": 4, "timeoutMs": 120_000}
 
 
 def test_build_eval_config_passthrough_drops_stale_targets_key():
@@ -151,9 +165,30 @@ def test_build_eval_config_passthrough_drops_stale_targets_key():
         "config_yaml": "description: mine\ntargets:\n  - id: user-supplied-endpoint\ntests:\n  - vars: {}\n"
     }
     provider = {"id": "openai:chat:m"}
-    pf_config = _build_eval_config(config, provider)
+    pf_config = _build_eval_config(config, provider, {})
     assert pf_config["providers"] == [provider]
     assert "targets" not in pf_config
+
+
+def test_build_eval_config_passthrough_preserves_other_evaluate_options():
+    """CodeRabbit-requested behavior: EvalHub's timeout/concurrency win, but
+    other evaluateOptions keys a passed-through config_yaml set (e.g.
+    `repeat`) must survive."""
+    config = MagicMock()
+    config.id = "job-1"
+    config.parameters = {
+        "config_yaml": (
+            "description: mine\ntests:\n  - vars: {}\n"
+            "evaluateOptions:\n  repeat: 3\n  timeoutMs: 999\n"
+        )
+    }
+    provider = {"id": "openai:chat:m"}
+    pf_config = _build_eval_config(
+        config, provider, {"maxConcurrency": 4, "timeoutMs": 120_000}
+    )
+    assert pf_config["evaluateOptions"]["repeat"] == 3
+    assert pf_config["evaluateOptions"]["timeoutMs"] == 120_000
+    assert pf_config["evaluateOptions"]["maxConcurrency"] == 4
 
 
 def test_build_redteam_config_defaults():
@@ -161,12 +196,15 @@ def test_build_redteam_config_defaults():
     config.id = "job-1"
     config.parameters = {}
     provider = {"id": "openai:chat:m"}
-    pf_config = _build_redteam_config(config, provider)
+    pf_config = _build_redteam_config(
+        config, provider, {"maxConcurrency": 4, "timeoutMs": 120_000}
+    )
     assert pf_config["targets"] == [provider]
     assert pf_config["redteam"]["purpose"] == "An AI assistant"
     assert pf_config["redteam"]["numTests"] == 5
     assert len(pf_config["redteam"]["plugins"]) > 0
     assert all(p["numTests"] == 5 for p in pf_config["redteam"]["plugins"])
+    assert pf_config["evaluateOptions"] == {"maxConcurrency": 4, "timeoutMs": 120_000}
 
 
 def test_build_redteam_config_custom_plugins():
@@ -177,7 +215,7 @@ def test_build_redteam_config_custom_plugins():
         "num_tests_per_plugin": 2,
         "purpose": "a bank assistant",
     }
-    pf_config = _build_redteam_config(config, {"id": "p"})
+    pf_config = _build_redteam_config(config, {"id": "p"}, {})
     assert pf_config["redteam"]["plugins"] == [{"id": "sql-injection", "numTests": 2}]
     assert pf_config["redteam"]["purpose"] == "a bank assistant"
 

@@ -71,6 +71,16 @@ These were confirmed by actually running promptfoo, not read from documentation 
   results were 100% "failed" until this fix — the grader was 404ing against a default
   model name (`gpt-5.5-2026-04-23` as of promptfoo 0.123.1) that doesn't exist on a
   typical self-hosted deployment.
+- **Per-provider `config.timeoutMs` is NOT consumed by the OpenAI provider family** —
+  verified directly against promptfoo 0.123.1's source, not just docs. Its request path
+  reads only the global `REQUEST_TIMEOUT_MS` environment variable
+  (`getRequestTimeoutMs()` in `src/providers/shared.ts`). The per-test timeout that
+  actually applies is the top-level `evaluateOptions.timeoutMs`, read at the evaluator
+  level (`context.options.timeoutMs` in `src/evaluator.ts`) — that's what `main.py`'s
+  `request_timeout` parameter is wired to. `max_concurrency` is passed both ways: as
+  promptfoo's own `-j` CLI flag (documented flag precedence: "Command-line flags -
+  Override all other settings") and as `evaluateOptions.maxConcurrency`, for
+  `config_yaml`-passthrough consistency.
 
 ## MLflow: verified working, with required RBAC
 

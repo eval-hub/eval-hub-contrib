@@ -143,9 +143,7 @@ def _resolve_api_key(config: JobSpec) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _build_target_provider(
-    config: JobSpec, api_key: str, request_timeout: int
-) -> dict[str, Any]:
+def _build_target_provider(config: JobSpec, api_key: str) -> dict[str, Any]:
     """Build a promptfoo provider/target block pointing at the EvalHub model endpoint."""
     model_url = (config.model.url or "").rstrip("/")
     if not model_url:
@@ -160,15 +158,33 @@ def _build_target_provider(
         "config": {
             "apiBaseUrl": base_url,
             "apiKey": api_key,
-            # Best-effort: promptfoo ignores unrecognised provider config keys
-            # rather than erroring, so this is safe even if the key name
-            # drifts across promptfoo versions.
-            "timeoutMs": request_timeout * 1000,
         },
     }
 
 
-def _build_eval_config(config: JobSpec, provider: dict[str, Any]) -> dict[str, Any]:
+def _build_evaluate_options(
+    request_timeout: int, max_concurrency: int
+) -> dict[str, Any]:
+    """Build promptfoo's top-level `evaluateOptions` block.
+
+    Verified against promptfoo 0.123.1 source (not docs alone): the
+    per-provider `config.timeoutMs` field is NOT consumed by the OpenAI
+    provider family this adapter uses — its request path reads only the
+    global REQUEST_TIMEOUT_MS env var (src/providers/shared.py
+    getRequestTimeoutMs()). The per-test timeout that actually applies is
+    `evaluateOptions.timeoutMs`, read at the evaluator level
+    (context.options.timeoutMs in src/evaluator.ts). maxConcurrency is
+    read the same way, though CLI `-j` (which this adapter also always
+    passes — see run_benchmark_job) takes precedence over it per
+    promptfoo's own documented flag precedence, so this field is here for
+    config_yaml-passthrough consistency and defense in depth.
+    """
+    return {"maxConcurrency": max_concurrency, "timeoutMs": request_timeout * 1000}
+
+
+def _build_eval_config(
+    config: JobSpec, provider: dict[str, Any], evaluate_options: dict[str, Any]
+) -> dict[str, Any]:
     """Assemble a promptfoo config dict for the promptfoo-eval benchmark."""
     params = config.parameters or {}
 
@@ -186,6 +202,9 @@ def _build_eval_config(config: JobSpec, provider: dict[str, Any]) -> dict[str, A
         # user's original, non-EvalHub-controlled endpoint/credentials.
         parsed.pop("targets", None)
         parsed["providers"] = [provider]
+        # EvalHub's timeout/concurrency controls win, but preserve any other
+        # evaluateOptions keys (e.g. repeat, delay) the passed-through config set.
+        parsed.setdefault("evaluateOptions", {}).update(evaluate_options)
         return parsed
 
     prompts = params.get("prompts")
@@ -201,10 +220,13 @@ def _build_eval_config(config: JobSpec, provider: dict[str, Any]) -> dict[str, A
         "prompts": prompts,
         "providers": [provider],
         "tests": tests,
+        "evaluateOptions": evaluate_options,
     }
 
 
-def _build_redteam_config(config: JobSpec, provider: dict[str, Any]) -> dict[str, Any]:
+def _build_redteam_config(
+    config: JobSpec, provider: dict[str, Any], evaluate_options: dict[str, Any]
+) -> dict[str, Any]:
     """Assemble a promptfoo config dict for the promptfoo-redteam benchmark."""
     params = config.parameters or {}
 
@@ -218,6 +240,7 @@ def _build_redteam_config(config: JobSpec, provider: dict[str, Any]) -> dict[str
     return {
         "description": f"eval-hub redteam job {config.id}",
         "targets": [provider],
+        "evaluateOptions": evaluate_options,
         "redteam": {
             "purpose": purpose,
             "plugins": plugins,
@@ -471,8 +494,9 @@ class PromptfooAdapter(FrameworkAdapter):
 
             request_timeout = int((config.parameters or {}).get("request_timeout", 120))
             max_concurrency = int((config.parameters or {}).get("max_concurrency", 4))
+            evaluate_options = _build_evaluate_options(request_timeout, max_concurrency)
             api_key = _resolve_api_key(config)
-            provider = _build_target_provider(config, api_key, request_timeout)
+            provider = _build_target_provider(config, api_key)
 
             work_dir = Path(tempfile.mkdtemp(prefix="promptfoo_"))
             config_path = work_dir / "promptfooconfig.yaml"
@@ -491,9 +515,9 @@ class PromptfooAdapter(FrameworkAdapter):
 
             is_redteam = config.benchmark_id == "promptfoo-redteam"
             pf_config = (
-                _build_redteam_config(config, provider)
+                _build_redteam_config(config, provider, evaluate_options)
                 if is_redteam
-                else _build_eval_config(config, provider)
+                else _build_eval_config(config, provider, evaluate_options)
             )
             config_path.write_text(yaml.safe_dump(pf_config, sort_keys=False))
 
