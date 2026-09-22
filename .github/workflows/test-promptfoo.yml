@@ -3,18 +3,27 @@ name: Test promptfoo
 on:
   push:
     branches: [main]
-    paths: ['adapters/promptfoo/**']
+    paths:
+      - 'adapters/promptfoo/**'
+      - '.github/workflows/test-promptfoo.yml'
   pull_request:
     branches: [main]
-    paths: ['adapters/promptfoo/**']
+    paths:
+      - 'adapters/promptfoo/**'
+      - '.github/workflows/test-promptfoo.yml'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - uses: actions/setup-python@v7

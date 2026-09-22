@@ -23,8 +23,13 @@ promptfoo's own viewer via `promptfoo import`:
    MLflow](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/latest/html/working_with_mlflow/index)):
    run created, metrics and EvalCard/EnvironmentCard params logged, `eval.json` PUT as a
    real artifact and independently re-fetched via the MLflow API to confirm it matches
-   the run byte-for-byte. See "MLflow: verified working, with required RBAC" below.
-3. Attached as an OCI artifact when `config.exports.oci` is set
+   the run byte-for-byte. See "MLflow: verified working, with required RBAC" below. Built
+   from `evaluation_metadata`, not from path 1 — deliberately independent of the
+   `additional_info` size gate, so a large `eval.json` still reaches MLflow.
+3. Attached as an OCI artifact when `config.exports.oci` is set — only `eval.json`
+   itself, not the whole working directory, which also holds `promptfooconfig.yaml`
+   (embeds the target model's plaintext `apiKey`; exporting the whole directory would
+   leak it into the OCI artifact)
 
 ## Verified operational constraints (promptfoo 0.123.1, checked 2026-09-21)
 

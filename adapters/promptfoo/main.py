@@ -23,9 +23,15 @@ regardless of which EvalHub exports the job configured:
    documented size ceiling in the SDK, but a multi-MB body is not safe to
    assume will always be accepted by every ingress in front of eval-hub).
 2. Attached as an MLflow artifact via ``callbacks.mlflow.save(...,
-   artifacts=[...])`` when ``job_spec.experiment_name`` is set.
+   artifacts=[...])`` when ``job_spec.experiment_name`` is set. Built from
+   ``evaluation_metadata["promptfoo_eval_json_b64"]``, not from path 1 above
+   — this path is deliberately independent of the additional_info size gate,
+   so a large eval.json still reaches MLflow even when it's too big to embed.
 3. Attached as an OCI artifact via ``callbacks.create_oci_artifact()`` when
-   ``config.exports.oci`` is set.
+   ``config.exports.oci`` is set. Only ``eval.json`` itself is exported, not
+   the whole working directory — that directory also holds
+   ``promptfooconfig.yaml``, which embeds the target model's plaintext
+   ``apiKey`` (see ``_build_target_provider``).
 
 VERIFIED OPERATIONAL CONSTRAINT (promptfoo 0.123.1, checked 2026-09-21):
 ``redteam generate`` / ``redteam run`` refuse to proceed non-interactively
@@ -42,6 +48,7 @@ alternative.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -172,6 +179,12 @@ def _build_eval_config(config: JobSpec, provider: dict[str, Any]) -> dict[str, A
             raise ValueError("parameters.config_yaml must parse to a YAML mapping")
         # Credentials always come from EvalHub's model config, never from a
         # pass-through config_yaml — see provider.yaml's documented contract.
+        # promptfoo accepts `targets:` as an alias for `providers:` (it
+        # rewrites one into the other internally); drop any `targets:` the
+        # passed-through config brought with it, or it would sit alongside
+        # our injected `providers:` and could point part of the run at the
+        # user's original, non-EvalHub-controlled endpoint/credentials.
+        parsed.pop("targets", None)
         parsed["providers"] = [provider]
         return parsed
 
@@ -457,6 +470,7 @@ class PromptfooAdapter(FrameworkAdapter):
             )
 
             request_timeout = int((config.parameters or {}).get("request_timeout", 120))
+            max_concurrency = int((config.parameters or {}).get("max_concurrency", 4))
             api_key = _resolve_api_key(config)
             provider = _build_target_provider(config, api_key, request_timeout)
 
@@ -516,6 +530,8 @@ class PromptfooAdapter(FrameworkAdapter):
                     "--no-cache",
                     "--no-progress-bar",
                     "--force",
+                    "-j",
+                    str(max_concurrency),
                 ]
                 if generation_provider:
                     gen_args += ["--provider", generation_provider]
@@ -541,6 +557,8 @@ class PromptfooAdapter(FrameworkAdapter):
                 str(eval_json_path),
                 "--no-cache",
                 "--no-progress-bar",
+                "-j",
+                str(max_concurrency),
             ]
             # CRITICAL, verified against a live OpenShift cluster (2026-09-21):
             # red-team GRADING uses its own separate default model
@@ -605,23 +623,32 @@ class PromptfooAdapter(FrameworkAdapter):
             eval_card = _build_eval_card(config, pass_rate, n_evaluated)
             env_card = _build_env_card(config)
 
+            callbacks.report_status(
+                JobStatusUpdate(
+                    status=JobStatus.RUNNING,
+                    phase=JobPhase.PERSISTING_ARTIFACTS,
+                    progress=0.95,
+                    message=MessageInfo(
+                        message="Persisting promptfoo artifacts",
+                        message_code="persisting_artifacts",
+                    ),
+                )
+            )
+
             oci_artifact = None
             oci_exports = config.exports.oci if config.exports else None
             if oci_exports is not None:
-                callbacks.report_status(
-                    JobStatusUpdate(
-                        status=JobStatus.RUNNING,
-                        phase=JobPhase.PERSISTING_ARTIFACTS,
-                        progress=0.95,
-                        message=MessageInfo(
-                            message="Persisting promptfoo artifacts",
-                            message_code="persisting_artifacts",
-                        ),
-                    )
-                )
+                # Export ONLY eval.json — never the whole work_dir. config_path
+                # (promptfooconfig.yaml) lives there too and contains the
+                # target model's plaintext apiKey (see _build_target_provider);
+                # persisting the whole directory would leak that credential
+                # into the OCI artifact.
+                artifact_dir = work_dir / "artifact"
+                artifact_dir.mkdir()
+                shutil.copy(eval_json_path, artifact_dir / "eval.json")
                 oci_artifact = callbacks.create_oci_artifact(
                     OCIArtifactSpec(
-                        files_path=work_dir, coordinates=oci_exports.coordinates
+                        files_path=artifact_dir, coordinates=oci_exports.coordinates
                     )
                 )
                 logger.info("OCI artifact created: %s", oci_artifact.reference)
@@ -642,6 +669,16 @@ class PromptfooAdapter(FrameworkAdapter):
                     "framework_version": PROMPTFOO_VERSION,
                     "adapter_version": _ADAPTER_VERSION,
                     "promptfoo_eval_id": eval_id,
+                    # Original eval.json bytes, base64-encoded, independent of
+                    # the additional_info size gate above. evaluation_metadata
+                    # is not bulk-transmitted to eval-hub (report_results only
+                    # pulls its "artifacts" sub-key), so this stays local to
+                    # the adapter process and is how main() below builds the
+                    # MLflow artifact even when the job's eval.json is too
+                    # large to embed in additional_info.
+                    "promptfoo_eval_json_b64": base64.b64encode(eval_json_raw).decode(
+                        "ascii"
+                    ),
                 },
                 eval_card=eval_card,
                 env_card=env_card,
@@ -726,14 +763,18 @@ def main() -> None:
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
 
         # eval.json as a retained MLflow artifact (path 2 of 3 — see module
-        # docstring). additional_info already carries path 1 (always-on
-        # embed); OCI (path 3) is handled inside run_benchmark_job.
-        eval_json = (results.additional_info or {}).get("promptfoo_eval_json")
+        # docstring). Read from evaluation_metadata, not additional_info: the
+        # latter is size-gated (PROMPTFOO_EVAL_JSON_MAX_BYTES) for the
+        # /events payload, but the MLflow artifact path has no such
+        # constraint and must not silently lose the artifact on large runs.
+        eval_json_b64 = (results.evaluation_metadata or {}).get(
+            "promptfoo_eval_json_b64"
+        )
         artifacts = None
-        if eval_json is not None:
+        if eval_json_b64 is not None:
             artifacts = [
                 MlflowArtifact(
-                    "eval.json", json.dumps(eval_json).encode(), "application/json"
+                    "eval.json", base64.b64decode(eval_json_b64), "application/json"
                 ),
             ]
         run_id = callbacks.mlflow.save(results, adapter.job_spec, artifacts=artifacts)

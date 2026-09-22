@@ -9,6 +9,7 @@ run` + `promptfoo export eval`), not a guessed schema.
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
 from pathlib import Path
@@ -17,6 +18,12 @@ from unittest.mock import MagicMock, create_autospec
 import pytest
 from evalhub.adapter import JobCallbacks, JobPhase, JobStatus
 from evalhub.adapter.models.cards import EnvironmentCardMetadata, EvalCardMetadata
+from evalhub.adapter.models.job import (
+    JobSpecExports,
+    JobSpecExportsOCI,
+    OCIArtifactResult,
+)
+from evalhub.models.api import OCICoordinates
 from main import (
     PromptfooAdapter,
     _build_eval_config,
@@ -130,6 +137,23 @@ def test_build_eval_config_passthrough_overwrites_providers():
     pf_config = _build_eval_config(config, provider)
     assert pf_config["providers"] == [provider]
     assert pf_config["description"] == "mine"
+
+
+def test_build_eval_config_passthrough_drops_stale_targets_key():
+    """Regression test: promptfoo accepts `targets:` as an alias for
+    `providers:` (rewriting one into the other internally). A pass-through
+    config_yaml with a `targets:` key must not survive alongside our
+    injected `providers:` — that could point part of the run at the user's
+    original, non-EvalHub-controlled endpoint/credentials."""
+    config = MagicMock()
+    config.id = "job-1"
+    config.parameters = {
+        "config_yaml": "description: mine\ntargets:\n  - id: user-supplied-endpoint\ntests:\n  - vars: {}\n"
+    }
+    provider = {"id": "openai:chat:m"}
+    pf_config = _build_eval_config(config, provider)
+    assert pf_config["providers"] == [provider]
+    assert "targets" not in pf_config
 
 
 def test_build_redteam_config_defaults():
@@ -455,3 +479,148 @@ def test_promptfoo_exit_zero_no_output_file_raises(monkeypatch):
 
     with pytest.raises(RuntimeError, match="did not write"):
         adapter.run_benchmark_job(config, callbacks)
+
+
+@pytest.mark.integration
+def test_promptfoo_max_concurrency_passed_to_cli(monkeypatch):
+    """max_concurrency is a documented parameter — it must actually reach the
+    promptfoo CLI (`-j <value>`), not just be accepted and ignored."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-eval"
+    config.parameters = {**config.parameters, "max_concurrency": 8}
+
+    eval_json = _eval_json(1, 0, 0)
+    seen_eval_args: list[str] = []
+
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600):
+        seen_eval_args.extend(args)
+        out_path = Path(args[args.index("-o") + 1])
+        out_path.write_text(json.dumps(eval_json))
+        return _FakeCompletedProcess(0, "")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    adapter.run_benchmark_job(config, callbacks)
+
+    assert "-j" in seen_eval_args
+    assert seen_eval_args[seen_eval_args.index("-j") + 1] == "8"
+
+
+@pytest.mark.integration
+def test_promptfoo_persisting_artifacts_phase_reported_without_oci(monkeypatch):
+    """PERSISTING_ARTIFACTS must be reported for every job, not only when
+    config.exports.oci happens to be set — OCI export is one thing that can
+    happen during that phase, not a precondition for reporting it."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-eval"
+    assert config.exports is None
+
+    eval_json = _eval_json(1, 0, 0)
+
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600):
+        out_path = Path(args[args.index("-o") + 1])
+        out_path.write_text(json.dumps(eval_json))
+        return _FakeCompletedProcess(0, "")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    adapter.run_benchmark_job(config, callbacks)
+
+    phases = [c.args[0].phase for c in callbacks.report_status.call_args_list]
+    assert JobPhase.PERSISTING_ARTIFACTS in phases
+    callbacks.create_oci_artifact.assert_not_called()
+
+
+@pytest.mark.integration
+def test_promptfoo_oci_export_excludes_config_with_credentials(monkeypatch, tmp_path):
+    """Regression test: the OCI artifact must contain ONLY eval.json. The
+    work directory also holds promptfooconfig.yaml, which embeds the target
+    model's plaintext apiKey (see _build_target_provider) — persisting the
+    whole directory would leak that credential into the OCI artifact."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-eval"
+    config.exports = JobSpecExports(
+        oci=JobSpecExportsOCI(
+            coordinates=OCICoordinates(
+                oci_host="registry.example.com", oci_repository="evals/job-1"
+            )
+        )
+    )
+
+    eval_json = _eval_json(1, 0, 0)
+
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600):
+        out_path = Path(args[args.index("-o") + 1])
+        out_path.write_text(json.dumps(eval_json))
+        return _FakeCompletedProcess(0, "")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    seen_exported_files: set[str] = set()
+
+    def fake_create_oci_artifact(spec):
+        # Snapshot files_path here — run_benchmark_job's finally block
+        # deletes the whole work_dir (including this artifact subdir)
+        # before returning to the caller.
+        seen_exported_files.update(p.name for p in spec.files_path.iterdir())
+        return OCIArtifactResult(
+            digest="sha256:" + "0" * 64,
+            reference="registry.example.com/evals/job-1:latest",
+        )
+
+    callbacks.create_oci_artifact.side_effect = fake_create_oci_artifact
+
+    adapter.run_benchmark_job(config, callbacks)
+
+    assert seen_exported_files == {"eval.json"}
+    assert "promptfooconfig.yaml" not in seen_exported_files
+
+
+@pytest.mark.integration
+def test_promptfoo_eval_json_preserved_in_metadata_beyond_size_gate(monkeypatch):
+    """Regression test: additional_info is size-gated for the /events
+    payload, but the MLflow artifact path (built in main() from
+    evaluation_metadata) must not depend on that gate — a large eval.json
+    must not silently lose its MLflow-artifact availability."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-eval"
+
+    eval_json = _eval_json(1, 0, 0)
+
+    import main as main_mod
+
+    monkeypatch.setattr(main_mod, "PROMPTFOO_EVAL_JSON_MAX_BYTES", 1)
+
+    def fake_run_cli(args, cwd, timeout=3600):
+        out_path = Path(args[args.index("-o") + 1])
+        out_path.write_text(json.dumps(eval_json))
+        return _FakeCompletedProcess(0, "")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    results = adapter.run_benchmark_job(config, callbacks)
+
+    # additional_info omits it (over the artificially tiny limit)...
+    assert results.additional_info.get("promptfoo_eval_json_omitted") is True
+    assert "promptfoo_eval_json" not in results.additional_info
+    # ...but evaluation_metadata still carries the exact original bytes.
+    b64 = results.evaluation_metadata["promptfoo_eval_json_b64"]
+    assert json.loads(base64.b64decode(b64)) == eval_json

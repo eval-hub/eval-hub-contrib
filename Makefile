@@ -133,7 +133,7 @@ image-swebench:
 	@echo "✅ Built: $(IMAGE_SWEBENCH)"
 
 .PHONY: images
-images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler image-nemo-guardrails
+images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler image-nemo-guardrails image-promptfoo
 	@echo "✅ All adapter images built"
 
 # Push targets
@@ -184,7 +184,7 @@ push-swebench:
 	@echo "✅ Pushed: $(IMAGE_SWEBENCH)"
 
 .PHONY: push-images
-push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench push-ruler push-nemo-guardrails
+push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench push-ruler push-nemo-guardrails push-promptfoo
 	@echo "✅ All adapter images pushed"
 
 # Clean targets
@@ -235,7 +235,7 @@ clean-swebench:
 	@echo "✅ Removed: $(IMAGE_SWEBENCH)"
 
 .PHONY: clean-images
-clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench clean-ruler clean-nemo-guardrails
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench clean-ruler clean-nemo-guardrails clean-promptfoo
 	@echo "✅ All adapter images removed"
 
 # Development targets
@@ -331,7 +331,7 @@ test-ragas:
 	@echo "✅ RAGAS tests passed"
 
 .PHONY: tests
-tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler test-nemo-guardrails
+tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler test-nemo-guardrails test-promptfoo
 	@echo "✅ All adapter tests passed"
 .PHONY: test-swebench
 test-swebench:
