@@ -1,0 +1,18 @@
+FROM registry.access.redhat.com/ubi9/python-312:latest
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY _evaluation.py rules.py main.py provider.yaml ./
+COPY data/ ./data/
+COPY FOLLOWBENCH-LICENSE ./
+COPY meta/job.json /meta/job.json
+
+ENV PYTHONUNBUFFERED=1
+ENV EVALHUB_MODE=k8s
+
+USER 1001
+
+ENTRYPOINT ["python", "main.py"]
