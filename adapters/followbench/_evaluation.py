@@ -100,6 +100,7 @@ class ScoredConstraint:
     level: int
     hard_satisfied: bool
     soft_satisfied: float
+    group_id: str = ""
 
 
 def compute_metrics(results: list[ScoredConstraint]) -> dict[str, float]:
@@ -115,10 +116,11 @@ def compute_metrics(results: list[ScoredConstraint]) -> dict[str, float]:
     hsr = sum(result.hard_satisfied for result in results) / len(results)
     ssr = sum(result.soft_satisfied for result in results) / len(results)
 
-    grouped: dict[int, list[ScoredConstraint]] = {}
+    grouped: dict[str, list[ScoredConstraint]] = {}
 
     for result in results:
-        grouped.setdefault(result.example_id, []).append(result)
+        group_id = result.group_id or str(result.example_id)
+        grouped.setdefault(group_id, []).append(result)
 
     consistency_total = 0
 

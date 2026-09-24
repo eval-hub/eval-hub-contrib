@@ -126,17 +126,19 @@ def _group_examples(
 def _build_judge_prompt(
     group: list[FollowBenchExample],
     response: str,
+    level: int,
 ) -> str:
     """Build the FollowBench external-judge prompt."""
     evaluated_examples = [
         example for example in group if example.level > 0 and example.instruction
     ]
 
-    if not evaluated_examples:
-        raise ValueError("FollowBench group has no evaluable constraints")
-
-    current = evaluated_examples[-1]
-    level = current.level
+    current = next(
+        (example for example in evaluated_examples if example.level == level),
+        None,
+    )
+    if current is None:
+        raise ValueError(f"FollowBench group has no level {level} constraint")
 
     evolution = [
         example.instruction
@@ -256,6 +258,7 @@ def _score_example(
             level=example.level,
             hard_satisfied=satisfied,
             soft_satisfied=float(satisfied),
+            group_id=f"{example.category}:{example.example_id}",
         )
 
     if example.category == "format" and example.example_id in {22, 30}:
@@ -269,6 +272,7 @@ def _score_example(
             level=example.level,
             hard_satisfied=satisfied,
             soft_satisfied=float(satisfied),
+            group_id=f"{example.category}:{example.example_id}",
         )
 
     rule_result = evaluate_rule_constraint(
@@ -285,9 +289,10 @@ def _score_example(
             level=example.level,
             hard_satisfied=rule_result,
             soft_satisfied=float(rule_result),
+            group_id=f"{example.category}:{example.example_id}",
         )
 
-    judge_prompt = _build_judge_prompt(group, response)
+    judge_prompt = _build_judge_prompt(group, response, example.level)
 
     try:
         judge_response = _call_chat_model(
@@ -316,6 +321,7 @@ def _score_example(
         level=example.level,
         hard_satisfied=bool(hard_satisfied),
         soft_satisfied=soft_satisfied,
+        group_id=f"{example.category}:{example.example_id}",
     )
 
 

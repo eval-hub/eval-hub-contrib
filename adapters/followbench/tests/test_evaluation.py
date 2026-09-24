@@ -75,3 +75,17 @@ def test_compute_metrics():
     assert metrics["ssr"] == pytest.approx(0.9)
     assert metrics["csl"] == pytest.approx(1.5)
     assert metrics["n_evaluated"] == pytest.approx(5.0)
+
+
+def test_compute_metrics_keeps_categories_as_distinct_groups():
+    results = [
+        *[
+            ScoredConstraint(1, level, True, 1.0, group_id="content:1")
+            for level in range(1, 6)
+        ],
+        ScoredConstraint(1, 1, True, 1.0, group_id="style:1"),
+    ]
+
+    metrics = compute_metrics(results)
+
+    assert metrics["csl"] == pytest.approx(3.0)

@@ -86,3 +86,31 @@ Create the Python environment:
 ```bash
 uv venv --python 3.12 .venv-followbench
 source .venv-followbench/bin/activate
+uv pip install \
+  -r adapters/followbench/requirements.txt \
+  -r adapters/followbench/requirements-test.txt
+```
+
+Run the adapter tests from the adapter directory:
+
+```bash
+cd adapters/followbench
+python -m pytest tests
+```
+
+## Smoke-test expectations
+
+The smallest complete smoke run uses one example group and evaluates levels
+1 through 5. It may make up to five model-generation calls and five judge
+calls; rule-based cases can reduce the number of judge calls. Runtime depends
+on model and judge latency, prompt length, and generated-token limits.
+
+For a real smoke run, use the approved EvalHub image/provider path with a
+reachable OpenAI-compatible model endpoint and judge endpoint. The job
+specification uses `num_examples: 1` and does not contain credentials. Inject
+credentials through the runtime Secret or environment configuration.
+
+The expected output contains `hsr`, `ssr`, `csl`, and `n_evaluated`. HSR and
+SSR are fractions in `0.0–1.0`; CSL is the average number of consecutive
+satisfied levels on the five-level scale. The proposed HSR smoke floor is
+`0.20`, pending calibration against reference results.
