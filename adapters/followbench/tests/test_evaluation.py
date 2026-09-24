@@ -48,6 +48,7 @@ def test_parse_single_judge_result():
 def test_parse_multiple_judge_results():
     assert parse_judge_result("['YES', 'NO']", level=2) == (0, 0.5)
     assert parse_judge_result("['YES', 'YES']", level=2) == (1, 1.0)
+    assert parse_judge_result("[YES, NO]", level=2) == (0, 0.5)
 
 
 def test_parse_judge_result_rejects_wrong_length():

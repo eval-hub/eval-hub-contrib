@@ -78,12 +78,17 @@ def parse_judge_result(response: str, level: int) -> tuple[int, float]:
     if start < 0 or end <= start:
         raise ValueError("judge response does not contain a result list")
 
-    parsed = ast.literal_eval(text[start : end + 1])
+    list_text = text[start : end + 1]
+
+    try:
+        parsed = ast.literal_eval(list_text)
+    except (SyntaxError, ValueError):
+        parsed = [item.strip() for item in list_text[1:-1].split(",")]
 
     if not isinstance(parsed, list) or len(parsed) != level:
         raise ValueError("judge result has the wrong number of elements")
 
-    values = [str(item).upper() for item in parsed]
+    values = [str(item).strip(" '\"`").upper() for item in parsed]
     allowed = {"YES", "NO", "PARTIAL", "MAYBE", "UNKNOWN", "N/A"}
 
     if any(value not in allowed for value in values):
