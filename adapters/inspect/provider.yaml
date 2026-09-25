@@ -536,9 +536,9 @@ benchmarks:
     name: HumanEval
     description: Python code generation from docstrings.
     category: coding
-    metrics: [accuracy/accuracy, accuracy/stderr]
+    metrics: [verify/accuracy, verify/stderr]
     primary_score:
-      metric: accuracy/accuracy
+      metric: verify/accuracy
       lower_is_better: false
     tags: [coding, inspect-evals]
 
@@ -568,9 +568,9 @@ benchmarks:
     name: GSM8K
     description: Grade school math word problems requiring multi-step reasoning.
     category: reasoning
-    metrics: [accuracy/accuracy, accuracy/stderr]
+    metrics: [match/accuracy, match/stderr]
     primary_score:
-      metric: accuracy/accuracy
+      metric: match/accuracy
       lower_is_better: false
     tags: [reasoning, math, inspect-evals]
 
