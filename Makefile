@@ -8,6 +8,7 @@ VERSION ?= latest
 PYTHON_VERSION ?= 3.12
 
 # Image names
+IMAGE_FOLLOWBENCH = $(REGISTRY)/community-followbench:$(VERSION)
 IMAGE_LIGHTEVAL = $(REGISTRY)/community-lighteval:$(VERSION)
 IMAGE_GUIDELLM = $(REGISTRY)/community-guidellm:$(VERSION)
 IMAGE_MTEB = $(REGISTRY)/community-mteb:$(VERSION)
@@ -78,6 +79,13 @@ help:
 	@echo "  make image-lighteval REGISTRY=localhost:5000 VERSION=dev"
 
 # Build targets
+.PHONY: image-followbench
+image-followbench:
+	@echo "Building FollowBench adapter image..."
+	cd adapters/followbench && \
+	$(BUILD_TOOL) build -t $(IMAGE_FOLLOWBENCH) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_FOLLOWBENCH)"
+
 .PHONY: image-lighteval
 image-lighteval:
 	@echo "Building LightEval adapter image..."
