@@ -26,6 +26,92 @@ def test_build_judge_prompt_uses_requested_level():
     assert "two constraints" not in prompt
 
 
+def test_build_judge_client_reuses_model_credential_for_default_endpoint(monkeypatch):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+    monkeypatch.delenv("FOLLOWBENCH_JUDGE_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    resolve_model_api_key = MagicMock(return_value="model-secret")
+    monkeypatch.setattr(main_module, "_resolve_model_api_key", resolve_model_api_key)
+    openai_client = MagicMock(name="openai_client")
+    openai_constructor = MagicMock(return_value=openai_client)
+    monkeypatch.setattr(main_module.openai, "OpenAI", openai_constructor)
+
+    client, judge_model = main_module._build_judge_client(config, {}, 30)
+
+    assert client is openai_client
+    assert judge_model == config.model.name
+    assert openai_constructor.call_args.kwargs["api_key"] == "model-secret"
+    resolve_model_api_key.assert_called_once_with(config)
+
+
+def test_build_judge_client_prefers_explicit_judge_credential(monkeypatch):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+    monkeypatch.delenv("FOLLOWBENCH_JUDGE_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    resolve_model_api_key = MagicMock(return_value="model-secret")
+    monkeypatch.setattr(main_module, "_resolve_model_api_key", resolve_model_api_key)
+    openai_constructor = MagicMock()
+    monkeypatch.setattr(main_module.openai, "OpenAI", openai_constructor)
+
+    main_module._build_judge_client(
+        config,
+        {"judge_api_key": "judge-secret"},
+        30,
+    )
+
+    assert openai_constructor.call_args.kwargs["api_key"] == "judge-secret"
+    resolve_model_api_key.assert_not_called()
+
+
+def test_build_judge_client_does_not_reuse_model_credential_for_other_endpoint(
+    monkeypatch,
+):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+    monkeypatch.delenv("FOLLOWBENCH_JUDGE_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    resolve_model_api_key = MagicMock(return_value="model-secret")
+    monkeypatch.setattr(main_module, "_resolve_model_api_key", resolve_model_api_key)
+    openai_constructor = MagicMock()
+    monkeypatch.setattr(main_module.openai, "OpenAI", openai_constructor)
+
+    main_module._build_judge_client(
+        config,
+        {"judge_url": "https://judge.example/v1"},
+        30,
+    )
+
+    assert openai_constructor.call_args.kwargs["api_key"] == "DUMMY"
+    resolve_model_api_key.assert_not_called()
+
+
+def test_malformed_judge_response_is_scored_as_no(monkeypatch):
+    example = FollowBenchExample(1, "content", "target", 1, "instruction", "source")
+    monkeypatch.setattr(
+        main_module,
+        "evaluate_rule_constraint",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(main_module, "_build_judge_prompt", lambda *args: "prompt")
+    monkeypatch.setattr(
+        main_module,
+        "_call_chat_model",
+        lambda *args, **kwargs: "not a valid judge response",
+    )
+
+    score = main_module._score_example(
+        example,
+        "model response",
+        [example],
+        MagicMock(name="judge_client"),
+        "judge",
+        max_tokens=32,
+        temperature=0.0,
+    )
+
+    assert score.hard_satisfied is False
+    assert score.soft_satisfied == 0.0
+
+
 def test_followbench_judge_and_callbacks_integration(monkeypatch):
     adapter = main_module.FollowBenchAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)

@@ -69,6 +69,12 @@ Credentials must be injected through configuration or environment variables.
 Credentials must not be committed to source code, job specifications, or
 container images.
 
+When `judge_url` is omitted, the judge uses `model.url` and reuses the
+evaluated model credential, including the credential resolved from
+`model.auth.secret_ref`. A separate judge endpoint must receive its own
+credential through `judge_api_key`, `FOLLOWBENCH_JUDGE_API_KEY`, or the
+runtime's `OPENAI_API_KEY`.
+
 Judge runtime and cost depend on:
 
 - Number of evaluated example groups

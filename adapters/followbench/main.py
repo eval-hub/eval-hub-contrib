@@ -66,7 +66,10 @@ def _resolve_model_api_key(config: JobSpec) -> str:
 
 
 def _resolve_judge_api_key(
+    config: JobSpec,
     parameters: dict[str, Any],
+    judge_url: str,
+    model_url: str,
 ) -> str:
     """Resolve the external-judge credential."""
     configured_key = parameters.get("judge_api_key")
@@ -74,10 +77,16 @@ def _resolve_judge_api_key(
     if configured_key:
         return str(configured_key)
 
-    return os.getenv("FOLLOWBENCH_JUDGE_API_KEY") or os.getenv(
-        "OPENAI_API_KEY",
-        "DUMMY",
+    judge_key = os.getenv("FOLLOWBENCH_JUDGE_API_KEY") or os.getenv(
+        "OPENAI_API_KEY"
     )
+    if judge_key:
+        return judge_key
+
+    if judge_url == model_url:
+        return _resolve_model_api_key(config)
+
+    return "DUMMY"
 
 
 def _call_chat_model(
@@ -219,7 +228,12 @@ def _build_judge_client(
 
     client = openai.OpenAI(
         base_url=judge_url,
-        api_key=_resolve_judge_api_key(parameters),
+        api_key=_resolve_judge_api_key(
+            config,
+            parameters,
+            judge_url,
+            model_url,
+        ),
         timeout=request_timeout,
     )
 
