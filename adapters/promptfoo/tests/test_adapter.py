@@ -43,6 +43,7 @@ from main import (
 def _eval_json(
     successes: int, failures: int, errors: int, plugin_rows: list[dict] | None = None
 ) -> dict:
+    """Return a minimal promptfoo eval.json fixture matching the real 0.123.1 shape."""
     results = []
     for _ in range(successes):
         results.append({"success": True, "score": 1, "metadata": {}})
@@ -71,6 +72,7 @@ def _eval_json(
 
 
 def test_resolve_api_key_env(monkeypatch):
+    """OPENAI_API_KEY env var is returned when set and no secret_ref is configured."""
     monkeypatch.setenv("OPENAI_API_KEY", "my-key-from-env")
     config = MagicMock()
     config.model.auth = None
@@ -78,6 +80,7 @@ def test_resolve_api_key_env(monkeypatch):
 
 
 def test_resolve_api_key_sentinel(monkeypatch):
+    """'not-required' sentinel is returned when no env key and no secret_ref."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     config = MagicMock()
     config.model.auth = None
@@ -90,6 +93,7 @@ def test_resolve_api_key_sentinel(monkeypatch):
 
 
 def test_build_target_provider_appends_v1():
+    """Provider block uses openai:chat:<name> id and appends /v1 to a bare base URL."""
     config = MagicMock()
     config.model.url = "http://localhost:8080"
     config.model.name = "my-model"
@@ -100,6 +104,7 @@ def test_build_target_provider_appends_v1():
 
 
 def test_build_target_provider_missing_url_raises():
+    """ValueError is raised when config.model.url is empty."""
     config = MagicMock()
     config.model.url = ""
     with pytest.raises(ValueError, match="model.url"):
@@ -116,6 +121,7 @@ def test_build_evaluate_options():
 
 
 def test_build_eval_config_from_prompts_and_tests():
+    """Explicit prompts + tests produce a valid promptfoo eval config with evaluateOptions."""
     config = MagicMock()
     config.id = "job-1"
     config.parameters = {
@@ -132,6 +138,7 @@ def test_build_eval_config_from_prompts_and_tests():
 
 
 def test_build_eval_config_missing_params_raises():
+    """ValueError is raised when neither config_yaml nor prompts+tests are provided."""
     config = MagicMock()
     config.parameters = {}
     with pytest.raises(ValueError, match="config_yaml"):
@@ -139,6 +146,7 @@ def test_build_eval_config_missing_params_raises():
 
 
 def test_build_eval_config_passthrough_overwrites_providers():
+    """A config_yaml passthrough has its providers: replaced with the EvalHub provider."""
     config = MagicMock()
     config.id = "job-1"
     config.parameters = {
@@ -192,6 +200,7 @@ def test_build_eval_config_passthrough_preserves_other_evaluate_options():
 
 
 def test_build_redteam_config_defaults():
+    """Default redteam config uses OWASP plugin set, purpose='An AI assistant', numTests=5."""
     config = MagicMock()
     config.id = "job-1"
     config.parameters = {}
@@ -208,6 +217,7 @@ def test_build_redteam_config_defaults():
 
 
 def test_build_redteam_config_custom_plugins():
+    """Custom plugins, num_tests_per_plugin, and purpose are propagated to the config."""
     config = MagicMock()
     config.id = "job-1"
     config.parameters = {
@@ -226,6 +236,7 @@ def test_build_redteam_config_custom_plugins():
 
 
 def test_compute_metrics_all_pass():
+    """pass_rate=1.0, n=2 when all successes and no failures or errors."""
     ej = _eval_json(successes=2, failures=0, errors=0)
     results, pass_rate, n = _compute_metrics(ej)
     metric = {r.metric_name: r.metric_value for r in results}
@@ -237,6 +248,7 @@ def test_compute_metrics_all_pass():
 
 
 def test_compute_metrics_mixed():
+    """pass_rate=3/5, n=5 with successes, failures, and errors all present."""
     ej = _eval_json(successes=3, failures=1, errors=1)
     results, pass_rate, n = _compute_metrics(ej)
     metric = {r.metric_name: r.metric_value for r in results}
@@ -246,6 +258,7 @@ def test_compute_metrics_mixed():
 
 
 def test_compute_metrics_empty_no_pass_rate():
+    """pass_rate is None and pass_rate metric is absent when total=0."""
     ej = _eval_json(successes=0, failures=0, errors=0)
     results, pass_rate, n = _compute_metrics(ej)
     assert pass_rate is None
@@ -278,6 +291,7 @@ def test_compute_plugin_breakdown_real_shape():
 
 
 def test_compute_plugin_breakdown_no_metadata_returns_empty():
+    """Empty dict returned when result rows carry no pluginId metadata."""
     ej = _eval_json(2, 0, 0)
     assert _compute_plugin_breakdown(ej) == {}
 
@@ -288,7 +302,10 @@ def test_compute_plugin_breakdown_no_metadata_returns_empty():
 
 
 class _FakeCompletedProcess:
+    """Minimal subprocess.CompletedProcess stand-in for monkeypatching _run_promptfoo_cli."""
+
     def __init__(self, returncode: int, stdout: str, stderr: str = ""):
+        """Initialise with returncode, stdout, and optional stderr."""
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
@@ -296,6 +313,7 @@ class _FakeCompletedProcess:
 
 @pytest.mark.integration
 def test_promptfoo_eval_happy_path(monkeypatch, tmp_path):
+    """End-to-end promptfoo-eval: CLI monkeypatched, verifies metrics, cards, and artifact paths."""
     adapter = PromptfooAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
 
@@ -349,6 +367,7 @@ def test_promptfoo_eval_happy_path(monkeypatch, tmp_path):
 
 @pytest.mark.integration
 def test_promptfoo_redteam_happy_path(monkeypatch):
+    """End-to-end promptfoo-redteam: verifies per-plugin breakdown and safety EvalCard."""
     adapter = PromptfooAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
 
@@ -469,6 +488,7 @@ def test_promptfoo_eval_does_not_pass_grader_flag(monkeypatch):
 
 @pytest.mark.integration
 def test_promptfoo_cli_failure_reports_failed_status(monkeypatch):
+    """Non-zero promptfoo exit code raises RuntimeError and reports FAILED status via callback."""
     adapter = PromptfooAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
 

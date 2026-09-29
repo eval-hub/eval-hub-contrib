@@ -256,6 +256,7 @@ def _build_redteam_config(
 
 
 def _promptfoo_env() -> dict[str, str]:
+    """Return a copy of the process environment with required promptfoo flags set."""
     env = dict(os.environ)
     # See module docstring: required for non-interactive red-team generation.
     env["PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION"] = "1"
@@ -384,6 +385,7 @@ def _compute_plugin_breakdown(eval_json: dict[str, Any]) -> dict[str, Any]:
 def _build_eval_card(
     config: JobSpec, pass_rate: float | None, n_evaluated: int
 ) -> EvalCardMetadata:
+    """Build an EvalCardMetadata describing benchmark type, score, and footnote."""
     is_redteam = config.benchmark_id == "promptfoo-redteam"
     footnote = (
         "promptfoo (MIT license) red-team plugin catalog. pass_rate is the "
@@ -439,6 +441,7 @@ def _build_eval_card(
 
 
 def _build_env_card(config: JobSpec) -> EnvironmentCardMetadata:
+    """Build an EnvironmentCardMetadata capturing the promptfoo runtime and model info."""
     env = EnvironmentCardMetadata.capture(
         framework_name="promptfoo",
         framework_version=PROMPTFOO_VERSION,
@@ -458,6 +461,7 @@ class PromptfooAdapter(FrameworkAdapter):
     """eval-hub FrameworkAdapter wrapping promptfoo eval and redteam."""
 
     def generate_additional_info(self, results: JobResults) -> dict[str, Any] | None:
+        """Return a compact summary dict (pass_rate + version) for job additional_info."""
         metric = {r.metric_name: r.metric_value for r in results.results}
         return {
             "pass_rate": metric.get("pass_rate"),
@@ -465,6 +469,7 @@ class PromptfooAdapter(FrameworkAdapter):
         }
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
+        """Run a promptfoo-eval or promptfoo-redteam benchmark and return results."""
         start_time = time.time()
         logger.info(
             "Starting promptfoo job %s, benchmark=%s, model=%s",
@@ -746,10 +751,12 @@ class PromptfooAdapter(FrameworkAdapter):
 
 
 def _local_only_run() -> bool:
+    """Return True when EVALHUB_MODE=local, enabling offline callback routing."""
     return os.getenv("EVALHUB_MODE", "").strip().lower() == "local"
 
 
 def _callbacks_for_adapter(adapter: FrameworkAdapter) -> DefaultCallbacks:
+    """Return the appropriate DefaultCallbacks for the current run mode (local or sidecar)."""
     if _local_only_run():
         return DefaultCallbacks(
             job_id=adapter.job_spec.id,
@@ -766,6 +773,7 @@ def _callbacks_for_adapter(adapter: FrameworkAdapter) -> DefaultCallbacks:
 
 
 def main() -> None:
+    """Container entry point: load job spec, run benchmark, persist MLflow artifact, report results."""
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
         level=getattr(logging, log_level, logging.INFO),
