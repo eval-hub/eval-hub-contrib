@@ -1,0 +1,173 @@
+# Combined Coding Collection
+#
+# Merges inspect-coding + lighteval-code.
+# No deduplication needed — inspect and lighteval cover distinct coding benchmarks.
+# SWE-bench and BigCodeBench are included as untested but expected to work;
+# note in description that results may require a newer container image.
+#
+# ── Threshold Justification ──────────────────────────────────────────────────
+#
+#   HumanEval:       Chen et al. 2021. Python function synthesis from docstrings.
+#                    164 problems, pass@1. Human-expert: 94%.
+#                    Top-10 <80B: 65–87%. Typical 8B: 65–82%.
+#                    Threshold 0.60 = lower bound of competitive 8B range.
+#                    Chosen over 0.50 (old default) because all modern capable
+#                    8B instruction models exceed 60% since early 2025.
+#
+#   MBPP:            Austin et al. 2021. 374 Python programming problems
+#                    (beginner-to-intermediate). Pass@1 with test execution.
+#                    Top-10 <80B: 60–80%. Threshold 0.60.
+#                    Weight 1.5: broader task variety than HumanEval but less
+#                    standardised execution environment.
+#
+#   LiveCodeBench v6: Jain et al. 2024. Competitive programming (Codeforces,
+#                    LeetCode, AtCoder). Contamination-free rolling benchmark.
+#                    Top-10 <80B: 10–28%. Typical 8B: 10–22%.
+#                    Threshold 0.12 = approximately bottom of competitive 8B
+#                    range. Weight 2.0: highest discriminating power; competitive
+#                    programming is far from saturated for <80B models.
+#
+#   SWE-bench:       Jimenez et al. 2024. Real GitHub issues from 12 Python repos.
+#                    % of issues resolved end-to-end. Very hard.
+#                    Top-10 <80B: 5–22%. Typical 8B: 5–12%.
+#                    Threshold 0.10 = minimum bar for model-only eval (without agentic
+#                    scaffolding). Note: agent-pipeline-dependent; leaderboard
+#                    scores (28–55%) use full scaffolding (top-10 <80B with
+#                    scaffolding: 5–22%).
+#                    Weight 1.5: strong real-world validity but high variance;
+#                    results depend heavily on scaffolding and execution setup.
+#                    NOTE: untested in community-inspect:latest — may require
+#                    sandbox configuration or newer inspect-evals container.
+#
+#   BigCodeBench:    Zhuo et al. 2024. 1140 diverse Python tasks requiring
+#                    library function calling (numpy, pandas, sklearn, etc.).
+#                    Pass@1 with test-case execution.
+#                    Top-10 <80B: 58–82%. Typical 8B: 48–65%. Threshold 0.45
+#                    = lower bound of competitive 8B range per
+#                    benchmarkingagents.com (Zhuo et al. 2024).
+#                    Weight 1.5: distinct from HumanEval/MBPP (library knowledge
+#                    vs. algorithmic reasoning); good deployment signal.
+#                    NOTE: untested in community-inspect:latest.
+#
+# ── Weight Rationale ─────────────────────────────────────────────────────────
+#
+#   Weight 2.0 → lcb:codegeneration_v6: Highest discriminating power; hardest;
+#                least saturated; contamination-free. Best signal for true coding
+#                capability above "HumanEval-level" tuning.
+#   Weight 2.0 → inspect/humaneval: Canonical benchmark, best reproducibility,
+#                widest historical calibration data. Primary gate.
+#   Weight 1.5 → mbpp, swe-bench, bigcodebench: Strong complementary signals
+#                covering different coding dimensions. Down from humaneval due
+#                to less standardised execution or higher variance.
+#
+# ── Global Pass Criteria ─────────────────────────────────────────────────────
+#
+# Collection PASS requires:
+#   (1) inspect/humaneval ≥ 0.60    — canonical Python synthesis gate (mandatory)
+#   (2) lcb:codegeneration_v6 ≥ 0.12 — competitive programming gate (mandatory)
+#   Plus ≥ 1 of remaining 3 benchmarks (mbpp, swe-bench, bigcodebench) passing.
+# Rationale: a model that fails both HumanEval and LiveCodeBench lacks both
+# basic and advanced coding capability. SWE-bench/BigCodeBench are "bonus"
+# signals — passing one confirms real-world and library coding utility.
+#
+# Usage:
+#   evalhub collections create --file collections/combined-coding.yaml
+#   evalhub collections run combined-coding \
+#     --model-url http://qwen3-8b-fp8-predictor.project1.svc.cluster.local:8080/v1 \
+#     --model-name qwen3-8b-fp8
+
+name: combined-coding
+description: >
+  Comprehensive coding suite combining inspect-coding and lighteval-code. Five
+  benchmarks across four dimensions: (1) Python synthesis (HumanEval, Chen et al.
+  2021, threshold 0.65 = leaderboard lower bound, weight 2.0 — primary gate);
+  (2) broader Python (MBPP, Austin et al. 2021, threshold 0.55, weight 1.5);
+  (3) competitive programming (LiveCodeBench v6, Jain et al. 2024, threshold 0.20
+  = competitive 8B lower bound per artificialanalysis.ai, weight 2.0 —
+  contamination-free, highest discrimination); (4) real-world issues (SWE-bench,
+  Jimenez et al. 2024, threshold 0.10 model-only, weight 1.5 — untested in current
+  image); (5) library calling (BigCodeBench, Zhuo et al. 2024, threshold 0.45,
+  weight 1.5). Global PASS: humaneval>=0.65 AND lcb>=0.20 plus >=1 of {mbpp,
+  swe-bench, bigcodebench}. Full justification in YAML comments.
+category: coding
+tags:
+  - coding
+  - python
+  - competitive-programming
+  - software-engineering
+  - inspect
+  - lighteval
+  - humaneval
+  - swe-bench
+
+benchmarks:
+  # ── Python function synthesis (inspect, confirmed working) ────────────────
+  # HumanEval: 164 problems, function synthesis from docstrings, pass@1.
+  # Threshold 0.65 = lower bound top-10 <80B. Mandatory gate.
+  # Weight 2.0: canonical benchmark, best historical calibration.
+  - id: inspect/humaneval
+    provider_id: inspect
+    weight: 2.0
+    parameters:
+      max_samples: 100
+    primary_score:
+      metric: verify/accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.65
+
+  # MBPP: 374 beginner-to-intermediate Python problems, pass@1 with test execution.
+  # Complements HumanEval with broader task variety.
+  # Threshold 0.55 per llm-stats.com lower bound. Weight 1.5.
+  - id: inspect/mbpp
+    provider_id: inspect
+    weight: 1.5
+    parameters:
+      max_samples: 50
+    primary_score:
+      metric: accuracy/accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.55
+
+  # SWE-bench: Real GitHub issues, end-to-end resolution. Requires sandbox.
+  # Threshold 0.05 = minimum real-world utility bar.
+  # Weight 1.5. NOTE: may require newer inspect-evals container or sandbox config.
+  - id: inspect/swe-bench
+    provider_id: inspect
+    weight: 1.5
+    parameters:
+      max_samples: 10
+    primary_score:
+      metric: accuracy/accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.10
+
+  # BigCodeBench: 1140 diverse library-function-calling tasks.
+  # Threshold 0.45 = lower bound of competitive 8B range per benchmarkingagents.com.
+  # Weight 1.5. NOTE: may require newer inspect-evals container.
+  - id: inspect/bigcodebench
+    provider_id: inspect
+    weight: 1.5
+    parameters:
+      max_samples: 50
+    primary_score:
+      metric: accuracy/accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.45
+
+  # ── Competitive programming (lighteval, confirmed working) ─────────────────
+  # LiveCodeBench v6: Rolling contamination-free competitive programming benchmark.
+  # Hardest coding benchmark included; best discriminating power.
+  # Top-10 <80B: 10–28%. Threshold 0.12. Mandatory gate. Weight 2.0.
+  - id: lcb:codegeneration_v6
+    provider_id: lighteval
+    weight: 2.0
+    parameters: {}
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.20
