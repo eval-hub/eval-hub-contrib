@@ -4,7 +4,7 @@
 lighteval==0.13.0
 
 # LiteLLM for endpoint support
-litellm[caching]==1.80.17
+litellm[caching]==1.84.0
 
 # Required dependencies
 requests==2.33.1

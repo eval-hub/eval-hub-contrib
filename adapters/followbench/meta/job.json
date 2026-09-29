@@ -1,0 +1,19 @@
+{
+  "id": "followbench-test-001",
+  "provider_id": "followbench",
+  "benchmark_id": "followbench",
+  "benchmark_index": 0,
+  "model": {
+    "url": "http://localhost:8080/v1",
+    "name": "meta-llama/llama-3.1-8b-instruct"
+  },
+  "parameters": {
+    "judge_model": "meta-llama/llama-3.1-8b-instruct",
+    "judge_url": "http://localhost:8080/v1",
+    "num_examples": 1,
+    "temperature": 0.0,
+    "max_tokens": 512,
+    "request_timeout": 120
+  },
+  "callback_url": "http://localhost:8081"
+}
