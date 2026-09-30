@@ -325,7 +325,8 @@ def test_promptfoo_eval_happy_path(monkeypatch, tmp_path):
 
     import main as main_mod
 
-    def fake_run_cli(args, cwd, timeout=3600):
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         if args[0] == "eval":
             out_path = Path(args[args.index("-o") + 1])
             out_path.write_text(json.dumps(eval_json))
@@ -389,7 +390,8 @@ def test_promptfoo_redteam_happy_path(monkeypatch):
 
     import main as main_mod
 
-    def fake_run_cli(args, cwd, timeout=3600):
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         if args[0] == "redteam" and args[1] == "generate":
             return _FakeCompletedProcess(0, "")
         if args[0] == "eval":
@@ -437,7 +439,8 @@ def test_promptfoo_redteam_passes_grader_when_generation_provider_set(monkeypatc
 
     import main as main_mod
 
-    def fake_run_cli(args, cwd, timeout=3600):
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         if args[0] == "redteam" and args[1] == "generate":
             assert "--provider" in args
             assert args[args.index("--provider") + 1] == "openai:chat:internal-model"
@@ -460,6 +463,86 @@ def test_promptfoo_redteam_passes_grader_when_generation_provider_set(monkeypatc
     )
 
 
+def test_promptfoo_redteam_propagates_generation_provider_url(monkeypatch):
+    """generation_provider_url is injected as OPENAI_BASE_URL via _run_promptfoo_cli kwargs."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam"
+    config.parameters = {
+        "plugins": ["sql-injection"],
+        "num_tests_per_plugin": 1,
+        "generation_provider": "openai:chat:granite-2b",
+        "generation_provider_url": "https://granite-2b-svc.models.svc:8000/v1",
+    }
+
+    eval_json = _eval_json(1, 0, 0)
+    captured_kwargs = []
+
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
+        captured_kwargs.append(kwargs)
+        if args[0] == "redteam" and args[1] == "generate":
+            return _FakeCompletedProcess(0, "")
+        if args[0] == "eval":
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.write_text(json.dumps(eval_json))
+            return _FakeCompletedProcess(0, "")
+        raise AssertionError(f"unexpected promptfoo invocation: {args}")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    adapter.run_benchmark_job(config, callbacks)
+
+    gen_call = captured_kwargs[0]
+    assert gen_call["base_url"] == "https://granite-2b-svc.models.svc:8000/v1"
+    assert gen_call["api_key"] is not None
+
+    eval_call = captured_kwargs[1]
+    assert eval_call["base_url"] == "https://granite-2b-svc.models.svc:8000/v1"
+
+
+def test_promptfoo_redteam_generation_provider_url_defaults_to_model_url(monkeypatch):
+    """When generation_provider_url is not set, falls back to the target model URL."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam"
+    config.model.url = "https://my-model-svc.ns.svc:8000"
+    config.parameters = {
+        "plugins": ["sql-injection"],
+        "num_tests_per_plugin": 1,
+        "generation_provider": "openai:chat:some-model",
+    }
+
+    eval_json = _eval_json(1, 0, 0)
+    captured_kwargs = []
+
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
+        captured_kwargs.append(kwargs)
+        if args[0] == "redteam" and args[1] == "generate":
+            return _FakeCompletedProcess(0, "")
+        if args[0] == "eval":
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.write_text(json.dumps(eval_json))
+            return _FakeCompletedProcess(0, "")
+        raise AssertionError(f"unexpected promptfoo invocation: {args}")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    adapter.run_benchmark_job(config, callbacks)
+
+    gen_call = captured_kwargs[0]
+    assert gen_call["base_url"] == "https://my-model-svc.ns.svc:8000/v1"
+
+
 def test_promptfoo_eval_does_not_pass_grader_flag(monkeypatch):
     """--grader is a redteam-specific concern; promptfoo-eval must never pass it."""
     adapter = PromptfooAdapter(job_spec_path="meta/job.json")
@@ -473,7 +556,8 @@ def test_promptfoo_eval_does_not_pass_grader_flag(monkeypatch):
 
     import main as main_mod
 
-    def fake_run_cli(args, cwd, timeout=3600):
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         seen_eval_args.extend(args)
         out_path = Path(args[args.index("-o") + 1])
         out_path.write_text(json.dumps(eval_json))
@@ -497,7 +581,8 @@ def test_promptfoo_cli_failure_reports_failed_status(monkeypatch):
 
     import main as main_mod
 
-    def fake_run_cli(args, cwd, timeout=3600):
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         return _FakeCompletedProcess(1, "", "config error: bad yaml")
 
     monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
@@ -528,7 +613,8 @@ def test_promptfoo_exit_zero_no_output_file_raises(monkeypatch):
 
     import main as main_mod
 
-    def fake_run_cli(args, cwd, timeout=3600):
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         # Exit 0, empty stdout, but never writes the -o path — exactly what
         # was observed against the real cluster before this fix.
         return _FakeCompletedProcess(0, "")
@@ -555,7 +641,8 @@ def test_promptfoo_max_concurrency_passed_to_cli(monkeypatch):
 
     import main as main_mod
 
-    def fake_run_cli(args, cwd, timeout=3600):
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         seen_eval_args.extend(args)
         out_path = Path(args[args.index("-o") + 1])
         out_path.write_text(json.dumps(eval_json))
@@ -585,7 +672,8 @@ def test_promptfoo_persisting_artifacts_phase_reported_without_oci(monkeypatch):
 
     import main as main_mod
 
-    def fake_run_cli(args, cwd, timeout=3600):
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         out_path = Path(args[args.index("-o") + 1])
         out_path.write_text(json.dumps(eval_json))
         return _FakeCompletedProcess(0, "")
@@ -622,7 +710,8 @@ def test_promptfoo_oci_export_excludes_config_with_credentials(monkeypatch, tmp_
 
     import main as main_mod
 
-    def fake_run_cli(args, cwd, timeout=3600):
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         out_path = Path(args[args.index("-o") + 1])
         out_path.write_text(json.dumps(eval_json))
         return _FakeCompletedProcess(0, "")
@@ -632,6 +721,7 @@ def test_promptfoo_oci_export_excludes_config_with_credentials(monkeypatch, tmp_
     seen_exported_files: set[str] = set()
 
     def fake_create_oci_artifact(spec):
+        """Stub for create_oci_artifact."""
         # Snapshot files_path here — run_benchmark_job's finally block
         # deletes the whole work_dir (including this artifact subdir)
         # before returning to the caller.
@@ -667,7 +757,8 @@ def test_promptfoo_eval_json_preserved_in_metadata_beyond_size_gate(monkeypatch)
 
     monkeypatch.setattr(main_mod, "PROMPTFOO_EVAL_JSON_MAX_BYTES", 1)
 
-    def fake_run_cli(args, cwd, timeout=3600):
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         out_path = Path(args[args.index("-o") + 1])
         out_path.write_text(json.dumps(eval_json))
         return _FakeCompletedProcess(0, "")
@@ -682,3 +773,241 @@ def test_promptfoo_eval_json_preserved_in_metadata_beyond_size_gate(monkeypatch)
     # ...but evaluation_metadata still carries the exact original bytes.
     b64 = results.evaluation_metadata["promptfoo_eval_json_b64"]
     assert json.loads(base64.b64decode(b64)) == eval_json
+
+
+@pytest.mark.integration
+def test_promptfoo_redteam_exit_code_100_is_not_fatal(monkeypatch):
+    """promptfoo returns exit 100 when tests complete with failures (not a crash).
+
+    With --grader enabled, failed redteam tests produce exit 100 and a valid
+    eval.json. The adapter must parse the results instead of raising RuntimeError.
+    See https://promptfoo.dev/docs/usage/command-line — exit codes table.
+    """
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam"
+    config.parameters = {
+        "plugins": ["sql-injection"],
+        "num_tests_per_plugin": 2,
+        "generation_provider": "openai:chat:internal-model",
+    }
+
+    rows = [
+        {
+            "success": True,
+            "metadata": {"pluginId": "sql-injection", "severity": "high"},
+        },
+        {
+            "success": False,
+            "metadata": {"pluginId": "sql-injection", "severity": "high"},
+        },
+    ]
+    eval_json = _eval_json(1, 1, 0, plugin_rows=rows)
+
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
+        if args[0] == "redteam" and args[1] == "generate":
+            return _FakeCompletedProcess(0, "")
+        if args[0] == "eval":
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.write_text(json.dumps(eval_json))
+            return _FakeCompletedProcess(100, "")
+        raise AssertionError(f"unexpected promptfoo invocation: {args}")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    results = adapter.run_benchmark_job(config, callbacks)
+
+    assert results.overall_score == pytest.approx(0.5)
+    assert results.additional_info["pass_rate_by_plugin"][
+        "sql-injection"
+    ] == pytest.approx(0.5)
+
+
+@pytest.mark.integration
+def test_promptfoo_cli_exit_code_2_is_fatal(monkeypatch):
+    """Exit codes other than 0 and 100 are real CLI failures and must raise."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-eval"
+
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
+        return _FakeCompletedProcess(2, "", "segfault")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    with pytest.raises(RuntimeError, match="promptfoo CLI failed"):
+        adapter.run_benchmark_job(config, callbacks)
+
+
+def test_promptfoo_redteam_propagates_generation_provider_api_key(monkeypatch):
+    """Explicit generation_provider_api_key parameter takes precedence over target api_key."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam"
+    config.parameters = {
+        "plugins": ["sql-injection"],
+        "num_tests_per_plugin": 1,
+        "generation_provider": "openai:chat:external-model",
+        "generation_provider_url": "https://litellm.example.com/v1",
+        "generation_provider_api_key": "sk-gen-provider-key-123",
+    }
+
+    eval_json = _eval_json(1, 0, 0)
+    captured_kwargs = []
+
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
+        captured_kwargs.append(kwargs)
+        if args[0] == "redteam" and args[1] == "generate":
+            return _FakeCompletedProcess(0, "")
+        if args[0] == "eval":
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.write_text(json.dumps(eval_json))
+            return _FakeCompletedProcess(0, "")
+        raise AssertionError(f"unexpected promptfoo invocation: {args}")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    adapter.run_benchmark_job(config, callbacks)
+
+    gen_call = captured_kwargs[0]
+    assert gen_call["api_key"] == "sk-gen-provider-key-123"
+    assert gen_call["base_url"] == "https://litellm.example.com/v1"
+
+    eval_call = captured_kwargs[1]
+    assert eval_call["api_key"] == "sk-gen-provider-key-123"
+
+
+def test_promptfoo_redteam_generation_provider_api_key_from_env(monkeypatch):
+    """GENERATION_PROVIDER_API_KEY env var is used when parameter is not set."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam"
+    config.parameters = {
+        "plugins": ["sql-injection"],
+        "num_tests_per_plugin": 1,
+        "generation_provider": "openai:chat:external-model",
+    }
+
+    eval_json = _eval_json(1, 0, 0)
+    captured_kwargs = []
+
+    import main as main_mod
+
+    monkeypatch.setenv("GENERATION_PROVIDER_API_KEY", "sk-from-env-456")
+
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
+        captured_kwargs.append(kwargs)
+        if args[0] == "redteam" and args[1] == "generate":
+            return _FakeCompletedProcess(0, "")
+        if args[0] == "eval":
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.write_text(json.dumps(eval_json))
+            return _FakeCompletedProcess(0, "")
+        raise AssertionError(f"unexpected promptfoo invocation: {args}")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    adapter.run_benchmark_job(config, callbacks)
+
+    gen_call = captured_kwargs[0]
+    assert gen_call["api_key"] == "sk-from-env-456"
+
+
+def test_promptfoo_redteam_generation_provider_api_key_falls_back_to_target(monkeypatch):
+    """Without explicit key or env, generation_provider uses the target model's api_key."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam"
+    config.parameters = {
+        "plugins": ["sql-injection"],
+        "num_tests_per_plugin": 1,
+        "generation_provider": "openai:chat:internal-model",
+    }
+
+    eval_json = _eval_json(1, 0, 0)
+    captured_kwargs = []
+
+    import main as main_mod
+
+    monkeypatch.delenv("GENERATION_PROVIDER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-target-model-key")
+
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
+        captured_kwargs.append(kwargs)
+        if args[0] == "redteam" and args[1] == "generate":
+            return _FakeCompletedProcess(0, "")
+        if args[0] == "eval":
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.write_text(json.dumps(eval_json))
+            return _FakeCompletedProcess(0, "")
+        raise AssertionError(f"unexpected promptfoo invocation: {args}")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    adapter.run_benchmark_job(config, callbacks)
+
+    gen_call = captured_kwargs[0]
+    assert gen_call["api_key"] == "sk-target-model-key"
+
+
+def test_promptfoo_redteam_explicit_gen_url_does_not_leak_target_key(monkeypatch):
+    """When generation_provider_url points elsewhere, the target key must NOT be forwarded."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam"
+    config.parameters = {
+        "plugins": ["sql-injection"],
+        "num_tests_per_plugin": 1,
+        "generation_provider": "openai:chat:external-model",
+        "generation_provider_url": "https://external-llm.example.com/v1",
+    }
+
+    eval_json = _eval_json(1, 0, 0)
+    captured_kwargs = []
+
+    import main as main_mod
+
+    monkeypatch.delenv("GENERATION_PROVIDER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-managed-target-secret")
+
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
+        captured_kwargs.append(kwargs)
+        if args[0] == "redteam" and args[1] == "generate":
+            return _FakeCompletedProcess(0, "")
+        if args[0] == "eval":
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.write_text(json.dumps(eval_json))
+            return _FakeCompletedProcess(0, "")
+        raise AssertionError(f"unexpected promptfoo invocation: {args}")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    adapter.run_benchmark_job(config, callbacks)
+
+    gen_call = captured_kwargs[0]
+    assert gen_call["api_key"] == "not-required"
+    assert gen_call["api_key"] != "sk-managed-target-secret"

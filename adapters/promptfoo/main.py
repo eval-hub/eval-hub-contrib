@@ -255,24 +255,44 @@ def _build_redteam_config(
 # ---------------------------------------------------------------------------
 
 
-def _promptfoo_env() -> dict[str, str]:
-    """Return a copy of the process environment with required promptfoo flags set."""
+def _promptfoo_env(
+    *, api_key: str | None = None, base_url: str | None = None
+) -> dict[str, str]:
+    """Return a copy of the process environment with required promptfoo flags set.
+
+    When *api_key* / *base_url* are provided they are injected as
+    ``OPENAI_API_KEY`` / ``OPENAI_BASE_URL`` so that promptfoo's
+    ``generation_provider`` and ``--grader`` can reach cluster-internal
+    models that are not configured through the target provider YAML block.
+    """
     env = dict(os.environ)
     # See module docstring: required for non-interactive red-team generation.
     env["PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION"] = "1"
     env.setdefault("PROMPTFOO_DISABLE_TELEMETRY", "1")
+    if api_key:
+        env["OPENAI_API_KEY"] = api_key
+    if base_url:
+        env["OPENAI_BASE_URL"] = base_url
     return env
 
 
 def _run_promptfoo_cli(
-    args: list[str], cwd: Path, timeout: int = 3600
+    args: list[str],
+    cwd: Path,
+    timeout: int = 3600,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
 ) -> subprocess.CompletedProcess:
     """Invoke the promptfoo CLI and return the completed process.
 
-    promptfoo returns exit code 0 even when individual test cases error out
-    or fail assertions — pass/fail outcome must be read from the eval.json
-    stats, not the return code. A non-zero return code means the CLI itself
-    could not run (bad config, crash), which IS fatal.
+    promptfoo exit codes (https://promptfoo.dev/docs/usage/command-line):
+      0   — all tests passed
+      100 — evaluation completed but one or more assertions failed
+      1   — configuration error, provider error, or other runtime error
+
+    Exit 100 is NOT fatal: eval.json is written with valid results.
+    Only exit codes other than 0 and 100 indicate a real CLI failure.
     """
     cmd = ["promptfoo", *args]
     logger.info("Executing promptfoo CLI: %s", " ".join(cmd))
@@ -283,7 +303,7 @@ def _run_promptfoo_cli(
         text=True,
         timeout=timeout,
         check=False,
-        env=_promptfoo_env(),
+        env=_promptfoo_env(api_key=api_key, base_url=base_url),
     )
     if result.stdout:
         logger.info("promptfoo stdout:\n%s", result.stdout)
@@ -543,6 +563,37 @@ class PromptfooAdapter(FrameworkAdapter):
                 if is_redteam
                 else None
             )
+            explicit_gen_url = (
+                (config.parameters or {}).get("generation_provider_url")
+                if generation_provider
+                else None
+            )
+            if generation_provider and not explicit_gen_url:
+                fallback = config.model.url.strip().rstrip("/")
+                gen_provider_url: str | None = (
+                    fallback if fallback.endswith("/v1") else f"{fallback}/v1"
+                )
+            else:
+                gen_provider_url = explicit_gen_url
+
+            gen_provider_api_key: str | None = None
+            if generation_provider:
+                gen_provider_api_key = (
+                    (config.parameters or {}).get("generation_provider_api_key")
+                    or os.getenv("GENERATION_PROVIDER_API_KEY", "").strip()
+                )
+                if not gen_provider_api_key:
+                    if explicit_gen_url:
+                        gen_provider_api_key = "not-required"
+                        logger.warning(
+                            "No generation_provider_api_key for explicit "
+                            "generation_provider_url %s — the target model's "
+                            "managed credential is not forwarded to avoid "
+                            "leaking secrets to third-party endpoints.",
+                            explicit_gen_url,
+                        )
+                    else:
+                        gen_provider_api_key = api_key
             if is_redteam:
                 # promptfoo redteam test-case generation is always a separate
                 # step from `eval` here (never `redteam run`, which does not
@@ -564,7 +615,10 @@ class PromptfooAdapter(FrameworkAdapter):
                 ]
                 if generation_provider:
                     gen_args += ["--provider", generation_provider]
-                gen_result = _run_promptfoo_cli(gen_args, cwd=work_dir)
+                gen_result = _run_promptfoo_cli(
+                    gen_args, cwd=work_dir,
+                    api_key=gen_provider_api_key, base_url=gen_provider_url,
+                )
                 if gen_result.returncode != 0:
                     raise RuntimeError(
                         f"promptfoo redteam generate failed (exit {gen_result.returncode})\n"
@@ -604,14 +658,18 @@ class PromptfooAdapter(FrameworkAdapter):
             # unreachable hosted default.
             if is_redteam and generation_provider:
                 eval_args += ["--grader", generation_provider]
-            result = _run_promptfoo_cli(eval_args, cwd=work_dir)
-            if result.returncode != 0:
+            result = _run_promptfoo_cli(
+                eval_args, cwd=work_dir,
+                api_key=gen_provider_api_key,
+                base_url=gen_provider_url,
+            )
+            if result.returncode not in (0, 100):
                 raise RuntimeError(
                     f"promptfoo CLI failed (exit {result.returncode})\nstdout: {result.stdout}\nstderr: {result.stderr}"
                 )
             if not eval_json_path.exists():
                 raise RuntimeError(
-                    f"promptfoo eval completed (exit 0) but did not write {eval_json_path}\n"
+                    f"promptfoo eval completed (exit {result.returncode}) but did not write {eval_json_path}\n"
                     f"stdout: {result.stdout}\nstderr: {result.stderr}"
                 )
 
