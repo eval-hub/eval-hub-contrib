@@ -326,6 +326,7 @@ def test_promptfoo_eval_happy_path(monkeypatch, tmp_path):
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         if args[0] == "eval":
             out_path = Path(args[args.index("-o") + 1])
             out_path.write_text(json.dumps(eval_json))
@@ -390,6 +391,7 @@ def test_promptfoo_redteam_happy_path(monkeypatch):
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         if args[0] == "redteam" and args[1] == "generate":
             return _FakeCompletedProcess(0, "")
         if args[0] == "eval":
@@ -438,6 +440,7 @@ def test_promptfoo_redteam_passes_grader_when_generation_provider_set(monkeypatc
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         if args[0] == "redteam" and args[1] == "generate":
             assert "--provider" in args
             assert args[args.index("--provider") + 1] == "openai:chat:internal-model"
@@ -480,6 +483,7 @@ def test_promptfoo_redteam_propagates_generation_provider_url(monkeypatch):
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         captured_kwargs.append(kwargs)
         if args[0] == "redteam" and args[1] == "generate":
             return _FakeCompletedProcess(0, "")
@@ -521,6 +525,7 @@ def test_promptfoo_redteam_generation_provider_url_defaults_to_model_url(monkeyp
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         captured_kwargs.append(kwargs)
         if args[0] == "redteam" and args[1] == "generate":
             return _FakeCompletedProcess(0, "")
@@ -552,6 +557,7 @@ def test_promptfoo_eval_does_not_pass_grader_flag(monkeypatch):
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         seen_eval_args.extend(args)
         out_path = Path(args[args.index("-o") + 1])
         out_path.write_text(json.dumps(eval_json))
@@ -576,6 +582,7 @@ def test_promptfoo_cli_failure_reports_failed_status(monkeypatch):
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         return _FakeCompletedProcess(1, "", "config error: bad yaml")
 
     monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
@@ -607,6 +614,7 @@ def test_promptfoo_exit_zero_no_output_file_raises(monkeypatch):
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         # Exit 0, empty stdout, but never writes the -o path — exactly what
         # was observed against the real cluster before this fix.
         return _FakeCompletedProcess(0, "")
@@ -634,6 +642,7 @@ def test_promptfoo_max_concurrency_passed_to_cli(monkeypatch):
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         seen_eval_args.extend(args)
         out_path = Path(args[args.index("-o") + 1])
         out_path.write_text(json.dumps(eval_json))
@@ -664,6 +673,7 @@ def test_promptfoo_persisting_artifacts_phase_reported_without_oci(monkeypatch):
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         out_path = Path(args[args.index("-o") + 1])
         out_path.write_text(json.dumps(eval_json))
         return _FakeCompletedProcess(0, "")
@@ -701,6 +711,7 @@ def test_promptfoo_oci_export_excludes_config_with_credentials(monkeypatch, tmp_
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         out_path = Path(args[args.index("-o") + 1])
         out_path.write_text(json.dumps(eval_json))
         return _FakeCompletedProcess(0, "")
@@ -710,6 +721,7 @@ def test_promptfoo_oci_export_excludes_config_with_credentials(monkeypatch, tmp_
     seen_exported_files: set[str] = set()
 
     def fake_create_oci_artifact(spec):
+        """Stub for create_oci_artifact."""
         # Snapshot files_path here — run_benchmark_job's finally block
         # deletes the whole work_dir (including this artifact subdir)
         # before returning to the caller.
@@ -746,6 +758,7 @@ def test_promptfoo_eval_json_preserved_in_metadata_beyond_size_gate(monkeypatch)
     monkeypatch.setattr(main_mod, "PROMPTFOO_EVAL_JSON_MAX_BYTES", 1)
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         out_path = Path(args[args.index("-o") + 1])
         out_path.write_text(json.dumps(eval_json))
         return _FakeCompletedProcess(0, "")
@@ -796,6 +809,7 @@ def test_promptfoo_redteam_exit_code_100_is_not_fatal(monkeypatch):
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         if args[0] == "redteam" and args[1] == "generate":
             return _FakeCompletedProcess(0, "")
         if args[0] == "eval":
@@ -826,6 +840,7 @@ def test_promptfoo_cli_exit_code_2_is_fatal(monkeypatch):
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         return _FakeCompletedProcess(2, "", "segfault")
 
     monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
@@ -855,6 +870,7 @@ def test_promptfoo_redteam_propagates_generation_provider_api_key(monkeypatch):
     import main as main_mod
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         captured_kwargs.append(kwargs)
         if args[0] == "redteam" and args[1] == "generate":
             return _FakeCompletedProcess(0, "")
@@ -897,6 +913,7 @@ def test_promptfoo_redteam_generation_provider_api_key_from_env(monkeypatch):
     monkeypatch.setenv("GENERATION_PROVIDER_API_KEY", "sk-from-env-456")
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         captured_kwargs.append(kwargs)
         if args[0] == "redteam" and args[1] == "generate":
             return _FakeCompletedProcess(0, "")
@@ -936,6 +953,7 @@ def test_promptfoo_redteam_generation_provider_api_key_falls_back_to_target(monk
     monkeypatch.setenv("OPENAI_API_KEY", "sk-target-model-key")
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         captured_kwargs.append(kwargs)
         if args[0] == "redteam" and args[1] == "generate":
             return _FakeCompletedProcess(0, "")
@@ -976,6 +994,7 @@ def test_promptfoo_redteam_explicit_gen_url_does_not_leak_target_key(monkeypatch
     monkeypatch.setenv("OPENAI_API_KEY", "sk-managed-target-secret")
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
         captured_kwargs.append(kwargs)
         if args[0] == "redteam" and args[1] == "generate":
             return _FakeCompletedProcess(0, "")
