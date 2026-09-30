@@ -535,7 +535,7 @@ def test_promptfoo_redteam_generation_provider_url_defaults_to_model_url(monkeyp
     adapter.run_benchmark_job(config, callbacks)
 
     gen_call = captured_kwargs[0]
-    assert gen_call["base_url"] == "https://my-model-svc.ns.svc:8000"
+    assert gen_call["base_url"] == "https://my-model-svc.ns.svc:8000/v1"
 
 
 def test_promptfoo_eval_does_not_pass_grader_flag(monkeypatch):
@@ -951,3 +951,44 @@ def test_promptfoo_redteam_generation_provider_api_key_falls_back_to_target(monk
 
     gen_call = captured_kwargs[0]
     assert gen_call["api_key"] == "sk-target-model-key"
+
+
+def test_promptfoo_redteam_explicit_gen_url_does_not_leak_target_key(monkeypatch):
+    """When generation_provider_url points elsewhere, the target key must NOT be forwarded."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam"
+    config.parameters = {
+        "plugins": ["sql-injection"],
+        "num_tests_per_plugin": 1,
+        "generation_provider": "openai:chat:external-model",
+        "generation_provider_url": "https://external-llm.example.com/v1",
+    }
+
+    eval_json = _eval_json(1, 0, 0)
+    captured_kwargs = []
+
+    import main as main_mod
+
+    monkeypatch.delenv("GENERATION_PROVIDER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-managed-target-secret")
+
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        captured_kwargs.append(kwargs)
+        if args[0] == "redteam" and args[1] == "generate":
+            return _FakeCompletedProcess(0, "")
+        if args[0] == "eval":
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.write_text(json.dumps(eval_json))
+            return _FakeCompletedProcess(0, "")
+        raise AssertionError(f"unexpected promptfoo invocation: {args}")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    adapter.run_benchmark_job(config, callbacks)
+
+    gen_call = captured_kwargs[0]
+    assert gen_call["api_key"] == "not-required"
+    assert gen_call["api_key"] != "sk-managed-target-secret"

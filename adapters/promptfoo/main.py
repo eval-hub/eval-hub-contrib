@@ -563,17 +563,37 @@ class PromptfooAdapter(FrameworkAdapter):
                 if is_redteam
                 else None
             )
-            gen_provider_url = (
+            explicit_gen_url = (
                 (config.parameters or {}).get("generation_provider_url")
-                or config.model.url.strip().rstrip("/")
-            ) if generation_provider else None
+                if generation_provider
+                else None
+            )
+            if generation_provider and not explicit_gen_url:
+                fallback = config.model.url.strip().rstrip("/")
+                gen_provider_url: str | None = (
+                    fallback if fallback.endswith("/v1") else f"{fallback}/v1"
+                )
+            else:
+                gen_provider_url = explicit_gen_url
+
             gen_provider_api_key: str | None = None
             if generation_provider:
                 gen_provider_api_key = (
                     (config.parameters or {}).get("generation_provider_api_key")
                     or os.getenv("GENERATION_PROVIDER_API_KEY", "").strip()
-                    or api_key
                 )
+                if not gen_provider_api_key:
+                    if explicit_gen_url:
+                        gen_provider_api_key = "not-required"
+                        logger.warning(
+                            "No generation_provider_api_key for explicit "
+                            "generation_provider_url %s — the target model's "
+                            "managed credential is not forwarded to avoid "
+                            "leaking secrets to third-party endpoints.",
+                            explicit_gen_url,
+                        )
+                    else:
+                        gen_provider_api_key = api_key
             if is_redteam:
                 # promptfoo redteam test-case generation is always a separate
                 # step from `eval` here (never `redteam run`, which does not
