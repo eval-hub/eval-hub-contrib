@@ -567,6 +567,13 @@ class PromptfooAdapter(FrameworkAdapter):
                 (config.parameters or {}).get("generation_provider_url")
                 or config.model.url.strip().rstrip("/")
             ) if generation_provider else None
+            gen_provider_api_key: str | None = None
+            if generation_provider:
+                gen_provider_api_key = (
+                    (config.parameters or {}).get("generation_provider_api_key")
+                    or os.getenv("GENERATION_PROVIDER_API_KEY", "").strip()
+                    or api_key
+                )
             if is_redteam:
                 # promptfoo redteam test-case generation is always a separate
                 # step from `eval` here (never `redteam run`, which does not
@@ -590,7 +597,7 @@ class PromptfooAdapter(FrameworkAdapter):
                     gen_args += ["--provider", generation_provider]
                 gen_result = _run_promptfoo_cli(
                     gen_args, cwd=work_dir,
-                    api_key=api_key, base_url=gen_provider_url,
+                    api_key=gen_provider_api_key, base_url=gen_provider_url,
                 )
                 if gen_result.returncode != 0:
                     raise RuntimeError(
@@ -633,7 +640,7 @@ class PromptfooAdapter(FrameworkAdapter):
                 eval_args += ["--grader", generation_provider]
             result = _run_promptfoo_cli(
                 eval_args, cwd=work_dir,
-                api_key=api_key if generation_provider else None,
+                api_key=gen_provider_api_key,
                 base_url=gen_provider_url,
             )
             if result.returncode not in (0, 100):

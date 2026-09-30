@@ -261,6 +261,17 @@ parameters:
       model's URL — suitable when both models share the same endpoint.
       Only used when generation_provider is set.
 
+  - name: generation_provider_api_key
+    type: string
+    default: null
+    description: >
+      API key for the generation_provider endpoint. Injected as
+      OPENAI_API_KEY so promptfoo can authenticate with external model
+      services (e.g. LiteLLM, OpenAI) used for red-team test generation
+      and grading. Resolution order: this parameter, then the
+      GENERATION_PROVIDER_API_KEY environment variable, then the target
+      model's own API key. Only used when generation_provider is set.
+
   # --- common parameters ---
   - name: max_concurrency
     type: integer
