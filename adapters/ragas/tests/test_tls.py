@@ -16,8 +16,11 @@ import main as adapter
 
 @contextmanager
 def embedding_server(ca, hostname="localhost"):
+    """Run a local HTTPS server that returns a test embedding."""
+
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            """Return an OpenAI-compatible embedding response."""
             assert self.path == "/v1/embeddings"
             self.rfile.read(int(self.headers["Content-Length"]))
             body = json.dumps({
@@ -33,6 +36,7 @@ def embedding_server(ca, hostname="localhost"):
             self.wfile.write(body)
 
         def log_message(self, *args):
+            """Suppress HTTP server logging during tests."""
             pass
 
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -51,7 +55,10 @@ def embedding_server(ca, hostname="localhost"):
 
 
 def request_embedding(url):
+    """Request one embedding from the HTTPS test endpoint."""
+
     async def run():
+        """Send the asynchronous embedding request."""
         async with adapter._async_openai_client(url, api_key="test") as client:
             client.max_retries = 0
             client.timeout = 2
@@ -61,6 +68,7 @@ def request_embedding(url):
 
 @pytest.fixture
 def service_ca(monkeypatch, tmp_path):
+    """Mount a temporary CA while isolating the test from proxy settings."""
     for key in ("SSL_CERT_FILE", "SSL_CERT_DIR", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1")
@@ -72,6 +80,7 @@ def service_ca(monkeypatch, tmp_path):
 
 
 def test_mounted_service_ca_trusted(service_ca):
+    """Trust a server certificate issued by the mounted service CA."""
     with embedding_server(service_ca) as url:
         assert request_embedding(url).data[0].embedding == [0.1, 0.2]
 
@@ -93,6 +102,7 @@ def test_existing_trust_preserved(service_ca, monkeypatch, tmp_path, configured_
 
 @pytest.mark.parametrize("failure", ["untrusted", "hostname", "missing_mount"])
 def test_invalid_certificates_rejected(service_ca, monkeypatch, tmp_path, failure):
+    """Reject untrusted, hostname-mismatched, and unmounted certificates."""
     ca = trustme.CA() if failure == "untrusted" else service_ca
     hostname = "other.example" if failure == "hostname" else "localhost"
     if failure == "missing_mount":
@@ -105,6 +115,7 @@ def test_invalid_certificates_rejected(service_ca, monkeypatch, tmp_path, failur
 
 
 def test_malformed_mounted_ca_fails_closed(service_ca):
+    """Reject a malformed mounted CA instead of disabling verification."""
     adapter.SERVICE_CA_PATH.write_text("not a certificate")
     with pytest.raises(ssl.SSLError):
         adapter._async_openai_client("https://localhost", api_key="test")

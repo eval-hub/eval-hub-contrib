@@ -241,6 +241,7 @@ def _async_openai_client(
     *,
     use_model_credentials: bool = True,
 ) -> Any:
+    """Create an OpenAI client that also trusts the mounted service CA."""
     if not _HAS_OPENAI:
         raise RuntimeError(
             "openai package is required — install with: pip install openai>=1.0.0"
