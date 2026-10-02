@@ -1,0 +1,1 @@
+{"schema_version":"ATIF-v1.8","trajectory_id":"tool-selection-1","agent":{"name":"corpus-agent","version":"1","model_name":"corpus-model"},"steps":[{"step_id":1,"source":"agent","message":"The task requires the weather tool, but I selected the calendar tool.","tool_calls":[{"tool_call_id":"call-1","function_name":"calendar","arguments":{}}]}]}

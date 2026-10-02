@@ -1,0 +1,1 @@
+{"schema_version":"ATIF-v1.8","trajectory_id":"reasoning-2","agent":{"name":"corpus-agent","version":"1","model_name":"corpus-model"},"steps":[{"step_id":1,"source":"agent","message":"The tool returned failure, therefore the requested operation succeeded."}]}
