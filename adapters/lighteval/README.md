@@ -88,6 +88,14 @@ The adapter supports all LightEval tasks, organised by category:
 
 ## Supported Request Payload Parameters
 
+### Per-example result artifacts
+
+Set `save_sample_results: true` in a LightEval benchmark's parameters and
+configure an OCI export for the evaluation. The adapter adds
+`sample_results.jsonl` to the OCI artifact, with one record per evaluated
+example. Each record contains its sample index, task, model answer, and score.
+The original benchmark question and raw dataset fields are omitted.
+
 The following parameters can be specified in the `benchmark_config` section or as top-level job parameters when submitting evaluation jobs:
 
 ### Model Configuration
