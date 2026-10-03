@@ -137,6 +137,17 @@ class LightEvalAdapter(FrameworkAdapter):
                 additional_info=additional_info,
             )
 
+            if config.parameters.get("save_sample_results"):
+                from sample_results import save_sample_results
+
+                sample_file, sample_count = save_sample_results(
+                    output_dir,
+                    output_files[0].parent,
+                    config.benchmark_id,
+                )
+                output_files.append(sample_file)
+                logger.info("Saved %d per-example results to %s", sample_count, sample_file)
+
             logger.info(
                 f"Post-processing complete. Overall score: {overall_score}, "
                 f"Evaluated: {num_evaluated} examples, Files: {len(output_files)}"
@@ -235,6 +246,12 @@ class LightEvalAdapter(FrameworkAdapter):
 
         if not config.model.name:
             raise ValueError("model.name is required")
+
+        save_samples = config.parameters.get("save_sample_results", False)
+        if not isinstance(save_samples, bool):
+            raise ValueError("save_sample_results must be a boolean")
+        if save_samples and not (config.exports and config.exports.oci):
+            raise ValueError("save_sample_results requires an OCI export")
 
         # Validate model provider (from benchmark_config)
         provider = config.parameters.get("provider", "endpoint")

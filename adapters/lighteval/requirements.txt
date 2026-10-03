@@ -2,6 +2,7 @@
 
 # LightEval framework
 lighteval==0.13.0
+pyarrow
 
 # LiteLLM for endpoint support
 litellm[caching]==1.84.0
