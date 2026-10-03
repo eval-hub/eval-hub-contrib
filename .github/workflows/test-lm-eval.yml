@@ -1,0 +1,56 @@
+name: Test LM Evaluation Harness
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'adapters/lm-eval/**'
+      - 'Makefile'
+      - '.github/workflows/test-lm-eval.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'adapters/lm-eval/**'
+      - 'Makefile'
+      - '.github/workflows/test-lm-eval.yml'
+  workflow_dispatch:
+
+jobs:
+  # ── Integration tests (fully mocked — no lm_eval install required) ──────────
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test dependencies
+        working-directory: adapters/lm-eval
+        run: |
+          SDK_DEP=$(grep 'eval-hub-sdk' requirements.txt)
+          uv pip install --system "$SDK_DEP" -r requirements-test.txt
+
+      - name: Run unit tests
+        working-directory: adapters/lm-eval
+        run: pytest tests/ -v -m "not integration and not local"
+
+      - name: Run integration tests
+        working-directory: adapters/lm-eval
+        run: pytest tests/ -v -m integration
+
+  # ── Live endpoint tests (Ollama, vLLM) ────────────────────────────────────────
+  # Placeholder: these jobs require a tests/test_local_openai.py file with
+  # @pytest.mark.local + @pytest.mark.openai_endpoint markers (see the lighteval
+  # and guidellm adapters for the reference implementation). They will be added
+  # in a follow-up PR once the live endpoint test suite is written.
+  # test-local-ollama and test-local-vllm-cpu are intentionally absent here.
