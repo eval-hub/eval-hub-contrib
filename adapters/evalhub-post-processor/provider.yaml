@@ -31,7 +31,7 @@ parameters:
       confidence_interval with results_data_ref, calibration_data_ref,
       significance_level (alpha), optional num_parallel_threads, optional
       data_config format and column mappings in each calibration_data_ref entry,
-      plus optional results_data_config.
+      and optional results_data_ref.data_config with column and numeric value mappings.
   - name: operation_order
     type: array
     description: >

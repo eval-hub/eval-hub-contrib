@@ -161,21 +161,29 @@ def artifact_sources(job: dict, benchmark: dict) -> list[dict]:
 
 
 def result_config(config: dict, target: dict) -> dict:
-    descriptor = config.get("results_data_config", {})
+    reference = config["results_data_ref"]
+    if "data_config" in reference and "results_data_config" in config:
+        raise ValueError("Specify result mappings only in results_data_ref.data_config")
+    # Retain the previous adapter-only parameter for existing direct JobSpecs.
+    descriptor = reference.get("data_config", config.get("results_data_config", {}))
+    if descriptor is None:
+        return {}
     if isinstance(descriptor, dict):
         return descriptor
     if not isinstance(descriptor, list):
         raise ValueError(
-            "results_data_config must be an object or a list of selected configurations"
+            "results_data_ref.data_config must be an object or a list of selected configurations"
         )
     matches = []
     for entry in descriptor:
-        entry = object_value(entry, "results_data_config entry")
+        entry = object_value(entry, "results_data_ref.data_config entry")
         selection = entry.get("selection", {})
         if selection and all(str(target.get(k)) == str(v) for k, v in selection.items()):
             matches.append(entry)
     if len(matches) != 1:
-        raise ValueError("results_data_config must select exactly one format for each benchmark")
+        raise ValueError(
+            "results_data_ref.data_config must select exactly one format for each benchmark"
+        )
     return matches[0]
 
 

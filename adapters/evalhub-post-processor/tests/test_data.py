@@ -111,3 +111,82 @@ def test_shared_calibration_requires_benchmark_identity():
 def test_paths_cannot_escape(tmp_path, path):
     with pytest.raises(ValueError):
         within(tmp_path, path)
+
+
+def test_nested_categories_form_correct_ppi_arrays(tmp_path):
+    (tmp_path / "result.json").write_text(
+        json.dumps(
+            {
+                "samples": [
+                    {"id": index, "scores": {"judge": {"value": grade}}}
+                    for index, grade in enumerate(["fail", "pass", "partial", "pass"])
+                ]
+            }
+        )
+    )
+    config = {
+        "columns": {"sample_id": "id", "prediction": "scores.judge.value"},
+        "value_mappings": {"prediction": {"pass": 1, "fail": 0, "partial": 0.5}},
+    }
+    results = read_table(tmp_path, config)
+    calibration = Table(
+        [
+            {"sample_id": "c1", "label": 1, "prediction": 0.8},
+            {"sample_id": "c2", "label": 0, "prediction": 0.2},
+        ]
+    )
+    y, yhat, unlabeled = ppi_arrays(results, [calibration], {"metric": "accuracy"}, shared=False)
+    np.testing.assert_array_equal(y, [1, 0])
+    np.testing.assert_array_equal(yhat, [0.8, 0.2])
+    np.testing.assert_array_equal(unlabeled, [0, 1, 0.5, 1])
+
+
+def test_value_mapping_applies_to_metric_fallback_and_labels(tmp_path):
+    (tmp_path / "scores.json").write_text(
+        json.dumps(
+            [
+                {"sample_id": "a", "metrics": {"acc": "bad"}},
+                {"sample_id": "b", "metrics": {"acc": "good"}},
+            ]
+        )
+    )
+    results = read_table(tmp_path, {"value_mappings": {"prediction": {"good": 1, "bad": 0}}})
+    cal = Table(
+        [
+            {"sample_id": "c1", "label": "yes", "prediction": 0.8},
+            {"sample_id": "c2", "label": "no", "prediction": 0.2},
+        ],
+        config={"value_mappings": {"label": {"yes": 1, "no": 0}}},
+    )
+    labels, _, scores = ppi_arrays(results, [cal], {"metric": "acc"}, shared=False)
+    np.testing.assert_array_equal(labels, [1, 0])
+    np.testing.assert_array_equal(scores, [0, 1])
+
+
+@pytest.mark.parametrize("value", ["unknown", 1, True, {"value": "pass"}])
+def test_unmapped_categories_are_rejected(value):
+    table = Table(
+        [{"sample_id": "a", "prediction": value}],
+        config={"value_mappings": {"prediction": {"pass": 1}}},
+    )
+    with pytest.raises(ValueError, match="Unmapped prediction"):
+        ppi_arrays(table, [], {"metric": "accuracy"}, shared=False)
+
+
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        [],
+        {"sample_id": {"x": 1}},
+        {"prediction": {}},
+        {"prediction": []},
+        {"prediction": {1: 0}},
+        {"prediction": {"pass": True}},
+        {"prediction": {"pass": "1"}},
+        {"prediction": {"pass": float("nan")}},
+        {"prediction": {"pass": float("inf")}},
+    ],
+)
+def test_invalid_value_mapping_fails_before_loading_data(tmp_path, mapping):
+    with pytest.raises(ValueError, match="value_mappings"):
+        read_table(tmp_path, {"value_mappings": mapping})

@@ -116,7 +116,7 @@ Each `calibration_data_ref` entry holds its own optional `data_config`, alongsid
 the source (`pvc`, `s3`, `git`, or `hf`). Omitting it uses automatic file-format
 detection and the canonical column names.
 
-Both `calibration_data_ref[].data_config` and `results_data_config` support:
+The adapter reads `calibration_data_ref[].data_config` and `results_data_ref.data_config`:
 
 | Field | Meaning |
 |---|---|
@@ -124,6 +124,30 @@ Both `calibration_data_ref[].data_config` and `results_data_config` support:
 | `path` | Relative file or directory within the downloaded artifact to read |
 | `columns` | Maps canonical roles to source column names; dotted paths can access nested JSON fields |
 | `selection` | Constant benchmark/metric identity for a file that has no identity columns |
+| `value_mappings` | Explicit string-category-to-number maps for `prediction` or `label`; every present category must be declared |
+
+The standalone Eval Hub API exposes result mappings alongside the result source:
+
+```json
+{
+  "results_data_ref": {
+    "eval_job": {"id": "completed-job-uuid"},
+    "data_config": {
+      "format": "json",
+      "columns": {"sample_id": "id", "prediction": "scores.telemath_scorer.value"},
+      "value_mappings": {"prediction": {"C": 1, "I": 0}}
+    }
+  }
+}
+```
+
+Omitting result `data_config` preserves automatic detection and canonical fields.
+Value mappings are generic: the runtime has no framework-specific score rules.
+Mappings apply after field lookup, including dotted JSON paths. Their outputs
+must be finite JSON numbers; unknown categories fail rather than defaulting to
+zero. The previous operation-level `results_data_config` is retained for direct
+adapter JobSpecs only; using both locations is rejected. Calibration fields
+accepted by the HTTP API follow its separate `CalibrationDataConfig` schema.
 
 Column roles are `sample_id`, `prediction`, `label`, `metric`, `benchmark_id`,
 and `provider_id`. JSON can be an array, a `samples`/`records`
@@ -160,7 +184,7 @@ The mounted JobSpec and `/events` payload retain the API-required
 
 For multiple calibration references, each entry's `data_config` describes that
 entry's format, columns, and selection. For heterogeneous evaluation artifacts,
-`results_data_config` can be an array whose entries each have a `selection`
+`results_data_ref.data_config` can be an array whose entries each have a `selection`
 matching each source benchmark's ID/provider pair, with exactly one configuration
 selected per source result, for example:
 
@@ -232,16 +256,14 @@ runtime must arrange these before launching the post-processing pod:
    and `password`; Hugging Face uses `token`. OCI's `k8s.connection` is for the
    runtime/sidecar to resolve; this adapter never reads that registry Secret.
 4. Preserve `operations` and the data-format configurations in the benchmark
-   parameters, including each calibration reference's `data_config`. The current
-   standalone post-processing API has a flat mapper; its calibration reference
-   schema needs a `data_config` field, and its CI configuration needs a
-   `results_data_config` field. Supporting caller-defined formats through that
-   endpoint requires schema/mapping changes in eval-hub; ordinary benchmark
-   `parameters` can already carry these objects.
+   parameters, including `results_data_ref.data_config` and each calibration
+   reference's `data_config`. The Eval Hub standalone API carries these into
+   the generated execution job.
 
-Nested calibration references in arbitrary parameters are not automatically
-mounted by the current eval-hub runtime. The mounts/proxy configuration above
-must be supplied by deployment plumbing. The sibling eval-hub repo is unchanged.
+The Eval Hub runtime mounts calibration PVCs for its internal post-processing
+job using the dedicated PVC mapping above. Other source types need their own
+credential/download setup; accepting a data reference does not provision that
+setup automatically.
 
 ## Events
 

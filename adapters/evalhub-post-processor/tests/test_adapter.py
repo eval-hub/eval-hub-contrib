@@ -36,6 +36,7 @@ def runtime(tmp_path, monkeypatch):
     monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
     monkeypatch.delenv("MLFLOW_TRACKING_TOKEN", raising=False)
     monkeypatch.setenv("EVALHUB_MODE", "local")
+    monkeypatch.setenv("EVALHUB_TENANT", "test-tenant")
     spec = json.loads((Path(__file__).resolve().parents[1] / "meta/job.json").read_text())
     spec["model"] = {"name": "evaluation-post-processor"}
     spec["parameters"]["operations"]["confidence_interval"]["results_data_ref"]["eval_job"][
@@ -76,6 +77,8 @@ def runtime(tmp_path, monkeypatch):
 
     def handler(request):
         assert request.url.host == "sidecar"
+        if request.url.path.startswith("/api/v1/evaluations/"):
+            assert request.headers["X-Tenant"] == "test-tenant"
         if request.method == "POST":
             assert request.url.path == "/api/v1/evaluations/jobs/post-processing-job-001/events"
             events.append(json.loads(request.content)["benchmark_status_event"])
@@ -156,7 +159,32 @@ def test_completed_collection_downloads_each_benchmark_and_reports_real_ppi(runt
 
 
 @pytest.mark.parametrize("mlflow_fallback", [False, True])
-def test_completed_job_oci_pipeline_and_mlflow_fallback(runtime, mlflow_fallback):
+@pytest.mark.parametrize("mapping_style", ["canonical", "object", "selected"])
+def test_completed_job_oci_pipeline_and_mlflow_fallback(runtime, mlflow_fallback, mapping_style):
+    if mapping_style != "canonical":
+        grades = ["poor", "fair", "good", "excellent"]
+        runtime["data"]["samples"] = [
+            {"uid": row["sample_id"], "scores": {"judge": {"value": grade}}}
+            for row, grade in zip(runtime["data"]["samples"], grades, strict=True)
+        ]
+        descriptor = {
+            "columns": {"sample_id": "uid", "prediction": "scores.judge.value"},
+            "value_mappings": {"prediction": dict(zip(grades, [0.2, 0.4, 0.8, 0.9], strict=True))},
+        }
+        if mapping_style == "selected":
+            descriptor = [
+                {
+                    **descriptor,
+                    "selection": {
+                        "benchmark_id": f"benchmark-{index}",
+                        "provider_id": "test-provider",
+                    },
+                }
+                for index in (0, 1)
+            ]
+        runtime["spec"]["parameters"]["operations"]["confidence_interval"]["results_data_ref"][
+            "data_config"
+        ] = descriptor
     payload = json.dumps(runtime["data"]).encode()
     blob_digest = "sha256:" + hashlib.sha256(payload).hexdigest()
     manifest = json.dumps(
@@ -306,7 +334,8 @@ def test_flat_server_parameters_compatibility(runtime):
     assert "confidence_interval" in runtime["run"]().additional_info
 
 
-def test_event_delivery_failure_is_not_silently_successful():
+def test_event_delivery_failure_is_not_silently_successful(monkeypatch):
+    monkeypatch.setenv("EVALHUB_TENANT", "test-tenant")
     spec = JobSpec(
         id="post",
         provider_id="internal",
@@ -325,9 +354,7 @@ def test_event_delivery_failure_is_not_silently_successful():
 
 
 def test_alpha_and_thread_validation(runtime):
-    config = copy.deepcopy(
-        runtime["spec"]["parameters"]["operations"]["confidence_interval"]
-    )
+    config = copy.deepcopy(runtime["spec"]["parameters"]["operations"]["confidence_interval"])
     config["significance_level"] = "0.7"
     assert ci_config(config)["significance_level"] == 0.7
     config["significance_level"] = True
@@ -360,9 +387,13 @@ def test_oci_reference_uses_benchmark_digest():
     assert source[0]["oci"]["digest"] == digest
 
 
-def test_external_data_uses_manifest_primary_metric(runtime, tmp_path, monkeypatch):
+@pytest.mark.parametrize("mapped", [False, True])
+def test_external_data_uses_manifest_primary_metric(runtime, tmp_path, monkeypatch, mapped):
     results = tmp_path / "external-results"
     results.mkdir()
+    if mapped:
+        for row in runtime["data"]["samples"]:
+            row["external_id"] = row.pop("sample_id")
     (results / "samples.json").write_text(json.dumps(runtime["data"]))
     # A single external source has no source benchmark identities.
     calibration = [
@@ -376,6 +407,8 @@ def test_external_data_uses_manifest_primary_metric(runtime, tmp_path, monkeypat
     )
     config = runtime["spec"]["parameters"]["operations"]["confidence_interval"]
     config["results_data_ref"] = {"pvc": {"claim_name": "results"}}
+    if mapped:
+        config["results_data_ref"]["data_config"] = {"columns": {"sample_id": "external_id"}}
     config["calibration_data_ref"][0].pop("data_config")
     result = runtime["run"]()
     bounds = result.additional_info["confidence_interval"]["confidence_interval"]
@@ -386,9 +419,7 @@ def test_external_data_uses_manifest_primary_metric(runtime, tmp_path, monkeypat
 @pytest.mark.parametrize("broken", [False, True])
 def test_cli_exit_code_and_terminal_event(runtime, monkeypatch, broken):
     if broken:
-        runtime["spec"]["parameters"] = {
-            "operations": {"not-registered": {}}
-        }
+        runtime["spec"]["parameters"] = {"operations": {"not-registered": {}}}
     runtime["path"].write_text(json.dumps(runtime["spec"]))
     monkeypatch.setenv("EVALHUB_JOB_SPEC_PATH", str(runtime["path"]))
     assert main.main() == int(broken)
@@ -409,3 +440,21 @@ def test_invalid_thread_count_is_rejected(runtime, threads):
     config["num_parallel_threads"] = threads
     with pytest.raises(ValueError, match="num_parallel_threads"):
         ci_config(config)
+
+
+@pytest.mark.parametrize("selection", [{"provider_id": "absent"}, {"provider_id": "test-provider"}])
+def test_result_config_rejects_zero_or_multiple_matches(runtime, selection):
+    config = runtime["spec"]["parameters"]["operations"]["confidence_interval"]
+    config["results_data_ref"]["data_config"] = [{"selection": selection}] * 2
+    with pytest.raises(ValueError, match="exactly one format"):
+        runtime["run"]()
+    assert runtime["events"][-1]["status"] == "failed"
+
+
+def test_legacy_adapter_result_config_and_conflict(runtime):
+    config = runtime["spec"]["parameters"]["operations"]["confidence_interval"]
+    config["results_data_config"] = {"columns": {"sample_id": "sample_id"}}
+    assert runtime["run"]().additional_info["confidence_interval"]["benchmarks"]
+    config["results_data_ref"]["data_config"] = {}
+    with pytest.raises(ValueError, match="only in results_data_ref.data_config"):
+        runtime["run"]()

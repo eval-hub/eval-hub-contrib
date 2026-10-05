@@ -5,11 +5,31 @@ from __future__ import annotations
 import os
 import ssl
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 from evalhub.adapter import JobCallbacks, JobPhase, JobResults, JobSpec, JobStatusUpdate
+
+NAMESPACE_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+
+
+def _tenant() -> str:
+    """Resolve the tenant namespace projected into the adapter pod."""
+    try:
+        tenant = NAMESPACE_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        tenant = ""
+    if not tenant:
+        tenant = os.getenv("EVALHUB_TENANT", "").strip()
+    if not tenant:
+        tenant = os.getenv("MLFLOW_WORKSPACE", "").strip()
+    if not tenant:
+        raise RuntimeError(
+            "Eval Hub requests require the projected pod namespace or EVALHUB_TENANT"
+        )
+    return tenant
 
 
 def tls_context() -> ssl.SSLContext:
@@ -26,7 +46,11 @@ class Sidecar:
         self._owns_client = client is None
 
     def get(self, path: str, **kwargs: Any) -> dict:
-        response = self.client.get(self.base_url + path, follow_redirects=False, **kwargs)
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers["X-Tenant"] = _tenant()
+        response = self.client.get(
+            self.base_url + path, headers=headers, follow_redirects=False, **kwargs
+        )
         response.raise_for_status()
         data = response.json()
         if not isinstance(data, dict):
@@ -37,6 +61,7 @@ class Sidecar:
         response = self.client.post(
             f"{self.base_url}/api/v1/evaluations/jobs/{quote(job_id, safe='')}/events",
             json={"benchmark_status_event": event},
+            headers={"X-Tenant": _tenant()},
             follow_redirects=False,
         )
         # Do not report success to the process supervisor if event delivery failed.

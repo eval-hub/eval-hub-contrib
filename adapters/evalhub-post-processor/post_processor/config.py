@@ -30,11 +30,20 @@ def source_type(ref: Any, *, calibration: bool = False) -> str:
     if calibration and key not in CALIBRATION_SOURCES:
         raise ValueError("calibration_data_ref supports s3, pvc, git, or hf")
     object_value(ref[key], key)
-    metadata = {"type", "resolved_sha"}
-    if calibration:
-        metadata.add("data_config")
-        if "data_config" in ref:
-            object_value(ref["data_config"], "calibration_data_ref[].data_config")
+    metadata = {"type", "resolved_sha", "data_config"}
+    if "data_config" in ref:
+        descriptor = ref["data_config"]
+        if calibration:
+            object_value(descriptor, "calibration_data_ref[].data_config")
+        elif isinstance(descriptor, list):
+            if not descriptor:
+                raise ValueError("results_data_ref.data_config array must not be empty")
+            for entry in descriptor:
+                entry = object_value(entry, "results_data_ref.data_config entry")
+                if not object_value(entry.get("selection"), "data_config selection"):
+                    raise ValueError("results_data_ref.data_config entries need a selection")
+        elif descriptor is not None:
+            object_value(descriptor, "results_data_ref.data_config")
     unknown = set(ref) - SOURCES - metadata
     if unknown:
         raise ValueError(f"Unknown data reference fields: {sorted(unknown)}")
@@ -105,10 +114,6 @@ def operations(parameters: dict) -> list[tuple[str, dict]]:
     if not isinstance(order, list) or any(not isinstance(name, str) for name in order):
         raise ValueError("parameters.operation_order must be an array of operation names")
     names = set(parsed)
-    if (
-        len(order) != len(names)
-        or len(set(order)) != len(order)
-        or set(order) != names
-    ):
+    if len(order) != len(names) or len(set(order)) != len(order) or set(order) != names:
         raise ValueError("parameters.operation_order must list each operation name exactly once")
     return [(name, parsed[name]) for name in order]

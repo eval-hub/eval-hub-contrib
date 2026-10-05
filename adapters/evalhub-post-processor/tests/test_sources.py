@@ -12,6 +12,28 @@ from post_processor.sources import Sources
 from post_processor.transport import Sidecar
 
 
+def test_sidecar_requests_include_projected_tenant(tmp_path, monkeypatch):
+    from post_processor import transport
+
+    namespace = tmp_path / "namespace"
+    namespace.write_text("sagar\n")
+    monkeypatch.setattr(transport, "NAMESPACE_PATH", namespace)
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"resource": {"id": "source"}})
+        return httpx.Response(204)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        sidecar = Sidecar("http://sidecar", client=client)
+        assert sidecar.get("/api/v1/evaluations/jobs/source")["resource"]["id"] == "source"
+        sidecar.event("post-processing-job", {"status": "running"})
+
+    assert [request.headers["X-Tenant"] for request in requests] == ["sagar", "sagar"]
+
+
 def digest(data):
     return "sha256:" + hashlib.sha256(data).hexdigest()
 

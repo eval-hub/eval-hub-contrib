@@ -77,11 +77,20 @@ class Table:
     def get(self, row: dict, role: str) -> Any:
         columns = self.config.get("columns", {})
         if role in columns:
-            return field_value(row, columns[role])
-        value = row.get(role)
-        if value is None and role == "sample_id":
-            value = row.get("doc_id")
-        return value
+            value = field_value(row, columns[role])
+        else:
+            value = row.get(role)
+            if value is None and role == "sample_id":
+                value = row.get("doc_id")
+        return self.map_value(value, role)
+
+    def map_value(self, value: Any, role: str) -> Any:
+        mapping = self.config.get("value_mappings", {}).get(role)
+        if mapping is None or value is None:
+            return value
+        if not isinstance(value, str) or value not in mapping:
+            raise ValueError(f"Unmapped {role} value; every category needs a value_mappings entry")
+        return mapping[value]
 
 
 def read_table(root: Path, config: dict | None = None) -> Table:
@@ -96,6 +105,20 @@ def read_table(root: Path, config: dict | None = None) -> Table:
         raise ValueError(f"columns must map these roles to field names: {sorted(ROLES)}")
     if any(not isinstance(v, str) or not v for v in columns.values()):
         raise ValueError("Column mappings must be nonempty field names")
+    mappings = config.get("value_mappings", {})
+    if not isinstance(mappings, dict) or set(mappings) - {"prediction", "label"}:
+        raise ValueError("value_mappings supports prediction and label roles")
+    for role, mapping in mappings.items():
+        if (
+            not isinstance(mapping, dict)
+            or not mapping
+            or any(not isinstance(k, str) for k in mapping)
+        ):
+            raise ValueError(f"value_mappings.{role} must be a nonempty string-to-number map")
+        for value in mapping.values():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"value_mappings.{role} outputs must be finite numeric scores")
+            numeric(value, f"value_mappings.{role} output")
     selection = config.get("selection", {})
     if not isinstance(selection, dict) or set(selection) - {
         "benchmark_id",
@@ -199,7 +222,7 @@ def prediction(table: Table, row: dict, metric: str) -> Any:
     # Existing frameworks often store per-example scores by metric name.
     for scores in (row, row.get("metrics", {}), row.get("scores", {})):
         if isinstance(scores, dict) and metric in scores:
-            return scores[metric]
+            return table.map_value(scores[metric], "prediction")
     return None
 
 
