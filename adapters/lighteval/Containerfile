@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy adapter implementation
 COPY main.py .
+COPY sample_results.py ./
 
 # Create writable cache directories with proper permissions
 # Make site-packages writable for lighteval to cache task data

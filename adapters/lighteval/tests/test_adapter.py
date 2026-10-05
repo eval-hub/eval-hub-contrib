@@ -218,6 +218,66 @@ def test_main_uploads_result_artifacts_to_mlflow(
 
 
 @pytest.mark.integration
+def test_oci_export_includes_opted_in_sample_results(
+    tmp_path, mock_callbacks, monkeypatch, mock_hf_api
+):
+    """The OCI directory contains selected sample fields when requested."""
+    import pyarrow as pa
+    import pyarrow.parquet as parquet
+
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    job = json.loads(Path("meta/job.json").read_text())
+    job["parameters"]["save_sample_results"] = True
+    job["exports"] = {
+        "oci": {
+            "coordinates": {
+                "oci_host": "quay.io",
+                "oci_repository": "test-org/test-repo",
+                "oci_tag": "test-tag",
+                "annotations": {},
+            }
+        }
+    }
+    (meta_dir / "job.json").write_text(json.dumps(job))
+    adapter = LightEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
+
+    def fake_run_lighteval(**kwargs):
+        detail_file = kwargs["output_dir"] / "details" / "model" / "details_boolq.parquet"
+        detail_file.parent.mkdir(parents=True)
+        parquet.write_table(
+            pa.Table.from_pylist([{
+                "doc": {"query": "Question", "specific": {"private": "do not export"}},
+                "model_response": {"text": ["Answer"]},
+                "metric": {"accuracy": 1},
+            }]),
+            detail_file,
+        )
+        return CANNED_RESULTS
+
+    monkeypatch.setattr(adapter, "_run_lighteval", fake_run_lighteval)
+    adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+
+    spec = mock_callbacks.create_oci_artifact.call_args.args[0]
+    sample_file = spec.files_path / "sample_results.jsonl"
+    assert sample_file.is_file()
+    sample = json.loads(sample_file.read_text())
+    assert sample["answers"] == ["Answer"]
+    assert sample["metric"] == {"accuracy": 1}
+    assert set(sample) == {"sample_index", "task", "answers", "metric"}
+    assert "do not export" not in sample_file.read_text()
+    assert "Question" not in sample_file.read_text()
+    assert not (spec.files_path / "details").exists()
+
+
+@pytest.mark.integration
+def test_sample_export_requires_oci(adapter, mock_callbacks):
+    adapter.job_spec.parameters["save_sample_results"] = True
+    with pytest.raises(ValueError, match="requires an OCI export"):
+        adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+
+
+@pytest.mark.integration
 def test_results_use_local_jobs_base_path(adapter, tmp_path):
     """Results are saved under local_jobs_base_path/results, not hardcoded /tmp paths."""
     expected_base = adapter.local_jobs_base_path
