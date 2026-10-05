@@ -36,6 +36,8 @@ from evalhub.adapter import (
     OCIArtifactSpec,
 )
 
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
+
 logger = logging.getLogger(__name__)
 
 # Maps provider.yaml benchmark IDs → internal RULER task keys (from synthetic.yaml)
@@ -472,6 +474,7 @@ class RulerAdapter(FrameworkAdapter):
                     use_fast=True,
                     # Request tokenizer files only — skip model weights
                     local_files_only=False,
+                    token=self._hf_token(),
                 )
                 return True
             if tokenizer_type == "openai":
@@ -520,13 +523,26 @@ class RulerAdapter(FrameworkAdapter):
         """Create a single shared OpenAI-compatible client for the whole job."""
         from openai import OpenAI  # noqa: PLC0415
 
-        api_key = os.getenv("MODEL_API_KEY", "")
+        api_key = (
+            resolve_model_credentials().api_key
+            or os.getenv("MODEL_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+        )
         if not api_key:
             raise ValueError(
-                "MODEL_API_KEY environment variable is required for API authentication. "
-                "Set it to 'dummy' or 'none' explicitly if the endpoint has no auth."
+                "Model API credentials are required. Configure model.auth.secret_ref "
+                "or MODEL_API_KEY/OPENAI_API_KEY for a direct endpoint."
             )
         return OpenAI(base_url=model_url, api_key=api_key)
+
+    @staticmethod
+    def _hf_token() -> str | None:
+        """Resolve Hub authentication without exposing it in command arguments."""
+        return (
+            read_model_auth_key("hf-token")
+            or os.getenv("HF_TOKEN")
+            or os.getenv("HUGGING_FACE_HUB_TOKEN")
+        )
 
     def _generate_task_data(
         self,
@@ -579,6 +595,11 @@ class RulerAdapter(FrameworkAdapter):
             "--random_seed", str(random_seed),
             "--model_template_type", model_template,
         ]
+
+        hf_token = self._hf_token()
+        if hf_token:
+            env["HF_TOKEN"] = hf_token
+            env["HUGGING_FACE_HUB_TOKEN"] = hf_token
 
         logger.info(f"Generating data: task={task_id} ctx={context_length}")
         result = subprocess.run(
@@ -670,7 +691,7 @@ class RulerAdapter(FrameworkAdapter):
                 if isinstance(exc, (_openai.AuthenticationError, _openai.PermissionDeniedError)):
                     raise RuntimeError(
                         f"API authentication failed for {model_name}: {exc}. "
-                        "Check MODEL_API_KEY."
+                        "Check model.auth.secret_ref or the model API credential environment."
                     ) from exc
                 logger.warning(
                     f"Inference failed for sample {sample.get('index', '?')}: {exc}"
