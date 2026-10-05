@@ -1,0 +1,13 @@
+FROM registry.access.redhat.com/ubi9/python-312:latest
+
+USER 0
+RUN dnf install -y git && dnf clean all
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY main.py .
+COPY post_processor ./post_processor
+RUN chown -R 1001:0 /app && chmod -R g=u /app
+ENV PYTHONUNBUFFERED=1 EVALHUB_MODE=k8s HOME=/tmp NUMBA_CACHE_DIR=/tmp/numba
+USER 1001
+ENTRYPOINT ["python", "main.py"]
