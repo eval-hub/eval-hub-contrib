@@ -212,8 +212,10 @@ For the full list of supported fields, see the [LiteLLMModelConfig reference](ht
         "num_few_shot": 3,
         "num_examples": 200,
         "parameters": {
-          "temperature": 0.0,
-          "top_p": 1.0
+          "generation_parameters": {
+            "temperature": 0.0,
+            "top_p": 1.0
+          }
         }
       }
     }
