@@ -90,7 +90,23 @@ def extract_results(
     return evaluation_results, capability_entries, num_samples
 
 
+# Dispersion metrics describe the spread of a score, not the score itself, so they must
+# not be averaged into the overall score (accuracy 1.0 with stderr 0.0 is 1.0, not 0.5).
+_DISPERSION_METRICS = frozenset({"stderr", "bootstrap_stderr", "std", "var"})
+
+
+def _is_dispersion_metric(metric_name: str) -> bool:
+    """True for ``<scorer>/<metric>`` names whose metric is a spread, e.g. ``match/stderr``."""
+    return metric_name.rsplit("/", 1)[-1] in _DISPERSION_METRICS
+
+
 def compute_overall_score(results: list[EvaluationResult], mode: str) -> float | None:
+    """Representative score for logging and ``JobResults.overall_score``.
+
+    Petri/Bloom report the primary ``concerning/mean``. Otherwise this is the mean of
+    the score metrics, excluding dispersion metrics such as stderr. EvalHub selects the
+    primary metric for pass/fail from the full results list via ``primary_score.metric``.
+    """
     if not results:
         return None
 
@@ -105,6 +121,8 @@ def compute_overall_score(results: list[EvaluationResult], mode: str) -> float |
     values = [
         float(r.metric_value)
         for r in results
-        if isinstance(r.metric_value, (int, float)) and r.metric_value == r.metric_value
+        if isinstance(r.metric_value, (int, float))
+        and r.metric_value == r.metric_value
+        and not _is_dispersion_metric(r.metric_name)
     ]
     return round(sum(values) / len(values), 4) if values else None

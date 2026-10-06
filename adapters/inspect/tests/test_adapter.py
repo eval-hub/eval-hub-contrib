@@ -12,7 +12,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from evalhub.adapter import JobPhase, OCIArtifactResult
+from evalhub.adapter import EvaluationResult, JobPhase, OCIArtifactResult
 from main import InspectAdapter
 from _benchmarks import (
     PETRI_SEED_MAP,
@@ -700,6 +700,40 @@ def test_standard_results_extracted_correctly(job_spec_path, standard_eval_log):
     assert len(results) == 2  # accuracy/accuracy + accuracy/stderr
     assert any(r.metric_name == "accuracy/accuracy" for r in results)
     assert num == 10
+
+
+def _metric(name: str, value: float) -> EvaluationResult:
+    """Build a float EvaluationResult for overall-score tests."""
+    return EvaluationResult(metric_name=name, metric_value=value, metric_type="float", num_samples=10)
+
+
+def test_standard_overall_score_excludes_stderr(job_spec_path, standard_eval_log):
+    """The overall score of a standard run is the accuracy, not accuracy averaged with stderr."""
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    results, _, _ = adapter._extract_results(standard_eval_log, "inspect/gsm8k", "standard")
+    accuracy = next(r.metric_value for r in results if r.metric_name == "accuracy/accuracy")
+    assert adapter._compute_overall_score(results, "standard") == pytest.approx(accuracy)
+
+
+@pytest.mark.parametrize("stderr_name", ["stderr", "bootstrap_stderr", "std", "var"])
+def test_overall_score_ignores_dispersion_metrics(job_spec_path, stderr_name):
+    """accuracy 1.0 with a zero-width spread reports 1.0, not 0.5."""
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    results = [_metric("match/accuracy", 1.0), _metric(f"match/{stderr_name}", 0.0)]
+    assert adapter._compute_overall_score(results, "standard") == pytest.approx(1.0)
+
+
+def test_overall_score_still_averages_score_metrics(job_spec_path):
+    """Several genuine score metrics are still averaged; only the spread is dropped."""
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    results = [_metric("a/accuracy", 0.8), _metric("b/accuracy", 0.4), _metric("a/stderr", 0.2)]
+    assert adapter._compute_overall_score(results, "standard") == pytest.approx(0.6)
+
+
+def test_overall_score_none_when_only_dispersion_metrics(job_spec_path):
+    """With nothing but spread metrics there is no meaningful score to report."""
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    assert adapter._compute_overall_score([_metric("match/stderr", 0.1)], "standard") is None
 
 
 def test_eval_awareness_mapped_to_alignment_meta(job_spec_path, petri_eval_log):
