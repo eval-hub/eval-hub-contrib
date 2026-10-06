@@ -245,6 +245,48 @@ def test_standard_model_roles_injected(job_spec_path, tmp_path, monkeypatch):
     assert "INSPECT_EVAL_MODEL" in env
 
 
+def test_strong_reject_routes_judge_to_isolated_grader(job_spec_path, tmp_path, monkeypatch):
+    """StrongREJECT uses a separate grader endpoint/key without putting the key in argv."""
+    monkeypatch.setenv("OPENAI_API_KEY", "target-model-key")
+    monkeypatch.setenv("OPENAI_JUDGE_API_KEY", "judge-secret-key")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/strong-reject"
+    adapter.job_spec.model.name = "meta-llama/Llama-3.3-70B-Instruct"
+    adapter.job_spec.model.url = "https://maas.example.test/v1"
+    adapter.job_spec.parameters["grader_model"] = "gpt-4o-mini"
+    adapter.job_spec.parameters["grader_base_url"] = "https://api.openai.com/v1"
+    # A legacy task arg must not keep routing the judge back to the target.
+    adapter.job_spec.parameters["task_args"] = {
+        "judge_llm": "openai/meta-llama/Llama-3.3-70B-Instruct"
+    }
+
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(
+        adapter.job_spec, "standard", "inspect_evals/strong_reject", tmp_path, None, env
+    )
+    roles = _parse_model_roles(cmd)
+
+    assert roles["grader"] == "openai-api/openai_judge/gpt-4o-mini"
+    assert env["OPENAI_BASE_URL"] == "https://maas.example.test/v1"
+    assert env["OPENAI_API_KEY"] == "target-model-key"
+    assert env["OPENAI_JUDGE_BASE_URL"] == "https://api.openai.com/v1"
+    assert env["OPENAI_JUDGE_API_KEY"] == "judge-secret-key"
+    assert "judge_llm=None" in cmd
+    assert "target-model-key" not in cmd
+    assert "judge-secret-key" not in cmd
+
+
+def test_strong_reject_external_grader_requires_secret_env(job_spec_path, monkeypatch):
+    monkeypatch.delenv("OPENAI_JUDGE_API_KEY", raising=False)
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/strong-reject"
+    adapter.job_spec.parameters["grader_model"] = "gpt-4o-mini"
+
+    with pytest.raises(ValueError, match="OPENAI_JUDGE_API_KEY"):
+        adapter._build_env(adapter.job_spec, "standard")
+
+
 def test_standard_no_model_roles_when_absent(job_spec_path, tmp_path, monkeypatch):
     """Standard mode: no --model-role flags when model_roles is not set."""
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
