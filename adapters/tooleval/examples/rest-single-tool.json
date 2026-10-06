@@ -1,0 +1,29 @@
+{
+  "name": "tooleval-single-tool-smoke",
+  "timeout_minutes": 30,
+  "model": {
+    "name": "my-model",
+    "url": "https://my-vllm.example.com/v1",
+    "auth": {
+      "secret_ref": "my-model-auth"
+    }
+  },
+  "benchmarks": [
+    {
+      "id": "single-tool",
+      "provider_id": "tooleval",
+      "parameters": {
+        "tool_server_url": "http://toolbench-server.my-tenant.svc:8080",
+        "num_tasks": 1,
+        "instruction": "Use the available tool to echo back the exact message: hello",
+        "category": "Tools",
+        "tool_name": "echo",
+        "api_name": "echo_message",
+        "tool_input": { "message": "hello" },
+        "enable_judge": true,
+        "probe_models": true,
+        "debug_io": true
+      }
+    }
+  ]
+}

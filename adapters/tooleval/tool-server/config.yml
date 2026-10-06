@@ -1,0 +1,13 @@
+# StableToolBench virtual API — cache-only (no RapidAPI / OpenAI egress).
+# Vendored from THUNLP-MT/StableToolBench (Apache-2.0); see PIN.txt.
+api_key: ""
+api_base: ""
+model: gpt-4-turbo
+temperature: 0
+toolbench_url: ""
+tools_folder: "./data/fixtures/tools"
+cache_folder: "./data/fixtures/tool_response_cache"
+is_save: false
+cache_only: true
+port: 8080
+log_file: "./server.log"

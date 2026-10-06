@@ -18,6 +18,8 @@ IMAGE_RAGAS = $(REGISTRY)/community-ragas:$(VERSION)
 IMAGE_SWEBENCH = $(REGISTRY)/community-swebench:$(VERSION)
 IMAGE_RULER = $(REGISTRY)/community-ruler:$(VERSION)
 IMAGE_NEMO_GUARDRAILS = $(REGISTRY)/community-nemo-guardrails:$(VERSION)
+IMAGE_TOOLEVAL = $(REGISTRY)/community-tooleval:$(VERSION)
+IMAGE_TOOLBENCH_SERVER = $(REGISTRY)/community-toolbench-server:$(VERSION)
 IMAGE_PROMPTFOO = $(REGISTRY)/community-promptfoo:$(VERSION)
 
 # Default target
@@ -33,6 +35,8 @@ help:
 	@echo "  make image-inspect      - Build Inspect AI adapter image"
 	@echo "  make image-deepeval     - Build DeepEval adapter image"
 	@echo "  make image-ragas        - Build RAGAS adapter image"
+	@echo "  make image-tooleval     - Build ToolEval adapter image"
+	@echo "  make image-toolbench-server - Build ToolBench tool server image (FETCH_FULL_CACHE=1 for HF cache)"
 	@echo "  make image-swebench     - Build SWE-bench adapter image"
 	@echo "  make image-ruler        - Build RULER adapter image"
 	@echo "  make images             - Build all adapter images"
@@ -446,3 +450,54 @@ test-promptfoo:
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ promptfoo tests passed"
+
+.PHONY: image-tooleval
+image-tooleval:
+	@echo "Building ToolEval adapter image..."
+	cd adapters/tooleval && \
+	$(BUILD_TOOL) build -t $(IMAGE_TOOLEVAL) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_TOOLEVAL)"
+
+.PHONY: push-tooleval
+push-tooleval:
+	@echo "Pushing ToolEval adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_TOOLEVAL)
+	@echo "✅ Pushed: $(IMAGE_TOOLEVAL)"
+
+.PHONY: clean-tooleval
+clean-tooleval:
+	@echo "Removing ToolEval adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_TOOLEVAL) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_TOOLEVAL)"
+
+# Optional: FETCH_FULL_CACHE=1 bakes the HF StableToolBench tools+cache into the image.
+FETCH_FULL_CACHE ?= 0
+
+.PHONY: image-toolbench-server
+image-toolbench-server:
+	@echo "Building ToolBench tool server image (FETCH_FULL_CACHE=$(FETCH_FULL_CACHE))..."
+	cd adapters/tooleval/tool-server && \
+	$(BUILD_TOOL) build -t $(IMAGE_TOOLBENCH_SERVER) -f Containerfile \
+		--build-arg FETCH_FULL_CACHE=$(FETCH_FULL_CACHE) .
+	@echo "✅ Built: $(IMAGE_TOOLBENCH_SERVER)"
+
+.PHONY: push-toolbench-server
+push-toolbench-server:
+	@echo "Pushing ToolBench tool server image..."
+	$(BUILD_TOOL) push $(IMAGE_TOOLBENCH_SERVER)
+	@echo "✅ Pushed: $(IMAGE_TOOLBENCH_SERVER)"
+
+.PHONY: clean-toolbench-server
+clean-toolbench-server:
+	@echo "Removing ToolBench tool server image..."
+	$(BUILD_TOOL) rmi $(IMAGE_TOOLBENCH_SERVER) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_TOOLBENCH_SERVER)"
+
+.PHONY: test-tooleval
+test-tooleval:
+	@echo "Running ToolEval adapter tests..."
+	cd adapters/tooleval && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ ToolEval tests passed"

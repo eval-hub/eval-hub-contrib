@@ -27,6 +27,7 @@ jobs:
           - ragas
           - ruler
           - swebench
+          - tooleval
           - wildguard
     concurrency:
       group: push-${{ matrix.adapter }}-${{ github.ref_name }}

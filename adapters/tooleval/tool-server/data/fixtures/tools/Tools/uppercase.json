@@ -1,0 +1,17 @@
+{
+  "tool_name": "uppercase",
+  "tool_description": "Uppercase tool for ToolEval offline multi-tool fixture",
+  "api_list": [
+    {
+      "name": "uppercase_message",
+      "description": "Return the message in uppercase",
+      "required_parameters": [
+        {
+          "name": "message",
+          "type": "string"
+        }
+      ],
+      "optional_parameters": []
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+# Example: deploy the StableToolBench virtual API (cache-only) in a tenant namespace.
+# Users/admins apply this; TrustyAI operator does not install it by default.
+# Point ToolEval jobs at: http://toolbench-server.<namespace>.svc:8080
+# Endpoints: GET /health, GET /tools, POST /virtual
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: toolbench-server
+  labels:
+    app: toolbench-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: toolbench-server
+  template:
+    metadata:
+      labels:
+        app: toolbench-server
+    spec:
+      containers:
+        - name: toolbench-server
+          image: quay.io/evalhub/community-toolbench-server:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: PORT
+              value: "8080"
+            - name: STABLETOOLBENCH_CONFIG
+              value: /app/config.yml
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: toolbench-server
+  labels:
+    app: toolbench-server
+spec:
+  type: ClusterIP
+  selector:
+    app: toolbench-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# Allow eval Job pods in this namespace to reach the tool server.
+# Adjust podSelector to match your EvalHub job labels if different.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-toolbench-server
+  labels:
+    app: toolbench-server
+spec:
+  podSelector:
+    matchLabels:
+      app: toolbench-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
