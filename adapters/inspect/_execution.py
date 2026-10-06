@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from evalhub.adapter import JobSpec
 from evalhub.adapter.auth import resolve_model_credentials
@@ -161,6 +162,17 @@ def build_command(
 _PETRI_BLOOM_DEFAULT_LIMIT = 5
 
 
+def _positive_int(value: Any, name: str) -> int:
+    """Coerce a sample-limit value to an int >= 1, naming the parameter on failure."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a positive integer (got {value!r})") from None
+    if n < 1:
+        raise ValueError(f"{name} must be a positive integer (got {value!r})")
+    return n
+
+
 def _sample_limit(config: JobSpec, mode: str) -> int | None:
     """Resolve the Inspect ``--limit`` (number of samples), or None for no cap.
 
@@ -174,7 +186,7 @@ def _sample_limit(config: JobSpec, mode: str) -> int | None:
       3. Petri/Bloom default; otherwise unbounded.
     """
     if config.num_examples is not None:
-        return int(config.num_examples)
+        return _positive_int(config.num_examples, "num_examples")
 
     legacy = config.parameters.get("max_samples")
     if legacy is not None:
@@ -183,7 +195,7 @@ def _sample_limit(config: JobSpec, mode: str) -> int | None:
             "(treating max_samples=%s as num_examples)",
             legacy,
         )
-        return int(legacy)
+        return _positive_int(legacy, "parameters.max_samples")
 
     return _PETRI_BLOOM_DEFAULT_LIMIT if mode in ("petri", "bloom") else None
 

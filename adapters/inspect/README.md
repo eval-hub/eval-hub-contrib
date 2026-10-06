@@ -350,7 +350,7 @@ Environment: `ANTHROPIC_API_KEY=sk-ant-...` (for auditor), `OPENAI_BASE_URL` set
 | `max_turns` | `30` | Max auditor turns per scenario |
 | `enable_rollback` | `true` | Allow auditor to backtrack and retry approaches |
 | `realism_filter` | `false` | Filter unrealistic auditor outputs (experimental) |
-| `num_examples` | `5` | Cap scenarios/samples via EvalHub `benchmarks[].parameters.num_examples` (JobSpec `num_examples` → Inspect `--limit`; Petri/Bloom default to 5 when unset, standard benchmarks are unbounded) |
+| `num_examples` | `5` (Petri/Bloom) | Cap scenarios/samples via EvalHub `benchmarks[].parameters.num_examples` (JobSpec `num_examples` → Inspect `--limit`; Petri/Bloom default to 5 when unset, standard benchmarks are unbounded) |
 | `seed_instructions` | *(from benchmark_id)* | Override seed selection (`tags:deception`, `id:seed_name`, inline text) |
 | `judge_dimensions` | *(all 38)* | Filter judge dimensions (`tags:safety` or custom directory) |
 | `task_args` | `{}` | Escape hatch for non–first-class Inspect `-T` flags (e.g. Dish `dish_scaffold`). Not for Open-Telco `full`. |

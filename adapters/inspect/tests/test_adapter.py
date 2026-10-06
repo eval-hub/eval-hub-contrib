@@ -286,6 +286,7 @@ def test_sample_limit_from_num_examples(job_spec_path, tmp_path, monkeypatch):
 
 
 def _standard_cmd(job_spec_path, tmp_path, monkeypatch, *, num_examples, **params):
+    """Build the standard-mode inspect command for inspect/gsm8k with the given limit inputs."""
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.benchmark_id = "inspect/gsm8k"
@@ -310,8 +311,23 @@ def test_sample_limit_legacy_max_samples_alias(job_spec_path, tmp_path, monkeypa
 
 
 def test_sample_limit_num_examples_wins_over_max_samples(job_spec_path, tmp_path, monkeypatch):
+    """num_examples takes precedence when both it and the legacy max_samples are set."""
     cmd = _standard_cmd(job_spec_path, tmp_path, monkeypatch, num_examples=3, max_samples=12)
     assert cmd[cmd.index("--limit") + 1] == "3"
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_sample_limit_rejects_non_positive_num_examples(job_spec_path, tmp_path, monkeypatch, value):
+    """A non-positive num_examples fails fast with an error that names the parameter."""
+    with pytest.raises(ValueError, match="num_examples must be a positive integer"):
+        _standard_cmd(job_spec_path, tmp_path, monkeypatch, num_examples=value)
+
+
+@pytest.mark.parametrize("value", ["abc", 0, -3])
+def test_sample_limit_rejects_malformed_legacy_max_samples(job_spec_path, tmp_path, monkeypatch, value):
+    """A malformed legacy max_samples raises a clear error instead of a bare ValueError."""
+    with pytest.raises(ValueError, match=r"parameters\.max_samples must be a positive integer"):
+        _standard_cmd(job_spec_path, tmp_path, monkeypatch, num_examples=None, max_samples=value)
 
 
 def test_sample_limit_petri_default_cap(job_spec_path, tmp_path, monkeypatch):
