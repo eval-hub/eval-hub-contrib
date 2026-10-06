@@ -176,10 +176,30 @@ as-is — bare (`claude-opus-4-7`, `granite3.3`) or org/model
 | `ANTHROPIC_API_KEY` | Anthropic Messages API |
 | `ANTHROPIC_BASE_URL` | Anthropic API base URL override (proxies, on-prem) |
 
-Client selection priority per role (no per-role override):
+Global client selection priority for roles without explicit routing:
 1. `model.url` present → OpenAI-compatible client
 2. `ANTHROPIC_API_KEY` or `ANTHROPIC_BASE_URL` set → Anthropic client
 3. `OPENAI_BASE_URL` or `OPENAI_API_KEY` set → OpenAI-compatible client
+
+### Independent StrongREJECT grader
+
+For `inspect/strong-reject`, set `parameters.grader_model` to route scoring to
+Inspect's named `grader` role instead of StrongREJECT's built-in `judge_llm`
+default. For example, use `gpt-4o-mini` with `grader_base_url` set to
+`https://api.openai.com/v1`. The adapter routes that role through Inspect's
+isolated `openai-api/openai_judge/...` provider namespace, so the target keeps
+its own `OPENAI_BASE_URL` and `OPENAI_API_KEY`.
+
+The judge credential must be provided to the adapter process as
+`OPENAI_JUDGE_API_KEY` from a Kubernetes Secret. The adapter does not accept a
+judge key in evaluation parameters, and it never places the key in the Inspect
+command line. `OPENAI_JUDGE_BASE_URL` can supply the endpoint instead of
+`grader_base_url`; it defaults to `https://api.openai.com/v1`.
+
+This adapter support assumes the EvalHub runtime injects that Secret-backed
+environment variable into the job. If the job currently mounts only the
+target model Secret, a corresponding EvalHub core change is required before
+this route can be exercised in-cluster.
 
 ### Per-role credential overrides
 

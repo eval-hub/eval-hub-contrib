@@ -18,7 +18,14 @@ from _hf_offline import (
     ensure_test_data_ready_for_offline,
     should_use_hf_offline,
 )
-from _routing import _is_ollama_endpoint, role_model_spec, route_model, select_client, target_model_spec
+from _routing import (
+    _is_ollama_endpoint,
+    grader_model_spec,
+    role_model_spec,
+    route_model,
+    select_client,
+    target_model_spec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +73,23 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
     anthropic_key = p.get("anthropic_api_key") or env.get("ANTHROPIC_API_KEY", "")
     if anthropic_key:
         env["ANTHROPIC_API_KEY"] = anthropic_key
+
+    # StrongREJECT can use an independent grader endpoint and credential. The
+    # key is supplied by the runtime (e.g. a Secret-backed env var), never by a
+    # job parameter, so it is not persisted in the job spec or CLI arguments.
+    if p.get("grader_model") and config.benchmark_id == "inspect/strong-reject":
+        grader_key = env.get("OPENAI_JUDGE_API_KEY", "").strip()
+        if not grader_key:
+            raise ValueError(
+                "parameters.grader_model requires OPENAI_JUDGE_API_KEY in the adapter environment. "
+                "Provide it from a Kubernetes Secret; do not put API keys in the evaluation YAML."
+            )
+        env["OPENAI_JUDGE_API_KEY"] = grader_key
+        env["OPENAI_JUDGE_BASE_URL"] = (
+            p.get("grader_base_url")
+            or env.get("OPENAI_JUDGE_BASE_URL")
+            or "https://api.openai.com/v1"
+        )
 
     # ANTHROPIC_BASE_URL passes through from host env.
 
@@ -132,6 +156,22 @@ def build_command(
         for role, spec in model_roles.items():
             cmd += ["--model-role", f"{role}={spec}"]
 
+        # StrongREJECT's task-specific judge_llm argument otherwise bypasses
+        # Inspect's named grader role. Setting it to None activates the task's
+        # grader-role fallback; the model itself is routed through the isolated
+        # openai_judge provider namespace above.
+        grader_model = config.parameters.get("grader_model")
+        if grader_model and config.benchmark_id == "inspect/strong-reject":
+            if not isinstance(grader_model, str) or not grader_model.strip():
+                raise ValueError("parameters.grader_model must be a non-empty model name")
+            if "grader" in model_roles:
+                raise ValueError(
+                    "Configure the StrongREJECT grader with parameters.grader_model, "
+                    "not both grader_model and model_roles.grader."
+                )
+            # Insert the role before task args are appended below.
+            cmd += ["--model-role", f"grader={grader_model_spec(grader_model.strip())}"]
+
     max_tasks = config.parameters.get("max_tasks")
     if max_tasks:
         cmd += ["--max-tasks", str(max_tasks)]
@@ -146,7 +186,13 @@ def build_command(
 
     cmd += ["--log-level", config.parameters.get("log_level", "info")]
 
-    for key, value in _task_args(config).items():
+    task_args = _task_args(config)
+    if config.benchmark_id == "inspect/strong-reject" and config.parameters.get("grader_model"):
+        # Ignore a legacy explicit judge_llm (often set to the target model) so
+        # StrongREJECT uses the separately configured grader role.
+        task_args["judge_llm"] = None
+
+    for key, value in task_args.items():
         if isinstance(value, bool):
             value = str(value).lower()
         cmd += ["-T", f"{key}={value}"]
