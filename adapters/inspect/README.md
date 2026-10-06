@@ -140,9 +140,15 @@ appears). Sidecar `:ref` placeholders are ignored. In EvalHub jobs, set
 ### Sample limits
 
 Inspect `--limit` is driven by `benchmarks[].parameters.num_examples` (lifted to
-JobSpec `num_examples` by eval-hub). When unset, the adapter defaults to `--limit 5`
-so Petri/Bloom and large datasets do not run unbounded. Set an explicit
-`num_examples` to raise or lower the cap.
+JobSpec `num_examples` by eval-hub), the same parameter every other contrib adapter
+uses. When unset, standard inspect-evals benchmarks run the **full dataset**.
+Petri and Bloom default to `--limit 5` because their full seed sets are very
+expensive; set `num_examples` to raise or lower the cap.
+
+`parameters.max_samples` is a **deprecated alias** for `num_examples` and logs a
+warning; `num_examples` wins if both are set. Note that Inspect's own
+`--max-samples` flag controls how many samples run *in parallel*, not how many
+are evaluated, which is why the name is being retired here.
 
 Open-Telco dataset size is controlled via `parameters.full`
 (`true` → `GSMA/ot-full`, `false` → `GSMA/ot-lite`). TeleQnA also accepts
@@ -344,7 +350,7 @@ Environment: `ANTHROPIC_API_KEY=sk-ant-...` (for auditor), `OPENAI_BASE_URL` set
 | `max_turns` | `30` | Max auditor turns per scenario |
 | `enable_rollback` | `true` | Allow auditor to backtrack and retry approaches |
 | `realism_filter` | `false` | Filter unrealistic auditor outputs (experimental) |
-| `num_examples` | `5` | Cap scenarios/samples via EvalHub `benchmarks[].parameters.num_examples` (JobSpec `num_examples` → Inspect `--limit`; defaults to 5 when unset) |
+| `num_examples` | `5` (Petri/Bloom) | Cap scenarios/samples via EvalHub `benchmarks[].parameters.num_examples` (JobSpec `num_examples` → Inspect `--limit`; Petri/Bloom default to 5 when unset, standard benchmarks are unbounded) |
 | `seed_instructions` | *(from benchmark_id)* | Override seed selection (`tags:deception`, `id:seed_name`, inline text) |
 | `judge_dimensions` | *(all 38)* | Filter judge dimensions (`tags:safety` or custom directory) |
 | `task_args` | `{}` | Escape hatch for non–first-class Inspect `-T` flags (e.g. Dish `dish_scaffold`). Not for Open-Telco `full`. |
