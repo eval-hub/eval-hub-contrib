@@ -26,6 +26,5 @@ and never call RapidAPI or OpenAI.
 ```sh
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-cp vendor/*.py .
-STABLETOOLBENCH_CONFIG=./config.yml .venv/bin/uvicorn main:app --port 18080
+STABLETOOLBENCH_CONFIG=./config.yml PYTHONPATH=vendor .venv/bin/uvicorn main:app --port 18080
 ```

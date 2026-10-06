@@ -179,20 +179,20 @@ class ToolEvalAdapter(FrameworkAdapter):
             if not model_name:
                 raise ValueError("config.model.name is required")
 
-            num_tasks = max(1, int(params.get("num_tasks", 5)))
-            seed = int(params.get("seed", 42))
+            num_tasks = max(1, int(_param(params, "num_tasks", 5)))
+            seed = int(_param(params, "seed", 42))
             tool_subset = str(params.get("tool_subset") or "default")
-            timeout = float(params.get("tool_server_timeout_seconds", 30))
-            mut_timeout = float(params.get("mut_timeout_seconds", 300))
-            judge_timeout = float(params.get("judge_timeout_seconds", 300))
+            timeout = float(_param(params, "tool_server_timeout_seconds", 30))
+            mut_timeout = float(_param(params, "mut_timeout_seconds", 300))
+            judge_timeout = float(_param(params, "judge_timeout_seconds", 300))
             toolbench_key = str(params.get("toolbench_key") or "evalhub-local")
-            max_tokens = int(params.get("max_tokens", 512))
-            temperature = float(params.get("temperature", 0.0))
+            max_tokens = int(_param(params, "max_tokens", 512))
+            temperature = float(_param(params, "temperature", 0.0))
             enable_judge = _as_bool(params.get("enable_judge", True))
             probe_models = _as_bool(params.get("probe_models", True))
             max_steps = max(
                 1,
-                int(params.get("max_steps", bench["default_max_steps"])),
+                int(_param(params, "max_steps", bench["default_max_steps"])),
             )
             if mode == "single_tool":
                 max_steps = 1
@@ -543,6 +543,12 @@ def _as_bool(value: Any) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _param(params: dict[str, Any], key: str, default: Any) -> Any:
+    """Return params[key], falling back to default when missing or explicitly null."""
+    value = params.get(key, default)
+    return default if value is None else value
 
 
 def _configure_debug_io(params: dict[str, Any] | None = None) -> None:
@@ -928,7 +934,15 @@ def _structural_score(
         ok = bool(reference_calls) and _calls_match(predicted[0], reference_calls[0])
         return ("solved", "win") if ok else ("unsolved", "lose")
 
-    # multi_tool / multi_step: every reference call must appear (order-insensitive set match)
+    if mode == "multi_step":
+        # Ordered: predicted calls must match reference_calls in the same order and count.
+        ok = len(predicted) == len(reference_calls) and all(
+            _calls_match(pred, ref)
+            for pred, ref in zip(predicted, reference_calls)
+        )
+        return ("solved", "win") if ok else ("unsolved", "lose")
+
+    # multi_tool: every reference call must appear (order-insensitive set match)
     unmatched = list(reference_calls)
     for pred in predicted:
         for idx, ref in enumerate(unmatched):

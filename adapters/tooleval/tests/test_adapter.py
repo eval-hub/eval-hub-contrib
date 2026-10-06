@@ -111,6 +111,47 @@ def test_helpers() -> None:
     assert _structural_score(episode, ref, mode="single_tool") == ("solved", "win")
     assert _calls_match(ref[0], ref[0]) is True
 
+    echo_call = {
+        "category": "Tools",
+        "tool_name": "echo",
+        "api_name": "echo_message",
+        "tool_input": {"message": "hello"},
+    }
+    upper_call = {
+        "category": "Tools",
+        "tool_name": "uppercase",
+        "api_name": "uppercase_message",
+        "tool_input": {"message": "hello"},
+    }
+    ordered = {
+        "predicted_calls": [echo_call, upper_call],
+        "steps": [
+            {"action": "call", "virtual_ok": True},
+            {"action": "call", "virtual_ok": True},
+        ],
+    }
+    reversed_calls = {
+        "predicted_calls": [upper_call, echo_call],
+        "steps": [
+            {"action": "call", "virtual_ok": True},
+            {"action": "call", "virtual_ok": True},
+        ],
+    }
+    refs = [echo_call, upper_call]
+    assert _structural_score(ordered, refs, mode="multi_step") == ("solved", "win")
+    assert _structural_score(reversed_calls, refs, mode="multi_step") == ("unsolved", "lose")
+    # multi_tool remains order-insensitive
+    assert _structural_score(reversed_calls, refs, mode="multi_tool") == ("solved", "win")
+
+
+def test_null_numeric_params_fall_back() -> None:
+    from main import _param
+
+    assert _param({"max_steps": None}, "max_steps", 3) == 3
+    assert _param({"max_steps": 5}, "max_steps", 3) == 5
+    assert _param({}, "max_steps", 3) == 3
+    assert int(_param({"max_steps": None}, "max_steps", 3)) == 3
+
 
 def test_require_healthy_and_virtual() -> None:
     client = MagicMock()

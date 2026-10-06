@@ -37,6 +37,34 @@ LOG_FILE = CONFIG.get("log_file", "./server.log")
 OPENAI_API_BASE = CONFIG.get("api_base") or "https://api.openai.com/v1"
 OPENAI_API_KEY = CONFIG.get("api_key") or ""
 
+
+def _safe_under(root: str, *parts: str):
+    """Resolve a path under root; return None if any segment escapes the root.
+
+    Request fields (category / tool_name / api_name) must never be joined into
+    filesystem paths without this check (CodeQL: uncontrolled path expression).
+    """
+    if not root:
+        return None
+    for part in parts:
+        if part is None:
+            return None
+        text = str(part)
+        if text in ("", ".", "..") or "/" in text or "\\" in text or "\x00" in text:
+            return None
+        if os.path.isabs(text):
+            return None
+    root_real = os.path.realpath(root)
+    candidate = os.path.realpath(os.path.join(root_real, *parts))
+    try:
+        common = os.path.commonpath([root_real, candidate])
+    except ValueError:
+        return None
+    if common != root_real:
+        return None
+    return candidate
+
+
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI()
 app.state.limiter = limiter
@@ -69,6 +97,9 @@ def prepare_tool_name_and_url(info):
     return tool_name, standard_category, api_name, code_string
 
 def write_log(request, response, type):
+    # Never persist toolbench_key (may be a real RapidAPI key) in server logs.
+    if isinstance(request, Info):
+        request = request.model_dump(exclude={"toolbench_key"})
     log = """\
 >>>>>>>>>>>>>>>>>>>>>>>
 TIME: {curr_time}
@@ -153,8 +184,9 @@ def get_virtual_response(request: Request, info: Info):
     tool_name_original = info.tool_name
 
     if api_name == "chat_with_user":
-        write_log(request=info, response=real_response, type="chat_with_user")
-        return {"error": "", "response": "Chat with user."}
+        response_dict = {"error": "", "response": "Chat with user."}
+        write_log(request=info, response=response_dict, type="chat_with_user")
+        return response_dict
     
     try:
         tool_input = json.loads(tool_input)
@@ -177,16 +209,18 @@ def get_virtual_response(request: Request, info: Info):
     cache = {}
     # prerequisite: to read files correctly, "my_tools_cache" folder and "toolenv/tools/" folder should be available
     try:
-        if os.path.exists(os.path.join(CACHE_FOLDER, standard_category)):
-            if os.path.exists(os.path.join(CACHE_FOLDER, standard_category, tool_name)):
-                if os.path.exists(os.path.join(CACHE_FOLDER, standard_category, tool_name, api_name+".json")):
-                    tools_cache_record = json.load(open(os.path.join(CACHE_FOLDER, standard_category, tool_name, api_name+".json"), "r"))
-                    cache.update(tools_cache_record)
-                    if str(tool_input) in cache:
-                        print("using cached real response")
-                        response_dict = cache[str(tool_input)]
-                        write_log(request=info, response=response_dict, type="cached_real_response")
-                        return response_dict
+        cache_file = _safe_under(
+            CACHE_FOLDER, standard_category, tool_name, api_name + ".json"
+        )
+        if cache_file and os.path.isfile(cache_file):
+            with open(cache_file, "r", encoding="utf-8") as handle:
+                tools_cache_record = json.load(handle)
+            cache.update(tools_cache_record)
+            if str(tool_input) in cache:
+                print("using cached real response")
+                response_dict = cache[str(tool_input)]
+                write_log(request=info, response=response_dict, type="cached_real_response")
+                return response_dict
     except Exception as e:
         print(f"Loading cache error: {e}")
 
@@ -250,28 +284,33 @@ def get_virtual_response(request: Request, info: Info):
         'api_info': "",
     }
     try:
-        if os.path.exists(os.path.join(CONFIG['tools_folder'], standard_category)):
-            if os.path.exists(os.path.join(CONFIG['tools_folder'], standard_category, tool_name_original.split("_for_")[0]+".json")):
-                # read json
-                api_intro = json.load(open(os.path.join(CONFIG['tools_folder'], standard_category, tool_name_original.split("_for_")[0]+".json"), "r"))
-                # get tool_dexcription and api_info
-                tool_description = api_intro['tool_description']
-                api_info = []
-                for api in api_intro['api_list']:
-                    if api_name == standardize(api['name']):
-                        api_info.append({
-                            'name': api['name'],
-                            'description': api['description']
-                        })
-                # check invalid api name
-                if len(api_info) == 0:
-                    print("cant match api name")
-                api_doc = {
-                    'tool_description': tool_description,
-                    'api_info': api_info
-                }
-            else:
-                print(f"cant get {tool_name_original}")
+        tools_root = CONFIG.get("tools_folder", "./tools")
+        tool_json = _safe_under(
+            tools_root,
+            standard_category,
+            tool_name_original.split("_for_")[0] + ".json",
+        )
+        if tool_json and os.path.isfile(tool_json):
+            with open(tool_json, "r", encoding="utf-8") as handle:
+                api_intro = json.load(handle)
+            # get tool_description and api_info
+            tool_description = api_intro['tool_description']
+            api_info = []
+            for api in api_intro['api_list']:
+                if api_name == standardize(api['name']):
+                    api_info.append({
+                        'name': api['name'],
+                        'description': api['description']
+                    })
+            # check invalid api name
+            if len(api_info) == 0:
+                print("cant match api name")
+            api_doc = {
+                'tool_description': tool_description,
+                'api_info': api_info
+            }
+        else:
+            print(f"cant get {tool_name_original}")
     except Exception as e:
         print(f"Loading api_doc error: {e}")
 
@@ -347,11 +386,17 @@ def save_cache(cache, tool_input, result, standard_category, tool_name, api_name
                 print(f"Load result failed: {e}")
                 return
 
-        if not os.path.exists(os.path.join(save_folder, standard_category)):
-            os.mkdir(os.path.join(save_folder, standard_category))
-        if not os.path.exists(os.path.join(save_folder, standard_category, tool_name)):
-            os.mkdir(os.path.join(save_folder, standard_category, tool_name))    
-        json.dump(cache, open(os.path.join(save_folder, standard_category, tool_name, api_name+".json"), "w"), indent=4)
+        category_dir = _safe_under(save_folder, standard_category)
+        tool_dir = _safe_under(save_folder, standard_category, tool_name)
+        cache_file = _safe_under(
+            save_folder, standard_category, tool_name, api_name + ".json"
+        )
+        if not category_dir or not tool_dir or not cache_file:
+            print("Save cache failed: unsafe path components")
+            return
+        os.makedirs(tool_dir, exist_ok=True)
+        with open(cache_file, "w", encoding="utf-8") as handle:
+            json.dump(cache, handle, indent=4)
     except Exception as e:
         print(f"Save cache failed: {e}")
 

@@ -48,6 +48,8 @@ help:
 	@echo "  make push-inspect       - Push Inspect AI adapter image"
 	@echo "  make push-deepeval      - Push DeepEval adapter image"
 	@echo "  make push-ragas         - Push RAGAS adapter image"
+	@echo "  make push-tooleval      - Push ToolEval adapter image"
+	@echo "  make push-toolbench-server - Push ToolBench tool server image"
 	@echo "  make push-swebench      - Push SWE-bench adapter image"
 	@echo "  make push-ruler         - Push RULER adapter image"
 	@echo "  make push-images        - Push all adapter images"
@@ -59,6 +61,8 @@ help:
 	@echo "  make clean-inspect      - Remove Inspect AI adapter image"
 	@echo "  make clean-deepeval     - Remove DeepEval adapter image"
 	@echo "  make clean-ragas        - Remove RAGAS adapter image"
+	@echo "  make clean-tooleval     - Remove ToolEval adapter image"
+	@echo "  make clean-toolbench-server - Remove ToolBench tool server image"
 	@echo "  make clean-swebench     - Remove SWE-bench adapter image"
 	@echo "  make clean-ruler        - Remove RULER adapter image"
 	@echo "  make clean-images       - Remove all adapter images"
@@ -71,6 +75,7 @@ help:
 	@echo "  make test-inspect      - Run Inspect AI adapter tests"
 	@echo "  make test-deepeval     - Run DeepEval adapter tests"
 	@echo "  make test-ragas        - Run RAGAS adapter tests"
+	@echo "  make test-tooleval     - Run ToolEval adapter tests"
 	@echo "  make test-ruler        - Run RULER adapter tests"
 	@echo "  make tests             - Run all adapter tests"
 	@echo ""
@@ -145,7 +150,7 @@ image-swebench:
 	@echo "✅ Built: $(IMAGE_SWEBENCH)"
 
 .PHONY: images
-images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler image-nemo-guardrails image-promptfoo
+images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler image-nemo-guardrails image-promptfoo image-tooleval image-toolbench-server
 	@echo "✅ All adapter images built"
 
 # Push targets
@@ -196,7 +201,7 @@ push-swebench:
 	@echo "✅ Pushed: $(IMAGE_SWEBENCH)"
 
 .PHONY: push-images
-push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench push-ruler push-nemo-guardrails push-promptfoo
+push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench push-ruler push-nemo-guardrails push-promptfoo push-tooleval push-toolbench-server
 	@echo "✅ All adapter images pushed"
 
 # Clean targets
@@ -247,7 +252,7 @@ clean-swebench:
 	@echo "✅ Removed: $(IMAGE_SWEBENCH)"
 
 .PHONY: clean-images
-clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench clean-ruler clean-nemo-guardrails clean-promptfoo
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench clean-ruler clean-nemo-guardrails clean-promptfoo clean-tooleval clean-toolbench-server
 	@echo "✅ All adapter images removed"
 
 # Development targets
@@ -343,7 +348,7 @@ test-ragas:
 	@echo "✅ RAGAS tests passed"
 
 .PHONY: tests
-tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler test-nemo-guardrails test-promptfoo test-swebench
+tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler test-nemo-guardrails test-promptfoo test-swebench test-tooleval
 	@echo "✅ All adapter tests passed"
 .PHONY: test-swebench
 test-swebench:

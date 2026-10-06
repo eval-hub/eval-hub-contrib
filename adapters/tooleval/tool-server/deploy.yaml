@@ -21,8 +21,8 @@ spec:
     spec:
       containers:
         - name: toolbench-server
-          image: quay.io/evalhub/community-toolbench-server:latest
-          imagePullPolicy: Always
+          image: quay.io/evalhub/community-toolbench-server:0.3.0
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
               name: http

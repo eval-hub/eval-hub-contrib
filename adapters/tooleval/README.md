@@ -5,7 +5,7 @@ Evaluates a model’s tool-use sequencing against a cache-only
 (ToolBench G1/G2/G3).
 
 The evaluation Job image is `quay.io/evalhub/community-tooleval:latest`. The
-tool server (`quay.io/evalhub/community-toolbench-server:latest`) is deployed
+tool server (`quay.io/evalhub/community-toolbench-server:0.3.0`) is deployed
 separately by the cluster admin — see `tool-server/README.md` and
 `tool-server/deploy.yaml`. Cache misses do not call RapidAPI or OpenAI.
 
