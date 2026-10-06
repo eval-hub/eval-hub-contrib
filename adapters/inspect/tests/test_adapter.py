@@ -285,16 +285,45 @@ def test_sample_limit_from_num_examples(job_spec_path, tmp_path, monkeypatch):
     assert cmd[cmd.index("--limit") + 1] == "7"
 
 
-def test_sample_limit_defaults_without_num_examples(job_spec_path, tmp_path, monkeypatch):
-    """--limit defaults to 5 when num_examples is unset (max_samples is ignored)."""
+def _standard_cmd(job_spec_path, tmp_path, monkeypatch, *, num_examples, **params):
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.benchmark_id = "inspect/gsm8k"
-    adapter.job_spec.num_examples = None
-    adapter.job_spec.parameters["max_samples"] = 12
+    adapter.job_spec.num_examples = num_examples
+    adapter.job_spec.parameters.update(params)
     env = adapter._build_env(adapter.job_spec, "standard")
-    cmd = adapter._build_command(adapter.job_spec, "standard", "inspect_evals/gsm8k", tmp_path, None, env)
-    assert "--limit" in cmd
+    return adapter._build_command(adapter.job_spec, "standard", "inspect_evals/gsm8k", tmp_path, None, env)
+
+
+def test_sample_limit_unbounded_without_num_examples(job_spec_path, tmp_path, monkeypatch):
+    """Standard benchmarks run the full dataset when no cap is configured."""
+    cmd = _standard_cmd(job_spec_path, tmp_path, monkeypatch, num_examples=None)
+    assert "--limit" not in cmd
+
+
+def test_sample_limit_legacy_max_samples_alias(job_spec_path, tmp_path, monkeypatch, caplog):
+    """parameters.max_samples still caps samples (deprecated), with a warning."""
+    with caplog.at_level("WARNING"):
+        cmd = _standard_cmd(job_spec_path, tmp_path, monkeypatch, num_examples=None, max_samples=12)
+    assert cmd[cmd.index("--limit") + 1] == "12"
+    assert "max_samples is deprecated" in caplog.text
+
+
+def test_sample_limit_num_examples_wins_over_max_samples(job_spec_path, tmp_path, monkeypatch):
+    cmd = _standard_cmd(job_spec_path, tmp_path, monkeypatch, num_examples=3, max_samples=12)
+    assert cmd[cmd.index("--limit") + 1] == "3"
+
+
+def test_sample_limit_petri_default_cap(job_spec_path, tmp_path, monkeypatch):
+    """Petri keeps a default cap of 5 — its full seed set (170+) is very expensive."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/petri-sycophancy"
+    adapter.job_spec.num_examples = None
+    adapter.job_spec.parameters.pop("max_samples", None)
+    env = adapter._build_env(adapter.job_spec, "petri")
+    cmd = adapter._build_command(adapter.job_spec, "petri", "inspect_petri/audit", tmp_path, None, env)
     assert cmd[cmd.index("--limit") + 1] == "5"
 
 

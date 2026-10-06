@@ -135,10 +135,9 @@ def build_command(
     if max_tasks:
         cmd += ["--max-tasks", str(max_tasks)]
 
-    # Sample limit from JobSpec.num_examples (lifted from benchmarks[].parameters.num_examples).
-    # Default to 5 when unset so Petri/Bloom (and large datasets) do not run unbounded.
-    limit = int(config.num_examples) if config.num_examples is not None else 5
-    cmd += ["--limit", str(limit)]
+    limit = _sample_limit(config, mode)
+    if limit is not None:
+        cmd += ["--limit", str(limit)]
 
     epochs = config.parameters.get("epochs")
     if epochs and epochs > 1:
@@ -155,6 +154,38 @@ def build_command(
         cmd += ["-M", f"{key}={value}"]
 
     return cmd
+
+
+# Petri/Bloom run every matching seed (170+ for the full audit), so they keep a small
+# default cap. Standard inspect-evals benchmarks run the full dataset unless capped.
+_PETRI_BLOOM_DEFAULT_LIMIT = 5
+
+
+def _sample_limit(config: JobSpec, mode: str) -> int | None:
+    """Resolve the Inspect ``--limit`` (number of samples), or None for no cap.
+
+    Precedence:
+      1. JobSpec.num_examples (lifted from benchmarks[].parameters.num_examples by
+         eval-hub; the convention shared by all contrib adapters).
+      2. parameters.max_samples — deprecated alias. It was the sample cap before
+         num_examples was introduced and eval-hub does not strip it, so existing
+         collections still carry it. Note Inspect's own ``--max-samples`` means
+         *parallel* samples, not a sample cap, which is why it is being retired.
+      3. Petri/Bloom default; otherwise unbounded.
+    """
+    if config.num_examples is not None:
+        return int(config.num_examples)
+
+    legacy = config.parameters.get("max_samples")
+    if legacy is not None:
+        logger.warning(
+            "parameters.max_samples is deprecated; use num_examples "
+            "(treating max_samples=%s as num_examples)",
+            legacy,
+        )
+        return int(legacy)
+
+    return _PETRI_BLOOM_DEFAULT_LIMIT if mode in ("petri", "bloom") else None
 
 
 # Open-Telco (and similar) first-class -T parameters — keep flat under parameters, not task_args.
