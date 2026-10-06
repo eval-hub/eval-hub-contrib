@@ -132,10 +132,14 @@ offline mode when `/test_data` is populated.
 
 When online, the adapter reads an
 `hf-token` secret mounted at `/var/run/secrets/model/hf-token` and injects it as
-`HF_TOKEN` and `HUGGING_FACE_HUB_TOKEN` (with retry while the projected volume
-appears). Sidecar `:ref` placeholders are ignored. In EvalHub jobs, set
-`model.auth.secret_ref` to a Kubernetes Secret that includes the `hf-token` key
-(alongside `api-key` if needed).
+`HF_TOKEN` and `HUGGING_FACE_HUB_TOKEN`. Sidecar `:ref` placeholders are ignored.
+In EvalHub jobs, set `model.auth.secret_ref` to a Kubernetes Secret that includes the
+`hf-token` key (alongside `api-key` if needed).
+
+The mount is a projected volume that Kubernetes populates before the container starts,
+so the adapter does not wait for it when it is absent (no `model.auth.secret_ref`) or
+already populated. Only an empty mount gets a 5-second grace period. Set
+`INSPECT_HF_TOKEN_WAIT_S` (seconds; `0` disables) to override.
 
 ### Sample limits
 
