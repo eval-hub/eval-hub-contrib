@@ -8,7 +8,7 @@ Vendored from [THUNLP-MT/StableToolBench](https://github.com/THUNLP-MT/StableToo
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/health` | Liveness/readiness |
-| GET | `/tools` | Discover tool JSON under `tools_folder` |
+| GET | `/tools` | Discover tools under `tools_folder` (`category`, `tool_name`, `api_list`) |
 | POST | `/virtual` | StableToolBench virtual tool call |
 
 `config.yml` sets `cache_only: true`. Cache misses return `error=cache_miss`

@@ -96,9 +96,33 @@ def health():
     }
 
 
+def _api_list_summary(tool_path: str) -> list:
+    """Return [{name, description}] from a tool JSON; empty if unreadable."""
+    try:
+        with open(tool_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    summary = []
+    for api in data.get("api_list") or []:
+        if not isinstance(api, dict):
+            continue
+        name = str(api.get("name") or "").strip()
+        if not name:
+            continue
+        item = {"name": name}
+        desc = str(api.get("description") or "").strip()
+        if desc:
+            item["description"] = desc[:200]
+        summary.append(item)
+    return summary
+
+
 @app.get("/tools")
 def list_tools():
-    """List tool JSON files under tools_folder for discovery."""
+    """List tools under tools_folder, including api_list names for MUT catalogs."""
     tools_folder = CONFIG.get("tools_folder", "./tools")
     tools = []
     if os.path.isdir(tools_folder):
@@ -109,10 +133,12 @@ def list_tools():
             for name in sorted(os.listdir(cat_path)):
                 if not name.endswith(".json"):
                     continue
+                rel = os.path.join(category, name)
                 tools.append({
                     "category": category,
                     "tool_name": name[:-5],
-                    "path": os.path.join(category, name),
+                    "path": rel,
+                    "api_list": _api_list_summary(os.path.join(cat_path, name)),
                 })
     return {"tools": tools, "count": len(tools)}
 
