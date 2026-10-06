@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from evalhub.adapter import (
     CapabilityEvalEntry,
@@ -528,12 +529,37 @@ class RulerAdapter(FrameworkAdapter):
             or os.getenv("MODEL_API_KEY")
             or os.getenv("OPENAI_API_KEY")
         )
-        if not api_key:
+        if not api_key and self._uses_local_sidecar(model_url):
+            # The SDK requires a nonempty key. The sidecar replaces this
+            # placeholder with ServiceAccount authentication before forwarding.
+            api_key = "local"
+        elif not api_key:
             raise ValueError(
                 "Model API credentials are required. Configure model.auth.secret_ref "
                 "or MODEL_API_KEY/OPENAI_API_KEY for a direct endpoint."
             )
         return OpenAI(base_url=model_url, api_key=api_key)
+
+    def _uses_local_sidecar(self, model_url: str) -> bool:
+        """Recognize the shared loopback model/callback origin of K8s jobs."""
+        if os.getenv("EVALHUB_MODE") != "k8s":
+            return False
+        callback_url = getattr(getattr(self, "job_spec", None), "callback_url", None)
+        if not callback_url:
+            return False
+        try:
+            model = urlsplit(model_url)
+            callback = urlsplit(callback_url)
+            return (
+                model.scheme in ("http", "https")
+                and model.hostname in ("localhost", "127.0.0.1", "::1")
+                and model.username is None
+                and callback.username is None
+                and (model.scheme, model.hostname, model.port)
+                == (callback.scheme, callback.hostname, callback.port)
+            )
+        except ValueError:
+            return False
 
     @staticmethod
     def _hf_token() -> str | None:
