@@ -377,8 +377,36 @@ make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
 
 ## Requirements
 
-- `inspect-ai >= 0.3.40`
-- `inspect-evals >= 0.1.0`
-- `inspect-petri >= 3.0.0`
-- `petri-bloom >= 0.1.0`
-- `eval-hub-sdk[adapter] >= 0.1.7`
+Direct dependencies are pinned to exact versions in `requirements.txt`
+(`inspect-ai`, `inspect-evals`, `inspect-petri`, `petri-bloom`, `openai`,
+`nltk`; `eval-hub-sdk[adapter]` is a compatible-release pin). `constraints.txt`
+pins the full transitive tree, and the Containerfile installs with both, so an
+image rebuild reproduces the same dependency set.
+
+### Updating dependencies
+
+Bump the pins in `requirements.txt`, then regenerate the lock and audit it. Run
+from `adapters/inspect/`:
+
+```bash
+# 1. Regenerate the transitive pins (platform-independent; git lines are
+#    excluded because pip does not accept URLs in constraints files)
+{ echo "# Transitive dependency pins for the Inspect adapter image, applied with: pip install -r requirements.txt -c constraints.txt"
+  echo "# Generated; do not edit by hand. Regenerate (and re-audit) with the command in README.md → Updating dependencies."
+  uv pip compile requirements.txt --universal --python-version 3.12 --no-header --no-annotate | grep -v "@ git"
+} > constraints.txt
+
+# 2. Audit every pinned version for known vulnerabilities
+grep -E '^[A-Za-z0-9_.-]+==' constraints.txt | sed -E 's/ *;.*//' | sort -u > /tmp/inspect-pins.txt
+pip-audit -r /tmp/inspect-pins.txt --no-deps --disable-pip
+```
+
+The repository's Trivy filesystem scan only sees versions that are pinned, which
+is why the pins matter: with open-ended `>=` ranges it cannot see what actually
+lands in the image. Packages installed straight from git (`instruction_following_eval`,
+`evals`) are not on PyPI and cannot be audited by name; they are pinned to a
+commit or tag.
+
+Known advisory: `nltk` 3.10.3 carries GHSA-8mgp-746c-j5xp (CVE-2026-81726) with no
+patched release yet. It affects nltk's parser and perceptron model save/load APIs,
+which nothing in this image calls. Revisit when a fixed nltk is published.
