@@ -28,9 +28,6 @@ from datetime import UTC, datetime
 import jq
 import requests
 import yaml
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from tqdm import tqdm
-
 from evalhub.adapter import (
     EvaluationResult,
     FrameworkAdapter,
@@ -42,6 +39,8 @@ from evalhub.adapter import (
     JobStatusUpdate,
 )
 from evalhub.adapter.callbacks import DefaultCallbacks
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from tqdm import tqdm
 
 logging.basicConfig(
     level=logging.INFO,
@@ -216,15 +215,258 @@ def _balance_and_limit(samples: list[dict], eval_limit: int | None, seed: int | 
     return result
 
 
+def _test_data_root() -> str:
+    """Staged-data root: ``/test_data`` (EvalHub mount) unless overridden for tests/smokes."""
+    return (
+        os.environ.get("EVALHUB_TEST_DATA_DIR", "/test_data").rstrip("/")
+        or "/test_data"
+    )
+
+
+_STAGED_EXTENSIONS = (".parquet", ".json", ".jsonl")
+
+#: Directories never descended into during staged-dataset discovery.
+_SKIPPED_DIRS = (".git", ".hg", ".svn", "__pycache__", ".ipynb_checkpoints")
+
+
+def _job_spec_requests_test_data() -> bool:
+    """True when the mounted job spec carries a test_data_ref (staged data)."""
+    path = os.environ.get("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            spec = json.load(f)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+    ref = spec.get("test_data_ref") if isinstance(spec, dict) else None
+    if not isinstance(ref, dict):
+        return False
+    return any(ref.get(key) for key in ("s3", "pvc", "git", "hf"))
+
+
+class _AmbiguousStagedDataset(RuntimeError):
+    """Raised when staged discovery matches more than one dataset file."""
+
+
+def _find_staged_rows_file(
+    root: str, split: str | None = None, *, all_matches: bool = False
+) -> list[str] | None:
+    """Return staged dataset file(s) under ``root`` (split-aware, hidden-safe).
+
+    Skips ``_SKIPPED_DIRS`` and dot-directories (never descends into them).
+    When ``split`` is set, files whose stem mentions the split (or whose parent
+    directory is named exactly like the split) rank first. Raises
+    ``_AmbiguousStagedDataset`` when more than one file survives at the same
+    rank and ``all_matches`` is False — silently picking the first would make
+    results depend on filesystem order. With ``all_matches=True`` the ranked
+    candidate list is returned instead of a single path (or None when empty).
+    """
+    try:
+        candidates: list[str] = []
+        base = os.path.abspath(root)
+        for dirpath, dirnames, filenames in os.walk(base):
+            # Prune hidden / VCS dirs in place so os.walk never descends.
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if not d.startswith(".") and d not in _SKIPPED_DIRS
+            ]
+            for name in filenames:
+                if name.lower().endswith(_STAGED_EXTENSIONS):
+                    candidates.append(os.path.join(dirpath, name))
+    except OSError:
+        return None
+
+    if not candidates:
+        return None
+
+    if split:
+
+        def _split_rank(path: str) -> int:
+            stem = os.path.basename(path).lower()
+            # The split word must appear in the file STEM (or the parent dir
+            # must be named exactly like the split). A substring match on the
+            # parent name is wrong: a "test_data" mount contains "test" and
+            # would rank every file 0, defeating split-aware disambiguation.
+            parent = os.path.basename(os.path.dirname(path)).lower()
+            return (
+                0
+                if (split.lower() in stem or parent == split.lower())
+                else 1
+            )
+
+        candidates.sort(key=lambda p: (_split_rank(p), p.count(os.sep), p))
+    else:
+        candidates.sort(key=lambda p: (p.count(os.sep), p))
+
+    top_rank: tuple[int, ...] | None = None
+    same_rank: list[str] = []
+    for path in candidates:
+        if split:
+            rank = (
+                _split_rank(path),
+                path.count(os.sep),
+            )
+        else:
+            rank = (path.count(os.sep),)
+        if top_rank is None:
+            top_rank = rank
+            same_rank.append(path)
+        elif rank == top_rank:
+            same_rank.append(path)
+        else:
+            break
+
+    if all_matches:
+        return same_rank
+    if len(same_rank) > 1:
+        names = ", ".join(os.path.relpath(p, base) for p in same_rank[:8])
+        raise _AmbiguousStagedDataset(
+            f"Ambiguous staged dataset under {root} (split={split!r}): {names}. "
+            "Set dataset_path in the dataset config to the exact file."
+        )
+    return same_rank
+
+
+def _read_staged_file(path: str) -> list[dict]:
+    """Read dataset rows from a staged parquet/json/jsonl file.
+
+    Unparseable JSONL lines are skipped with a warning; the total skipped count
+    is logged so silent data loss is visible in job logs.
+    """
+    if path.endswith(".parquet"):
+        try:
+            import pyarrow.parquet
+        except ImportError as exc:
+            raise RuntimeError(
+                "pyarrow is required to read staged parquet datasets"
+            ) from exc
+        return pyarrow.parquet.read_table(path).to_pylist()
+    with open(path, encoding="utf-8") as f:
+        if path.endswith(".jsonl"):
+            rows = []
+            skipped = 0
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    skipped += 1
+                    logger.warning("Skipping unparseable JSONL line in %s", path)
+                    continue
+                # JSONL is one object per line, but tolerate a single JSON
+                # array dumped onto one line (a common dataset export shape).
+                if isinstance(obj, dict):
+                    rows.append(obj)
+                elif isinstance(obj, list):
+                    rows.extend(r for r in obj if isinstance(r, dict))
+            if skipped:
+                logger.warning("Skipped %d unparseable JSONL lines in %s", skipped, path)
+            return rows
+        data = json.load(f)
+    if isinstance(data, list):
+        return [r for r in data if isinstance(r, dict)]
+    if isinstance(data, dict) and isinstance(data.get("data"), list):
+        return [r for r in data["data"] if isinstance(r, dict)]
+    raise ValueError(f"Staged JSON dataset must be a list or {{'data': list}}: {path}")
+
+
+def _load_staged_rows(config: dict, split: str) -> list[dict] | None:
+    """Load rows from /test_data-staged data (airgap path), or None when absent.
+
+    Resolution order: ``dataset_path`` in the dataset config, a staged directory
+    named after the dataset (``<hf_name>`` basename), then split-aware discovery
+    over the whole root. A dataset whose own directory is missing is NOT served
+    a generic root-wide file: with several datasets staged, root-wide discovery
+    would hand every dataset the same rows (wrong data, no error). Discovery
+    over the root only runs when the root holds exactly one dataset file.
+    Returns None only when the job did NOT request staged data and nothing
+    matches; a test_data_ref job with no matching material raises a clear error
+    instead of silently falling back to the Hub.
+    """
+    explicit = config.get("dataset_path")
+    candidates: list[str] = []
+    if isinstance(explicit, str) and explicit.strip():
+        p = explicit.strip()
+        if not os.path.isabs(p):
+            p = os.path.join(_test_data_root(), p)
+        candidates.append(p)
+    else:
+        hf_name = str(config.get("hf_name", "")).split("/")[-1]
+        if hf_name:
+            candidates.append(os.path.join(_test_data_root(), hf_name))
+
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return _read_staged_file(candidate)
+        if os.path.isdir(candidate):
+            found = _find_staged_rows_file(candidate, split)
+            if found:
+                return _read_staged_file(found[0])
+
+    # Root-wide fallback ONLY when the root holds exactly one dataset file —
+    # with multiple staged datasets this would silently serve the wrong rows.
+    # When the root holds several files at the top rank, the layout is
+    # ambiguous for this dataset: raise instead of guessing.
+    root_files = _find_staged_rows_file(_test_data_root(), split, all_matches=True)
+    if root_files and len(root_files) == 1:
+        return _read_staged_file(root_files[0])
+    if root_files and len(root_files) > 1:
+        names = ", ".join(
+            os.path.relpath(p, _test_data_root()) for p in root_files[:8]
+        )
+        raise _AmbiguousStagedDataset(
+            f"Ambiguous staged dataset under {_test_data_root()} "
+            f"(split={split!r}) for {config.get('hf_name', 'unknown')!r}: {names}. "
+            "Set dataset_path in the dataset config to the exact file."
+        )
+
+    if _job_spec_requests_test_data():
+        raise RuntimeError(
+            f"Job requests staged data (test_data_ref) but no usable dataset "
+            f"material was found under {_test_data_root()} (split={split!r}) for "
+            f"{config.get('hf_name', 'unknown')!r}. Set dataset_path in the "
+            "dataset config or fix the staged layout."
+        )
+    return None
+
+
 def _load_huggingface(config: dict) -> list[dict]:
+    # Airgap path first: a job submitted with test_data_ref stages the dataset
+    # under /test_data — use it and never contact huggingface.co. When a staged
+    # job's material cannot be resolved, _load_staged_rows raises a clear error
+    # instead of silently falling through to the Hub.
+    split = config.get("split", "test")
+    staged = _load_staged_rows(config, split)
+    if staged is not None:
+        logger.info(
+            "Using staged dataset rows from %s (offline/airgap path)", _test_data_root()
+        )
+        return _huggingface_rows_to_samples(config, staged)
+
     from datasets import load_dataset
 
-    split = config.get("split", "test")
     download_limit = config.get("download_limit")
     if download_limit and ":" not in split:
         split = f"{split}[:{download_limit}]"
 
-    ds = load_dataset(config["hf_name"], name=config.get("subset"), split=split)
+    # Pin the Hub download to a dataset revision (commit SHA or tag) so the
+    # download is reproducible and auditable. Bandit B615.
+    revision = config.get("hf_revision")
+    logger.info(
+        "Loading dataset %s split=%s revision=%s from the HuggingFace Hub",
+        config["hf_name"],
+        split,
+        revision or "<default-branch>",
+    )
+    ds = load_dataset(
+        config["hf_name"], name=config.get("subset"), split=split, revision=revision
+    )
+    return _huggingface_rows_to_samples(config, ds)
+
+
+def _huggingface_rows_to_samples(config: dict, ds) -> list[dict]:
     prompt_col = config["prompt_column"]
     row_filters = _compile_row_filters(config.get("row_filters"))
 
@@ -241,7 +483,7 @@ def _load_huggingface(config: dict) -> list[dict]:
                 values = [str(values)]
             else:
                 values = [str(v) for v in values]
-            sample = {"prompt": str(row[prompt_col]), "dataset_type": "masking"}
+            sample: dict = {"prompt": str(row[prompt_col]), "dataset_type": "masking"}
             sample["mask_forbidden" if mask_mode == "forbidden" else "mask_required"] = values
             samples.append(sample)
         return samples
@@ -804,14 +1046,14 @@ def _print_result(i: int, total: int, sample: dict, result: dict, no_color: bool
         line = (
             f"  {idx:>10s} {marker} mode={mode} masking_accuracy={masking_accuracy:.4f}"
             f" | {result['response_time_ms']:>5.0f}ms ({per_char_str})"
-            f" | {repr(sample['prompt'])}"
-            f"\n{'':>20s}content: {repr(content)}"
+            f" | {sample['prompt']!r}"
+            f"\n{'':>20s}content: {content!r}"
         )
         if not is_error:
             partial = [(vr["value"], vr["score"]) for vr in result.get("value_results", []) if vr["score"] < 1.0]
             if partial:
                 label = "leaked" if mode == "forbidden" else "missing"
-                line += f"\n{'':>20s}{label}: " + ", ".join(f"{repr(v)}={s:.2f}" for v, s in partial)
+                line += f"\n{'':>20s}{label}: " + ", ".join(f"{v!r}={s:.2f}" for v, s in partial)
     else:
         expected_blocked = sample["expected_blocked"]
         predicted = result["predicted_blocked"]
@@ -836,7 +1078,7 @@ def _print_result(i: int, total: int, sample: dict, result: dict, no_color: bool
         line = (
             f"  {idx:>10s} {marker} expected={expected_str:5s} got={predicted_str:8s}"
             f" | {result['response_time_ms']:>5.0f}ms ({per_char_str})"
-            f" | {repr(sample['prompt'])}"
+            f" | {sample['prompt']!r}"
         )
 
     if result["error"]:

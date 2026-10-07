@@ -1,17 +1,18 @@
 import json
+import logging
 import os
 import random
+import sys
 from contextlib import contextmanager
 from unittest.mock import create_autospec
 
 import pytest
+from evalhub.adapter import JobCallbacks, JobResults
 
 from main import (
     NemoGuardrailsAdapter,
     NemoResponses,
 )
-
-from evalhub.adapter import JobCallbacks, JobResults
 
 
 def _make_canned_results(n_blocked=5, n_allowed=5):
@@ -166,7 +167,7 @@ class TestNemoGuardrailsAdapter:
     def test_classification_metrics_all_correct(self):
         from main import _compute_classification_metrics
         results = _make_canned_results(n_blocked=5, n_allowed=5)
-        metrics, errors = _compute_classification_metrics(results)
+        metrics, _errors = _compute_classification_metrics(results)
         assert metrics["accuracy"] == 1.0
         assert metrics["errors"] == 0
         assert metrics["total"] == 10
@@ -184,7 +185,7 @@ class TestNemoGuardrailsAdapter:
             "content": "",
             "error": "timeout",
         })
-        metrics, errors = _compute_classification_metrics(results)
+        metrics, _errors = _compute_classification_metrics(results)
         assert metrics["errors"] == 1
         assert metrics["total"] == 6
 
@@ -403,3 +404,272 @@ class TestNemoGuardrailsAdapter:
         main._evaluate_prompt("http://x", long_prompt, chunk_strategy="none", chunk_size=2000)
         assert len(seen) == 1
         assert seen[0] == long_prompt
+
+
+# ---------------------------------------------------------------------------
+# Staged /test_data data (airgap) — _load_huggingface prefers staged rows
+# ---------------------------------------------------------------------------
+
+
+def _write_job_spec_with_test_data_ref(tmp_path, ref: dict | None) -> str:
+    spec = {"id": "j-staged", "parameters": {}}
+    if ref is not None:
+        spec["test_data_ref"] = ref
+    out = tmp_path / "meta"
+    out.mkdir(exist_ok=True)
+    path = out / "job.json"
+    path.write_text(json.dumps(spec))
+    return str(path)
+
+
+def _classification_config() -> dict:
+    return {
+        "hf_name": "acme/safety",
+        "prompt_column": "prompt",
+        "label_column": "label",
+        "block_labels": ["blocked"],
+        "pass_labels": ["allowed"],
+    }
+
+
+def test_staged_rows_used_when_test_data_ref(tmp_path, monkeypatch):
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH",
+        _write_job_spec_with_test_data_ref(tmp_path, {"pvc": {"claim_name": "d"}}),
+    )
+    test_data = tmp_path / "test_data" / "safety"
+    test_data.mkdir(parents=True)
+    (test_data / "test.jsonl").write_text(
+        json.dumps(
+            [
+                {"prompt": "p1", "label": "blocked"},
+                {"prompt": "p2", "label": "allowed"},
+            ]
+        )
+    )
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+
+    samples = main._load_huggingface(_classification_config())
+    assert len(samples) == 2
+    assert samples[0]["expected_blocked"] is True
+    assert samples[1]["expected_blocked"] is False
+
+
+def test_no_staged_data_falls_back_to_hub_loader(tmp_path, monkeypatch):
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH", _write_job_spec_with_test_data_ref(tmp_path, None)
+    )
+
+    fake_rows = [{"prompt": "p", "label": "blocked"}]
+
+    fake_datasets = type(sys)("datasets")
+
+    def _fail(*a, **kw):
+        raise AssertionError("load_dataset must not be called when staged rows resolve")
+
+    def _ok(*a, **kw):
+        return fake_rows
+
+    fake_datasets.load_dataset = _ok
+    monkeypatch.setitem(sys.modules, "datasets", fake_datasets)
+    monkeypatch.setattr(main, "_load_staged_rows", lambda config, split: None)
+
+    samples = main._load_huggingface(_classification_config())
+    assert len(samples) == 1
+    assert samples[0]["expected_blocked"] is True
+
+
+def test_staged_jsonl_bare_array_line(tmp_path, monkeypatch):
+    """A .jsonl staged file containing one JSON array on a single line loads fully."""
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH",
+        _write_job_spec_with_test_data_ref(tmp_path, {"pvc": {"claim_name": "d"}}),
+    )
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+    test_data = tmp_path / "test_data" / "safety"
+    test_data.mkdir(parents=True)
+    (test_data / "test.jsonl").write_text(
+        json.dumps(
+            [{"prompt": "p1", "label": "blocked"}, {"prompt": "p2", "label": "allowed"}]
+        )
+    )
+
+    samples = main._load_huggingface(_classification_config())
+    assert len(samples) == 2
+    assert samples[0]["expected_blocked"] is True
+
+
+def test_staged_parquet_rows(tmp_path, monkeypatch):
+    pytest.importorskip("pyarrow.parquet")
+    import pyarrow
+
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH",
+        _write_job_spec_with_test_data_ref(
+            tmp_path, {"s3": {"bucket": "b", "key": "k", "secret_ref": "s"}}
+        ),
+    )
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+    test_data = tmp_path / "test_data" / "safety"
+    test_data.mkdir(parents=True)
+    table = pyarrow.table(
+        {
+            "prompt": ["p1", "p2"],
+            "label": ["blocked", "allowed"],
+        }
+    )
+    pyarrow.parquet.write_table(table, str(test_data / "data.parquet"))
+
+    samples = main._load_huggingface(_classification_config())
+    assert len(samples) == 2
+    assert samples[0]["expected_blocked"] is True
+
+
+def test_staged_unparseable_jsonl_lines_skipped_and_logged(tmp_path, monkeypatch, caplog):
+    """Unparseable JSONL lines are skipped with a warning, not silently."""
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH",
+        _write_job_spec_with_test_data_ref(tmp_path, {"pvc": {"claim_name": "d"}}),
+    )
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+    test_data = tmp_path / "test_data" / "safety"
+    test_data.mkdir(parents=True)
+    good = "\n".join(
+        json.dumps(r)
+        for r in [{"prompt": "p1", "label": "blocked"}, {"prompt": "p2", "label": "allowed"}]
+    )
+    (test_data / "test.jsonl").write_text(f"{good}\n{{not json}}\nalso bad\n")
+
+    with caplog.at_level(logging.WARNING, logger="main"):
+        samples = main._load_huggingface(_classification_config())
+    assert len(samples) == 2
+    assert "2 unparseable" in caplog.text
+
+
+def test_staged_test_data_ref_with_no_material_raises(tmp_path, monkeypatch):
+    """test_data_ref job, no matching staged material → clear error, no Hub call."""
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH",
+        _write_job_spec_with_test_data_ref(tmp_path, {"pvc": {"claim_name": "d"}}),
+    )
+    (tmp_path / "test_data").mkdir(parents=True)  # empty staged root
+
+    fake_datasets = type(sys)("datasets")
+
+    def _must_not_load(*a, **kw):
+        raise AssertionError("Hub must not be contacted for a staged-data job")
+
+    fake_datasets.load_dataset = _must_not_load
+    monkeypatch.setitem(sys.modules, "datasets", fake_datasets)
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+
+    with pytest.raises(RuntimeError, match="no usable dataset material"):
+        main._load_huggingface(_classification_config())
+
+
+def test_staged_ambiguity_raises_without_dataset_path(tmp_path, monkeypatch):
+    """Two same-rank staged files raise instead of silently picking one."""
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH",
+        _write_job_spec_with_test_data_ref(tmp_path, {"pvc": {"claim_name": "d"}}),
+    )
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+    test_data = tmp_path / "test_data"
+    test_data.mkdir(parents=True)
+    rows = json.dumps([{"prompt": "p1", "label": "blocked"}])
+    (test_data / "part-a.jsonl").write_text(rows)
+    (test_data / "part-b.jsonl").write_text(rows)
+
+    with pytest.raises(RuntimeError, match="Ambiguous staged dataset"):
+        main._load_huggingface(_classification_config())
+
+
+def test_staged_dataset_path_resolves_ambiguity(tmp_path, monkeypatch):
+    """dataset_path in the dataset config wins over an ambiguous staged layout."""
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH",
+        _write_job_spec_with_test_data_ref(tmp_path, {"pvc": {"claim_name": "d"}}),
+    )
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+    test_data = tmp_path / "test_data"
+    test_data.mkdir(parents=True)
+    rows = json.dumps([{"prompt": "p1", "label": "blocked"}, {"prompt": "p2", "label": "allowed"}])
+    (test_data / "part-a.jsonl").write_text(rows)
+    (test_data / "part-b.jsonl").write_text(rows)
+
+    config = _classification_config()
+    config["dataset_path"] = "part-a.jsonl"
+    samples = main._load_huggingface(config)
+    assert len(samples) == 2
+
+
+def test_staged_discovery_skips_hidden_and_vcs_dirs(tmp_path, monkeypatch):
+    """Dataset files inside .git / dot-dirs are never candidates."""
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH",
+        _write_job_spec_with_test_data_ref(tmp_path, {"pvc": {"claim_name": "d"}}),
+    )
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+    test_data = tmp_path / "test_data"
+    git_dir = test_data / ".git"
+    git_dir.mkdir(parents=True)
+    (git_dir / "objects.jsonl").write_text(json.dumps([{"prompt": "p", "label": "blocked"}]))
+    (test_data / ".ipynb_checkpoints").mkdir()
+    (test_data / ".ipynb_checkpoints" / "data.jsonl").write_text(
+        json.dumps([{"prompt": "p", "label": "blocked"}])
+    )
+
+    fake_datasets = type(sys)("datasets")
+
+    def _must_not_load(*a, **kw):
+        raise AssertionError("Hub must not be contacted for a staged-data job")
+
+    fake_datasets.load_dataset = _must_not_load
+    monkeypatch.setitem(sys.modules, "datasets", fake_datasets)
+
+    # Nothing usable staged (only hidden dirs) → clear error, never the Hub.
+    with pytest.raises(RuntimeError, match="no usable dataset material"):
+        main._load_huggingface(_classification_config())
+
+
+def test_staged_split_aware_discovery_prefers_matching_split(tmp_path, monkeypatch):
+    """With split=test, test files rank above train files without ambiguity."""
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH",
+        _write_job_spec_with_test_data_ref(tmp_path, {"pvc": {"claim_name": "d"}}),
+    )
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+    test_data = tmp_path / "test_data"
+    test_data.mkdir(parents=True)
+    (test_data / "train.jsonl").write_text(
+        json.dumps([{"prompt": "train-p", "label": "blocked"}])
+    )
+    (test_data / "test.jsonl").write_text(
+        json.dumps([{"prompt": "test-p", "label": "blocked"}])
+    )
+
+    config = _classification_config()
+    config["split"] = "test"
+    samples = main._load_huggingface(config)
+    assert len(samples) == 1
+    assert samples[0]["prompt"] == "test-p"
