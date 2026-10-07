@@ -6,3 +6,6 @@ pyyaml
 scikit-learn
 tqdm
 jq
+# Staged-dataset (airgap) parquet reading for /test_data — imported directly
+# by _read_staged_file for .parquet staged files
+pyarrow

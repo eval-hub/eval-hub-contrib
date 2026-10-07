@@ -331,7 +331,10 @@ def _read_staged_file(path: str) -> list[dict]:
     """Read dataset rows from a staged parquet/json/jsonl file.
 
     Unparseable JSONL lines are skipped with a warning; the total skipped count
-    is logged so silent data loss is visible in job logs.
+    is logged so silent data loss is visible in job logs. An empty or
+    all-malformed file raises instead of returning zero rows — a silent
+    empty-dataset continuation would produce a zero-sample evaluation with no
+    error.
     """
     if path.endswith(".parquet"):
         try:
@@ -340,36 +343,43 @@ def _read_staged_file(path: str) -> list[dict]:
             raise RuntimeError(
                 "pyarrow is required to read staged parquet datasets"
             ) from exc
-        return pyarrow.parquet.read_table(path).to_pylist()
-    with open(path, encoding="utf-8") as f:
-        if path.endswith(".jsonl"):
-            rows = []
-            skipped = 0
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    skipped += 1
-                    logger.warning("Skipping unparseable JSONL line in %s", path)
-                    continue
-                # JSONL is one object per line, but tolerate a single JSON
-                # array dumped onto one line (a common dataset export shape).
-                if isinstance(obj, dict):
-                    rows.append(obj)
-                elif isinstance(obj, list):
-                    rows.extend(r for r in obj if isinstance(r, dict))
-            if skipped:
-                logger.warning("Skipped %d unparseable JSONL lines in %s", skipped, path)
-            return rows
-        data = json.load(f)
-    if isinstance(data, list):
-        return [r for r in data if isinstance(r, dict)]
-    if isinstance(data, dict) and isinstance(data.get("data"), list):
-        return [r for r in data["data"] if isinstance(r, dict)]
-    raise ValueError(f"Staged JSON dataset must be a list or {{'data': list}}: {path}")
+        rows = pyarrow.parquet.read_table(path).to_pylist()
+    else:
+        with open(path, encoding="utf-8") as f:
+            if path.endswith(".jsonl"):
+                rows = []
+                skipped = 0
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        skipped += 1
+                        logger.warning("Skipping unparseable JSONL line in %s", path)
+                        continue
+                    # JSONL is one object per line, but tolerate a single JSON
+                    # array dumped onto one line (a common dataset export shape).
+                    if isinstance(obj, dict):
+                        rows.append(obj)
+                    elif isinstance(obj, list):
+                        rows.extend(r for r in obj if isinstance(r, dict))
+                if skipped:
+                    logger.warning("Skipped %d unparseable JSONL lines in %s", skipped, path)
+            else:
+                data = json.load(f)
+                if isinstance(data, list):
+                    rows = [r for r in data if isinstance(r, dict)]
+                elif isinstance(data, dict) and isinstance(data.get("data"), list):
+                    rows = [r for r in data["data"] if isinstance(r, dict)]
+                else:
+                    raise ValueError(
+                        f"Staged JSON dataset must be a list or {{'data': list}}: {path}"
+                    )
+    if not rows:
+        raise RuntimeError(f"Staged dataset at {path} contains no rows")
+    return rows
 
 
 def _load_staged_rows(config: dict, split: str) -> list[dict] | None:
@@ -443,6 +453,11 @@ def _load_huggingface(config: dict) -> list[dict]:
         logger.info(
             "Using staged dataset rows from %s (offline/airgap path)", _test_data_root()
         )
+        # Mirror the Hub path's download_limit semantics so a staged job is
+        # capped the same way a Hub job would be.
+        download_limit = config.get("download_limit")
+        if download_limit is not None:
+            staged = staged[:download_limit]
         return _huggingface_rows_to_samples(config, staged)
 
     from datasets import load_dataset

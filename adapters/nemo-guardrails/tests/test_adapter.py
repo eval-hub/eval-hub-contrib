@@ -556,6 +556,43 @@ def test_staged_unparseable_jsonl_lines_skipped_and_logged(tmp_path, monkeypatch
     assert "2 unparseable" in caplog.text
 
 
+def test_staged_empty_file_raises_instead_of_zero_samples(tmp_path, monkeypatch):
+    """An empty or all-malformed staged file raises — no silent zero-sample eval."""
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH",
+        _write_job_spec_with_test_data_ref(tmp_path, {"pvc": {"claim_name": "d"}}),
+    )
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+    test_data = tmp_path / "test_data" / "safety"
+    test_data.mkdir(parents=True)
+    (test_data / "test.jsonl").write_text("{not json}\nalso bad\n")
+
+    with pytest.raises(RuntimeError, match="contains no rows"):
+        main._load_huggingface(_classification_config())
+
+
+def test_staged_download_limit_caps_rows(tmp_path, monkeypatch):
+    """download_limit caps the staged rows the same way the Hub path caps them."""
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH",
+        _write_job_spec_with_test_data_ref(tmp_path, {"pvc": {"claim_name": "d"}}),
+    )
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+    test_data = tmp_path / "test_data" / "safety"
+    test_data.mkdir(parents=True)
+    rows = json.dumps([{"prompt": f"p{i}", "label": "blocked"} for i in range(5)])
+    (test_data / "test.jsonl").write_text(rows)
+
+    config = _classification_config()
+    config["download_limit"] = 2
+    samples = main._load_huggingface(config)
+    assert len(samples) == 2
+
+
 def test_staged_test_data_ref_with_no_material_raises(tmp_path, monkeypatch):
     """test_data_ref job, no matching staged material → clear error, no Hub call."""
     import main
