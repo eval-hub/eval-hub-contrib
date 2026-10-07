@@ -322,6 +322,7 @@ class RulerAdapter(FrameworkAdapter):
                 model_name=config.model.name,
                 evaluation_results=evaluation_results,
                 work_dir=work_dir,
+                raw_results=raw_results,
             )
 
             # Phase 5 — persist artifacts
@@ -1130,6 +1131,7 @@ class RulerAdapter(FrameworkAdapter):
         model_name: str,
         evaluation_results: list[EvaluationResult],
         work_dir: Path,
+        raw_results: dict[str, dict[int, list[dict]]],
     ) -> list[Path]:
         # Determine output directory: prefer the SDK-provided path (k8s persistent volume),
         # fall back to $HOME/ruler_<job_id>_results if that path is not writable
@@ -1180,6 +1182,38 @@ class RulerAdapter(FrameworkAdapter):
                 indent=2,
             )
         files.append(results_file)
+
+        # Write diagnostics beside the aggregate files so OCI export includes them
+        # before the temporary predictions directory is removed during cleanup.
+        eval_constants = _load_module_from_path(
+            "ruler_eval_constants",
+            self.SCRIPTS_DIR / "eval" / "synthetic" / "constants.py",
+        )
+        samples_file = output_dir / "samples.jsonl"
+        with samples_file.open("w", encoding="utf-8") as fh:
+            for task_id, ctx_results in raw_results.items():
+                base_task_type = self._load_task_config(task_id)["task"]
+                metric_fn = eval_constants.TASKS[base_task_type]["metric_fn"]
+                for context_length, predictions in ctx_results.items():
+                    for sample in predictions:
+                        reference_matches = [
+                            answer.lower() in sample["pred"].lower()
+                            for answer in sample["outputs"]
+                        ]
+                        row = {
+                            "job_id": job_id,
+                            "benchmark_id": benchmark_id,
+                            "model_name": model_name,
+                            "task_id": task_id,
+                            "context_length": context_length,
+                            **sample,
+                            "metric_name": f"{task_id}.ctx_{context_length}.score",
+                            "scorer": metric_fn.__name__,
+                            "score": metric_fn([sample["pred"]], [sample["outputs"]]) / 100.0,
+                            "reference_matches": reference_matches,
+                        }
+                        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        files.append(samples_file)
 
         logger.info(f"Saved {len(files)} result file(s) to {output_dir}")
         return files

@@ -144,3 +144,26 @@ synthetic data-generation subprocesses as `HF_TOKEN` and
 For direct model endpoints, `MODEL_API_KEY` or `OPENAI_API_KEY` remains supported
 when no SDK credential is available. Existing HF token environment variables
 remain supported when no mounted `hf-token` is available.
+
+## Per-example diagnostics
+
+The result directory includes `samples.jsonl` alongside `summary.csv` and
+`results.json`. When OCI export is configured, all three files are included in
+the result artifact before temporary predictions are deleted.
+
+Each JSONL row contains `job_id`, `benchmark_id`, `model_name`, `task_id`,
+`context_length`, the original sample `index`, `input` (full prompt), `outputs`
+(expected answers, including expected variable names for variable tracking), and
+`pred` (model answer). It also includes `metric_name`, `scorer`, `score` (0–1),
+and `reference_matches` (one case-insensitive substring-match flag per expected
+answer, in the same order as `outputs`). Indices can repeat across tasks/context
+lengths; use `(task_id, context_length, index)` to identify a sample.
+
+Scores use the same upstream metric function as aggregate scoring:
+`string_match_all` gives partial credit for the fraction of expected answers
+found, while QA uses `string_match_part` and gives credit when any expected
+answer is found. These are substring metrics, not exact answer comparisons.
+The upstream scorer rounds percentages to two decimals, so averaging rounded
+sample scores can differ slightly from the aggregate score. Diagnostics are
+saved for successfully completed evaluations; they do not recover samples from
+previous runs whose temporary prediction files were already deleted.
