@@ -24,6 +24,7 @@ import inspect
 import json
 import logging
 import os
+import ssl
 import sys
 import time
 from dataclasses import dataclass
@@ -49,7 +50,7 @@ from ragas import EvaluationDataset
 from ragas.run_config import RunConfig
 
 try:
-    from openai import AsyncOpenAI
+    from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 
     _HAS_OPENAI = True
 except ImportError:
@@ -60,6 +61,7 @@ logger = logging.getLogger(__name__)
 # When test_data_ref.s3 is set, EvalHub's init container downloads objects here
 TEST_DATA_DIR = Path("/test_data")
 DEFAULT_DATA_DIR = Path("/data")
+SERVICE_CA_PATH = Path("/etc/pki/ca-trust/source/anchors/service-ca.crt")
 DEFAULT_DATASET_FILENAME = "dataset.jsonl"
 _DATA_SUFFIXES = (".jsonl", ".json")
 
@@ -239,6 +241,7 @@ def _async_openai_client(
     *,
     use_model_credentials: bool = True,
 ) -> Any:
+    """Create an OpenAI client that also trusts the mounted service CA."""
     if not _HAS_OPENAI:
         raise RuntimeError(
             "openai package is required — install with: pip install openai>=1.0.0"
@@ -246,7 +249,21 @@ def _async_openai_client(
     url, resolved_api_key = _openai_credentials(
         base_url, api_key, use_model_credentials=use_model_credentials
     )
-    return AsyncOpenAI(base_url=url, api_key=resolved_api_key)
+    client_kwargs: dict[str, Any] = {}
+    if SERVICE_CA_PATH.is_file():
+        import certifi
+
+        # Match HTTPX's default trust configuration, then add the mounted CA.
+        # Replacing the bundle with only the service CA breaks public endpoints.
+        if os.environ.get("SSL_CERT_FILE"):
+            context = ssl.create_default_context(cafile=os.environ["SSL_CERT_FILE"])
+        elif os.environ.get("SSL_CERT_DIR"):
+            context = ssl.create_default_context(capath=os.environ["SSL_CERT_DIR"])
+        else:
+            context = ssl.create_default_context(cafile=certifi.where())
+        context.load_verify_locations(cafile=str(SERVICE_CA_PATH))
+        client_kwargs["http_client"] = DefaultAsyncHttpxClient(verify=context)
+    return AsyncOpenAI(base_url=url, api_key=resolved_api_key, **client_kwargs)
 
 
 def _create_ragas_llm(

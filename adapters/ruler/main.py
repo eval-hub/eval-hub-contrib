@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from evalhub.adapter import (
     CapabilityEvalEntry,
@@ -35,6 +36,8 @@ from evalhub.adapter import (
     MessageInfo,
     OCIArtifactSpec,
 )
+
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -472,6 +475,7 @@ class RulerAdapter(FrameworkAdapter):
                     use_fast=True,
                     # Request tokenizer files only — skip model weights
                     local_files_only=False,
+                    token=self._hf_token(),
                 )
                 return True
             if tokenizer_type == "openai":
@@ -520,13 +524,51 @@ class RulerAdapter(FrameworkAdapter):
         """Create a single shared OpenAI-compatible client for the whole job."""
         from openai import OpenAI  # noqa: PLC0415
 
-        api_key = os.getenv("MODEL_API_KEY", "")
-        if not api_key:
+        api_key = (
+            resolve_model_credentials().api_key
+            or os.getenv("MODEL_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+        )
+        if not api_key and self._uses_local_sidecar(model_url):
+            # The SDK requires a nonempty key. The sidecar replaces this
+            # placeholder with ServiceAccount authentication before forwarding.
+            api_key = "local"
+        elif not api_key:
             raise ValueError(
-                "MODEL_API_KEY environment variable is required for API authentication. "
-                "Set it to 'dummy' or 'none' explicitly if the endpoint has no auth."
+                "Model API credentials are required. Configure model.auth.secret_ref "
+                "or MODEL_API_KEY/OPENAI_API_KEY for a direct endpoint."
             )
         return OpenAI(base_url=model_url, api_key=api_key)
+
+    def _uses_local_sidecar(self, model_url: str) -> bool:
+        """Recognize the shared loopback model/callback origin of K8s jobs."""
+        if os.getenv("EVALHUB_MODE") != "k8s":
+            return False
+        callback_url = getattr(getattr(self, "job_spec", None), "callback_url", None)
+        if not callback_url:
+            return False
+        try:
+            model = urlsplit(model_url)
+            callback = urlsplit(callback_url)
+            return (
+                model.scheme in ("http", "https")
+                and model.hostname in ("localhost", "127.0.0.1", "::1")
+                and model.username is None
+                and callback.username is None
+                and (model.scheme, model.hostname, model.port)
+                == (callback.scheme, callback.hostname, callback.port)
+            )
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _hf_token() -> str | None:
+        """Resolve Hub authentication without exposing it in command arguments."""
+        return (
+            read_model_auth_key("hf-token")
+            or os.getenv("HF_TOKEN")
+            or os.getenv("HUGGING_FACE_HUB_TOKEN")
+        )
 
     def _generate_task_data(
         self,
@@ -579,6 +621,11 @@ class RulerAdapter(FrameworkAdapter):
             "--random_seed", str(random_seed),
             "--model_template_type", model_template,
         ]
+
+        hf_token = self._hf_token()
+        if hf_token:
+            env["HF_TOKEN"] = hf_token
+            env["HUGGING_FACE_HUB_TOKEN"] = hf_token
 
         logger.info(f"Generating data: task={task_id} ctx={context_length}")
         result = subprocess.run(
@@ -670,7 +717,7 @@ class RulerAdapter(FrameworkAdapter):
                 if isinstance(exc, (_openai.AuthenticationError, _openai.PermissionDeniedError)):
                     raise RuntimeError(
                         f"API authentication failed for {model_name}: {exc}. "
-                        "Check MODEL_API_KEY."
+                        "Check model.auth.secret_ref or the model API credential environment."
                     ) from exc
                 logger.warning(
                     f"Inference failed for sample {sample.get('index', '?')}: {exc}"

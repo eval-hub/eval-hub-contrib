@@ -832,6 +832,24 @@ parameters:
       Global API key for OpenAI-compatible endpoints. Sets OPENAI_API_KEY.
       Not required for unauthenticated vLLM. Falls back to OPENAI_API_KEY env var.
 
+  - name: grader_model
+    type: string
+    default: null
+    description: >
+      StrongREJECT only. Optional independent grader model (for example
+      gpt-4o-mini). When set, the task uses Inspect's grader role instead of
+      its built-in judge_llm default. The credential must be injected into the
+      adapter as OPENAI_JUDGE_API_KEY; do not place the key in this parameter
+      or in task_args.
+
+  - name: grader_base_url
+    type: string
+    default: null
+    description: >
+      StrongREJECT only. Base URL for the independent grader's OpenAI-compatible
+      endpoint. Defaults to https://api.openai.com/v1 and can also be supplied
+      through OPENAI_JUDGE_BASE_URL.
+
   - name: target_base_url
     type: string
     default: null

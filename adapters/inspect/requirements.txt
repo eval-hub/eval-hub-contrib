@@ -1,13 +1,23 @@
+# Direct dependencies are pinned to exact, tested versions; constraints.txt pins the
+# full transitive tree. Both are applied at image build time (see Containerfile), so a
+# rebuild reproduces the same dependency set instead of picking up whatever is newest.
+# Refresh both together — see "Updating dependencies" in README.md.
 eval-hub-sdk[adapter]~=1.0.5
-inspect-ai>=0.3.260
-openai>=2.0.0
-inspect-evals[math,bfcl]>=0.1.0
+inspect-ai==0.3.276
+openai==3.24.0
+inspect-evals[math,bfcl]==0.23.0
+# instruction_following_eval is not on PyPI; inspect-evals' ifeval task points at this
+# repository. Pinned to a commit.
 git+https://github.com/josejg/instruction_following_eval.git@0c495b2f95155e8b10acb919ae283bfb4d5be6e2
-inspect-petri>=3.0.0
-petri-bloom>=0.1.0
+inspect-petri==3.1.1
+petri-bloom==0.2.6
 # GSMA Open-Telco Inspect tasks (TeleMath, TeleQnA, …) — registers as evals/*
 evals @ git+https://github.com/gsma-labs/evals.git@v1.1.0
 # Required by inspect_evals/makemesay for word tokenization and lemmatization.
 # Data (punkt, punkt_tab, wordnet) is pre-seeded in the image at build time —
 # no network access required at runtime.
-nltk>=3.10.3
+# GHSA-8mgp-746c-j5xp (CVE-2026-81726): no patched release exists yet (3.10.3 is the
+# latest). It affects nltk's parser/perceptron model save/load APIs, which nothing in
+# this image calls (inspect-evals uses only tokenizers, data lookup and BLEU).
+# Revisit when a fixed nltk is released.
+nltk==3.10.3

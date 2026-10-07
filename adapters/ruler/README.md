@@ -122,3 +122,25 @@ only the metric functions from `scripts/eval/synthetic/constants.py`.
 
 Apache 2.0 — see repository root `LICENSE`.
 Vendored NVIDIA RULER scripts retain their original NVIDIA copyright.
+
+## Model and tokenizer authentication
+
+For EvalHub jobs, set `model.auth.secret_ref` to the existing model credential
+Secret. The adapter uses the SDK's mounted `api-key` credential, including the
+sidecar reference token, for model requests. Keep the configured proxy URL;
+the sidecar resolves the reference to the actual model credential.
+
+For Kubernetes jobs using the local sidecar, an API key is optional when the
+sidecar supplies ServiceAccount authentication. The adapter recognizes this
+route by the shared loopback origin of the model and callback URLs with
+`EVALHUB_MODE=k8s`, and creates the client with a `local` placeholder. The sidecar replaces this
+placeholder with its ServiceAccount token before forwarding. Direct model
+endpoints still require credentials.
+
+The Secret's `hf-token` is passed to the tokenizer precheck and inherited by
+synthetic data-generation subprocesses as `HF_TOKEN` and
+`HUGGING_FACE_HUB_TOKEN`. Tokens are not passed as CLI arguments.
+
+For direct model endpoints, `MODEL_API_KEY` or `OPENAI_API_KEY` remains supported
+when no SDK credential is available. Existing HF token environment variables
+remain supported when no mounted `hf-token` is available.

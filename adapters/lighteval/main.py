@@ -38,6 +38,7 @@ from evalhub.adapter import (
     resolve_model_credentials,
 )
 from evalhub.models import MetricSchema, ResultType
+from evalhub.adapter.mlflow import MlflowArtifact
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,25 @@ class LightEvalAdapter(FrameworkAdapter):
                 evaluation_results=evaluation_results,
                 additional_info=additional_info,
             )
+            self.mlflow_artifacts = [
+                MlflowArtifact(
+                    file.name,
+                    file.read_bytes(),
+                    "application/json" if file.suffix == ".json" else "text/plain",
+                )
+                for file in output_files
+            ]
+
+            if config.parameters.get("save_sample_results"):
+                from sample_results import save_sample_results
+
+                sample_file, sample_count = save_sample_results(
+                    output_dir,
+                    output_files[0].parent,
+                    config.benchmark_id,
+                )
+                output_files.append(sample_file)
+                logger.info("Saved %d per-example results to %s", sample_count, sample_file)
 
             logger.info(
                 f"Post-processing complete. Overall score: {overall_score}, "
@@ -235,6 +255,12 @@ class LightEvalAdapter(FrameworkAdapter):
 
         if not config.model.name:
             raise ValueError("model.name is required")
+
+        save_samples = config.parameters.get("save_sample_results", False)
+        if not isinstance(save_samples, bool):
+            raise ValueError("save_sample_results must be a boolean")
+        if save_samples and not (config.exports and config.exports.oci):
+            raise ValueError("save_sample_results requires an OCI export")
 
         # Validate model provider (from benchmark_config)
         provider = config.parameters.get("provider", "endpoint")
@@ -855,8 +881,10 @@ def main() -> None:
         logger.info(f"Overall score: {results.overall_score}")
         logger.info(f"Evaluated {results.num_examples_evaluated} examples")
 
-        # Save metrics/params to MLflow
-        run_id = callbacks.mlflow.save(results, adapter.job_spec)
+        # Save metrics/params and the same result files used for OCI to MLflow
+        run_id = callbacks.mlflow.save(
+            results, adapter.job_spec, artifacts=adapter.mlflow_artifacts
+        )
         if run_id:
             results.mlflow_run_id = run_id
             logger.info(f"MLflow run created: {run_id}")
