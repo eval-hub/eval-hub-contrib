@@ -10,9 +10,13 @@ import _preflight as pf
 
 
 class _Handler(BaseHTTPRequestHandler):
-    def do_HEAD(self):
-        self.send_response(404 if self.path == "/missing" else 200)
+    def do_GET(self):
+        self.send_response(404 if self.path == "/missing" else 206)
         self.end_headers()
+
+    def do_HEAD(self):
+        # Models a proxy/WAF that resets HEAD requests but serves GET.
+        self.connection.shutdown(socket.SHUT_RDWR)
 
     def log_message(self, format, *args):
         pass
@@ -101,10 +105,10 @@ def test_custom_task_file_is_not_probed_by_default():
 
 def test_bfcl_also_needs_github_until_data_is_staged(tmp_path):
     env = {"INSPECT_EVALS_CACHE_DIR": str(tmp_path)}
-    assert "https://github.com" in pf.required_urls("inspect_evals/bfcl", env)
+    assert pf.required_urls("inspect_evals/bfcl", env) == ["https://huggingface.co", "https://github.com"]
     (tmp_path / "BFCL").mkdir()
     (tmp_path / "BFCL" / "BFCL_v4_simple_python.json").write_text("{}")
-    assert "https://github.com" not in pf.required_urls("inspect_evals/bfcl", env)
+    assert pf.required_urls("inspect_evals/bfcl", env) == ["https://huggingface.co"]
 
 
 def test_user_hosts_are_added_and_deduplicated():
@@ -117,6 +121,12 @@ def test_user_hosts_are_added_and_deduplicated():
 def test_probe_reachable(http_server):
     ok, detail, _ = pf.probe(http_server, 2, {})
     assert ok and detail == "ok"
+
+
+def test_probe_sends_a_ranged_get_not_head(http_server):
+    """A server that resets HEAD must still count as reachable (the real download is a GET)."""
+    ok, detail, _ = pf.probe(http_server, 2, {})
+    assert ok, detail
 
 
 def test_probe_http_error_counts_as_reachable(http_server):

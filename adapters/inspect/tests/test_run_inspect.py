@@ -96,6 +96,37 @@ def test_unlaunchable_command_raises_oserror(tmp_path):
         ex.run_inspect(["/nonexistent/inspect", "eval", "x"], dict(_OFF), tmp_path)
 
 
+def test_interrupted_run_reaps_the_child_and_closes_the_pipe(tmp_path, monkeypatch):
+    """If logging raises mid-run, the process group is killed and waited on (no zombie)."""
+    import os
+
+    pids: list[int] = []
+    created: list = []
+    real_popen = ex.subprocess.Popen
+
+    def spy_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        created.append(proc)
+        return proc
+
+    def boom(msg, *args):
+        if str(msg).startswith("inspect |"):
+            pids.append(int(args[0]))
+            raise RuntimeError("logging failed")
+
+    monkeypatch.setattr(ex.subprocess, "Popen", spy_popen)
+    monkeypatch.setattr(ex.logger, "info", boom)
+    script = "import os,time; print(os.getpid(), flush=True); time.sleep(60)"
+    with pytest.raises(RuntimeError, match="logging failed"):
+        ex.run_inspect(_cmd(script), dict(_OFF), tmp_path)
+
+    proc = created[0]
+    assert proc.returncode is not None            # reaped
+    assert proc.stdout.closed                      # pipe released
+    with pytest.raises(ProcessLookupError):        # and really gone
+        os.kill(pids[0], 0)
+
+
 # -- timeout ----------------------------------------------------------------------------------
 
 def test_timeout_stops_a_hung_run(tmp_path):

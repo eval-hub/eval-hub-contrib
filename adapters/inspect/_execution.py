@@ -448,6 +448,12 @@ def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
         returncode = proc.wait()
     except BaseException:
         _signal_group(signal.SIGKILL)
+        try:
+            proc.wait(timeout=_KILL_GRACE_S)  # reap, so no zombie is left behind
+        except subprocess.TimeoutExpired:
+            pass
+        if proc.stdout:
+            proc.stdout.close()
         raise
     finally:
         if watchdog:

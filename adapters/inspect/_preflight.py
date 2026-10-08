@@ -117,7 +117,10 @@ def _proxies(env: dict[str, str]) -> dict[str, str]:
 
 
 def probe(url: str, timeout_s: float, env: dict[str, str]) -> tuple[bool, str, float]:
-    """HEAD ``url``. Any HTTP answer counts as reachable; only connect/timeout errors fail.
+    """Ranged ``GET`` of ``url``. Any HTTP answer counts as reachable; only connect/timeout errors fail.
+
+    ``GET`` with ``Range: bytes=0-0`` follows the same path as the real dataset download
+    (some proxies and WAFs drop or reset ``HEAD``) while the response body is never read.
 
     A TLS verification error is reported as reachable: the network path works, and the real
     download may use a different CA bundle than this probe.
@@ -130,7 +133,7 @@ def probe(url: str, timeout_s: float, env: dict[str, str]) -> tuple[bool, str, f
     else:
         handlers.append(urllib.request.ProxyHandler({}))
     opener = urllib.request.build_opener(*handlers)
-    request = urllib.request.Request(url, method="HEAD")
+    request = urllib.request.Request(url, method="GET", headers={"Range": "bytes=0-0"})
     started = time.monotonic()
     try:
         with opener.open(request, timeout=timeout_s):

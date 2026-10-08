@@ -165,7 +165,7 @@ the job fails within seconds with a message naming the host and the ways out, in
 sitting silent while the HuggingFace client and inspect-evals retry with exponential
 backoff (many minutes) or `git clone` (BFCL) waits forever.
 
-Hosts probed (HTTP `HEAD`; any HTTP answer counts as reachable):
+Hosts probed (a ranged `GET`, `Range: bytes=0-0`, body not read; any HTTP answer counts as reachable):
 
 | Task | Host |
 |---|---|
