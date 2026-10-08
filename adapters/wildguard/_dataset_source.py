@@ -264,12 +264,17 @@ def should_use_staged_data(
 ) -> bool:
     """Whether staged ``/test_data`` data should take priority over the HF Hub.
 
-    True when the job spec carries ``test_data_ref`` and the mount is usable, or
-    when staged dataset material is actually present (auto-detection).
+    True when the ``/test_data`` mount is usable, when the job spec carries
+    ``test_data_ref``, or when staged dataset material is actually present.
+
+    The mount is the reliable signal on a cluster: eval-hub mounts ``/test_data``
+    only for jobs that set ``test_data_ref`` and does NOT copy that key into the
+    ``/meta/job.json`` the adapter reads (verified on-cluster), so the spec check
+    alone never fires there.
     """
-    if job_spec_requests_test_data(job_spec_path) and is_test_data_mount_usable(
-        test_data_root
-    ):
+    if is_test_data_mount_usable(test_data_root):
+        return True
+    if job_spec_requests_test_data(job_spec_path):
         return True
     return _resolve_staged_dataset(parameters, test_data_root, split=split) is not None
 

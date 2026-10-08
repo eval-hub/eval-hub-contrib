@@ -782,17 +782,36 @@ def test_multi_dataset_unstaged_dataset_never_gets_another_datasets_rows(tmp_pat
         main._load_huggingface(_multi_dataset_config("jackhhao/jackhhao_x"))
 
 
-def test_multi_dataset_skips_root_wide_fallback_without_test_data_ref(tmp_path, monkeypatch):
-    """No test_data_ref + multi-dataset: a loose root file is not used (Hub path)."""
+def test_no_mount_and_no_spec_ref_means_hub_path(tmp_path, monkeypatch):
+    """No /test_data mount and no test_data_ref: staged loading steps aside (Hub)."""
     import main
 
     monkeypatch.setenv("EVALHUB_JOB_SPEC_PATH", _write_job_spec_with_test_data_ref(tmp_path, None))
-    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
-    root = tmp_path / "test_data"
-    root.mkdir(parents=True)
-    (root / "test.jsonl").write_text(json.dumps([{"prompt": "p1", "label": "blocked"}]))
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "absent"))
+    monkeypatch.setattr(main, "_test_data_mount_usable", lambda: False)
 
     assert main._load_staged_rows(_multi_dataset_config("o/other"), "test") is None
+
+
+def test_mount_without_spec_key_is_treated_as_staged_job(tmp_path, monkeypatch):
+    """eval-hub mounts /test_data but does not put test_data_ref in /meta/job.json.
+
+    Verified on-cluster: the spec has no test_data_ref key, so the usable mount is
+    the signal. A dataset that matches nothing must raise, not fall to the Hub.
+    """
+    import main
+
+    monkeypatch.setenv("EVALHUB_JOB_SPEC_PATH", _write_job_spec_with_test_data_ref(tmp_path, None))
+    root = tmp_path / "test_data"
+    (root / "prompt-injections").mkdir(parents=True)
+    (root / "prompt-injections" / "test.jsonl").write_text(
+        json.dumps([{"prompt": "p1", "label": "blocked"}])
+    )
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(root))
+
+    assert len(main._load_staged_rows(_multi_dataset_config("deepset/prompt-injections"), "test")) == 1
+    with pytest.raises(RuntimeError, match=r"Stage it under .*other-dataset/"):
+        main._load_staged_rows(_multi_dataset_config("acme/other-dataset"), "test")
 
 
 def test_single_dataset_root_wide_fallback_is_split_aware(tmp_path, monkeypatch):

@@ -526,3 +526,44 @@ def test_module_importable_without_optional_deps():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert hasattr(mod, "load_dataset_rows")
+
+
+# ---------------------------------------------------------------------------
+# Real cluster shape: /test_data is mounted but /meta/job.json has no test_data_ref
+# (verified on-cluster: eval-hub consumes the key to create the mount)
+# ---------------------------------------------------------------------------
+
+
+def test_usable_mount_alone_selects_staged_path(tmp_path):
+    root = tmp_path / "test_data"
+    root.mkdir()
+    (root / "notes.txt").write_text("not a dataset")
+    assert should_use_staged_data(
+        {}, split="test", job_spec_path=str(tmp_path / "missing.json"), test_data_root=root
+    )
+
+
+def test_absent_mount_alone_does_not_select_staged_path(tmp_path):
+    assert not should_use_staged_data(
+        {},
+        split="test",
+        job_spec_path=str(tmp_path / "missing.json"),
+        test_data_root=tmp_path / "nope",
+    )
+
+
+def test_mount_without_spec_key_and_no_material_gives_specific_error(tmp_path, monkeypatch):
+    """A mounted-but-unmatched layout reports the layout problem, not 'no staged data'."""
+    root = tmp_path / "test_data"
+    root.mkdir()
+    (root / "notes.txt").write_text("not a dataset")
+    loader = _install_fake_datasets(monkeypatch, fail=True)
+    with pytest.raises(DatasetSourceError, match="no usable dataset material"):
+        load_dataset_rows(
+            {},
+            hf_dataset_id="allenai/wildguard",
+            split="test",
+            job_spec_path=str(tmp_path / "missing.json"),
+            test_data_root=root,
+        )
+    loader.assert_not_called()

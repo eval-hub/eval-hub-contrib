@@ -243,6 +243,27 @@ def _job_spec_requests_test_data() -> bool:
     return any(ref.get(key) for key in ("s3", "pvc", "git", "hf"))
 
 
+def _test_data_mount_usable() -> bool:
+    """True when the staged root (or the default ``/test_data`` mount) holds entries."""
+    for root in {_test_data_root(), "/test_data"}:
+        try:
+            if os.path.isdir(root) and any(os.scandir(root)):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _staged_data_requested() -> bool:
+    """Whether the job expects staged data (``test_data_ref``) rather than the Hub.
+
+    eval-hub mounts ``/test_data`` only for jobs that set ``test_data_ref`` and
+    does NOT copy that key into ``/meta/job.json`` (verified on-cluster), so the
+    job-spec check alone never fires there; a usable mount is the reliable signal.
+    """
+    return _job_spec_requests_test_data() or _test_data_mount_usable()
+
+
 class _AmbiguousStagedDataset(RuntimeError):
     """Raised when staged discovery matches more than one dataset file."""
 
@@ -435,7 +456,7 @@ def _load_staged_rows(config: dict, split: str) -> list[dict] | None:
                 "Set dataset_path in the dataset config to the exact file."
             )
 
-    if _job_spec_requests_test_data():
+    if _staged_data_requested():
         hf_name = str(config.get("hf_name", "unknown"))
         raise RuntimeError(
             f"Job requests staged data (test_data_ref) but no usable dataset "
