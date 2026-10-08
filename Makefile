@@ -20,7 +20,9 @@ IMAGE_SWEBENCH = $(REGISTRY)/community-swebench:$(VERSION)
 IMAGE_RULER = $(REGISTRY)/community-ruler:$(VERSION)
 IMAGE_NEMO_GUARDRAILS = $(REGISTRY)/community-nemo-guardrails:$(VERSION)
 IMAGE_TOOLEVAL = $(REGISTRY)/community-tooleval:$(VERSION)
-IMAGE_TOOLBENCH_SERVER = $(REGISTRY)/community-toolbench-server:$(VERSION)
+# Fixture image tag matches tool-server/deploy.yaml; full-cache appends -full.
+TOOLBENCH_SERVER_VERSION ?= 0.3.0
+IMAGE_TOOLBENCH_SERVER = $(REGISTRY)/community-toolbench-server:$(TOOLBENCH_SERVER_VERSION)
 IMAGE_PROMPTFOO = $(REGISTRY)/community-promptfoo:$(VERSION)
 
 # Default target
@@ -37,7 +39,7 @@ help:
 	@echo "  make image-deepeval     - Build DeepEval adapter image"
 	@echo "  make image-ragas        - Build RAGAS adapter image"
 	@echo "  make image-tooleval     - Build ToolEval adapter image"
-	@echo "  make image-toolbench-server - Build ToolBench tool server image (FETCH_FULL_CACHE=1 for HF cache)"
+	@echo "  make image-toolbench-server - Build ToolBench tool server ($(TOOLBENCH_SERVER_VERSION); FETCH_FULL_CACHE=1 -> $(TOOLBENCH_SERVER_VERSION)-full)"
 	@echo "  make image-swebench     - Build SWE-bench adapter image"
 	@echo "  make image-ruler        - Build RULER adapter image"
 	@echo "  make images             - Build all adapter images"
@@ -477,11 +479,15 @@ clean-tooleval:
 	@echo "✅ Removed: $(IMAGE_TOOLEVAL)"
 
 # Optional: FETCH_FULL_CACHE=1 bakes the HF StableToolBench tools+cache into the image.
+# Fixture and full-cache images use distinct tags so IfNotPresent cannot mix them.
 FETCH_FULL_CACHE ?= 0
+ifeq ($(FETCH_FULL_CACHE),1)
+IMAGE_TOOLBENCH_SERVER = $(REGISTRY)/community-toolbench-server:$(TOOLBENCH_SERVER_VERSION)-full
+endif
 
 .PHONY: image-toolbench-server
 image-toolbench-server:
-	@echo "Building ToolBench tool server image (FETCH_FULL_CACHE=$(FETCH_FULL_CACHE))..."
+	@echo "Building ToolBench tool server image (FETCH_FULL_CACHE=$(FETCH_FULL_CACHE)) -> $(IMAGE_TOOLBENCH_SERVER)"
 	cd adapters/tooleval/tool-server && \
 	$(BUILD_TOOL) build -t $(IMAGE_TOOLBENCH_SERVER) -f Containerfile \
 		--build-arg FETCH_FULL_CACHE=$(FETCH_FULL_CACHE) .

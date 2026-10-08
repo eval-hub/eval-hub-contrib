@@ -140,8 +140,8 @@ Also: `examples/job-single-tool.json`, `examples/job-multi-tool.json`, `examples
 
 ```sh
 make image-tooleval
-make image-toolbench-server
-make image-toolbench-server FETCH_FULL_CACHE=1
+make image-toolbench-server          # -> .../community-toolbench-server:0.3.0
+make image-toolbench-server FETCH_FULL_CACHE=1  # -> ...:0.3.0-full
 kubectl -n <tenant> apply -f adapters/tooleval/tool-server/deploy.yaml
 ```
 

@@ -21,6 +21,8 @@ spec:
     spec:
       containers:
         - name: toolbench-server
+          # Fixture image (default Makefile target). For FETCH_FULL_CACHE=1 builds use
+          # quay.io/evalhub/community-toolbench-server:0.3.0-full instead.
           image: quay.io/evalhub/community-toolbench-server:0.3.0
           imagePullPolicy: IfNotPresent
           ports:

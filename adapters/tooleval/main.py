@@ -248,13 +248,10 @@ class ToolEvalAdapter(FrameworkAdapter):
                             "tool_input": dict(tool_input_template),
                         }
                     ]
-                    # Restrict catalog to the one tool when possible
-                    catalog = [
-                        t
-                        for t in available_tools
-                        if t.get("tool_name") == tool_name
-                        and (not category or t.get("category") == category)
-                    ] or available_tools[:1]
+                    # Job-level fallback; per-task catalogs are built in the task loop.
+                    catalog = _single_tool_catalog(
+                        available_tools, tool_name=tool_name, category=category or ""
+                    )
                 else:
                     catalog = available_tools
                     default_refs = list(_DEFAULT_REFERENCE_CALLS)
@@ -289,11 +286,19 @@ class ToolEvalAdapter(FrameworkAdapter):
                     )
 
                     try:
+                        task_catalog = catalog
+                        if mode == "single_tool" and task["reference_calls"]:
+                            ref0 = task["reference_calls"][0]
+                            task_catalog = _single_tool_catalog(
+                                available_tools,
+                                tool_name=str(ref0.get("tool_name") or tool_name),
+                                category=str(ref0.get("category") or category or ""),
+                            ) or catalog
                         episode, mut_delta = _run_agent_episode(
                             mut_client=mut_client,
                             model_name=model_name,
                             tool_client=tool_client,
-                            catalog=catalog,
+                            catalog=task_catalog,
                             instruction=task["instruction"],
                             max_steps=max_steps,
                             mode=mode,
@@ -1088,6 +1093,23 @@ def _run_virtual_call(
     body = parsed if isinstance(parsed, dict) else {"error": "invalid_body", "response": parsed}
     _log_debug_io("virtual_response", status=resp.status_code, body=body)
     return body
+
+
+
+def _single_tool_catalog(
+    tools: list[dict[str, Any]],
+    *,
+    tool_name: str,
+    category: str,
+) -> list[dict[str, Any]]:
+    """Restrict GET /tools entries to one tool; fall back to the first catalog entry."""
+    matched = [
+        t
+        for t in tools
+        if t.get("tool_name") == tool_name
+        and (not category or t.get("category") == category)
+    ]
+    return matched or tools[:1]
 
 
 def _first_api_name(tool: dict[str, Any] | None) -> str:

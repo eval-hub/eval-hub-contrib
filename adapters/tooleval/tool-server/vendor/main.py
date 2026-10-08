@@ -233,7 +233,7 @@ def get_virtual_response(request: Request, info: Info):
         "toolbench_key": user_key
     }
     
-    real_response = requests.post(CONFIG['toolbench_url'], headers=headers, data=json.dumps(data))
+    real_response = requests.post(CONFIG['toolbench_url'], headers=headers, data=json.dumps(data), timeout=CONFIG.get('toolbench_timeout', 30))
 
     # Check if the request was successful
     if real_response.status_code == 200:

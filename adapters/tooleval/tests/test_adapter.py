@@ -11,6 +11,7 @@ from main import (
     ToolEvalAdapter,
     _calls_match,
     _first_api_name,
+    _single_tool_catalog,
     _normalize_pass_label,
     _normalize_win_label,
     _parse_agent_action,
@@ -517,4 +518,17 @@ def test_resolve_tool_api_name_from_api_list() -> None:
         tools, category="Travel", tool_name="flights", api_name="book_flight"
     )
     assert api == "book_flight"
+
+
+def test_single_tool_catalog_filters_and_falls_back() -> None:
+    tools = [
+        {"category": "Tools", "tool_name": "echo", "api_list": [{"name": "echo_message"}]},
+        {
+            "category": "Travel",
+            "tool_name": "flights",
+            "api_list": [{"name": "search_flights"}],
+        },
+    ]
+    assert _single_tool_catalog(tools, tool_name="flights", category="Travel") == [tools[1]]
+    assert _single_tool_catalog(tools, tool_name="missing", category="") == [tools[0]]
 

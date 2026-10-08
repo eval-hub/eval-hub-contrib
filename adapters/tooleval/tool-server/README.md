@@ -17,7 +17,7 @@ and never call RapidAPI or OpenAI.
 ## Data
 
 - `data/fixtures/` — tiny offline tools + one cached response (default image)
-- Full cache: build with `FETCH_FULL_CACHE=1` (downloads HF
+- Full cache: build with `FETCH_FULL_CACHE=1` (tag `:0.3.0-full`; downloads HF
   `stabletoolbench/Cache`) or mount tools/cache and set `TOOLS_FOLDER` /
   `CACHE_FOLDER`
 
