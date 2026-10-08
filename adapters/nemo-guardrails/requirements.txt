@@ -9,3 +9,6 @@ jq
 # Staged-dataset (airgap) parquet reading for /test_data — imported directly
 # by _read_staged_file for .parquet staged files
 pyarrow
+# Transitive via the pinned NeMo fork: cryptography 48.x carries PYSEC-2026-3552/3553/3554
+# (fixes in 49.0.0/50.0.0) - force the patched line. Re-check when the fork pin moves.
+cryptography>=49.0.0
