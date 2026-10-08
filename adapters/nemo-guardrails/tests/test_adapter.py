@@ -710,3 +710,104 @@ def test_staged_split_aware_discovery_prefers_matching_split(tmp_path, monkeypat
     samples = main._load_huggingface(config)
     assert len(samples) == 1
     assert samples[0]["prompt"] == "test-p"
+
+
+# ---------------------------------------------------------------------------
+# Job-parameter forwarding and multi-dataset staged isolation
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_dataset_configs_forwards_hf_revision(monkeypatch):
+    """Job-level hf_revision reaches every dataset entry; per-dataset pins win."""
+    import main
+
+    monkeypatch.delenv("EVALHUB_TEST_DATA_DIR", raising=False)
+    original = [
+        {"name": "a", "source": "huggingface", "hf_name": "o/a"},
+        {"name": "b", "source": "huggingface", "hf_name": "o/b", "hf_revision": "v9"},
+    ]
+    prepared = main._prepare_dataset_configs(original, {"hf_revision": "abc123"})
+
+    assert prepared[0]["hf_revision"] == "abc123"
+    assert prepared[1]["hf_revision"] == "v9"
+    assert "hf_revision" not in original[0]  # provider.yaml entries are not mutated
+
+
+def test_prepare_dataset_configs_exports_test_data_dir(monkeypatch):
+    """evalhub_test_data_dir overrides the staged root via EVALHUB_TEST_DATA_DIR."""
+    import main
+
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", "/inherited")
+    main._prepare_dataset_configs([{"source": "csv"}], {"evalhub_test_data_dir": "/custom/root/"})
+    assert main._test_data_root() == "/custom/root"
+    monkeypatch.delenv("EVALHUB_TEST_DATA_DIR")  # undo the module-level env write
+
+
+def test_prepare_dataset_configs_flags_multi_dataset_only(monkeypatch):
+    import main
+
+    monkeypatch.delenv("EVALHUB_TEST_DATA_DIR", raising=False)
+    single = main._prepare_dataset_configs([{"source": "csv"}], {})
+    multi = main._prepare_dataset_configs([{"source": "csv"}, {"source": "csv"}], {})
+    assert "_multi_dataset" not in single[0]
+    assert all(dc["_multi_dataset"] for dc in multi)
+
+
+def _multi_dataset_config(hf_name: str) -> dict:
+    config = _classification_config()
+    config["hf_name"] = hf_name
+    config["_multi_dataset"] = True
+    return config
+
+
+def test_multi_dataset_unstaged_dataset_never_gets_another_datasets_rows(tmp_path, monkeypatch):
+    """Only one of several datasets is staged: the others raise, not reuse its rows."""
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH",
+        _write_job_spec_with_test_data_ref(tmp_path, {"pvc": {"claim_name": "d"}}),
+    )
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+    staged = tmp_path / "test_data" / "prompt-injections"
+    staged.mkdir(parents=True)
+    (staged / "test.parquet.jsonl").write_text(
+        json.dumps([{"prompt": "p1", "label": "blocked"}])
+    )
+
+    # The dataset with its own directory resolves normally...
+    assert len(main._load_huggingface(_multi_dataset_config("deepset/prompt-injections"))) == 1
+    # ...the others must fail loudly and point at the directory to stage.
+    with pytest.raises(RuntimeError, match=r"Stage it under .*jackhhao_x/"):
+        main._load_huggingface(_multi_dataset_config("jackhhao/jackhhao_x"))
+
+
+def test_multi_dataset_skips_root_wide_fallback_without_test_data_ref(tmp_path, monkeypatch):
+    """No test_data_ref + multi-dataset: a loose root file is not used (Hub path)."""
+    import main
+
+    monkeypatch.setenv("EVALHUB_JOB_SPEC_PATH", _write_job_spec_with_test_data_ref(tmp_path, None))
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+    root = tmp_path / "test_data"
+    root.mkdir(parents=True)
+    (root / "test.jsonl").write_text(json.dumps([{"prompt": "p1", "label": "blocked"}]))
+
+    assert main._load_staged_rows(_multi_dataset_config("o/other"), "test") is None
+
+
+def test_single_dataset_root_wide_fallback_is_split_aware(tmp_path, monkeypatch):
+    """A single-dataset benchmark still resolves test.jsonl beside train.jsonl."""
+    import main
+
+    monkeypatch.setenv(
+        "EVALHUB_JOB_SPEC_PATH",
+        _write_job_spec_with_test_data_ref(tmp_path, {"pvc": {"claim_name": "d"}}),
+    )
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "test_data"))
+    root = tmp_path / "test_data"
+    root.mkdir(parents=True)
+    (root / "train.jsonl").write_text(json.dumps([{"prompt": "train-p", "label": "blocked"}]))
+    (root / "test.jsonl").write_text(json.dumps([{"prompt": "test-p", "label": "blocked"}]))
+
+    rows = main._load_staged_rows(_classification_config(), "test")
+    assert rows == [{"prompt": "test-p", "label": "blocked"}]

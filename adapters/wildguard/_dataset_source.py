@@ -382,7 +382,6 @@ def load_dataset_rows(
     hf_dataset_id: str,
     split: str = "test",
     num_examples: int | None = None,
-    hf_revision: str | None = None,
     job_spec_path: str | None = None,
     test_data_root: str | Path = TEST_DATA_DIR,
 ) -> tuple[list[dict[str, Any]], str]:

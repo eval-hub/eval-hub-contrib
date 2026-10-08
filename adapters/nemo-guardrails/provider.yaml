@@ -348,8 +348,11 @@ parameters:
       Optional. Root directory for test_data_ref-staged dataset material
       (S3/PVC/git/HF staged under /test_data on air-gapped clusters).
       'dataset_path' in a dataset entry may be absolute or relative to this
-      root; when omitted, staged data (a directory named after the dataset's
-      hf_name, or any parquet/json/jsonl file matching the requested split) is
-      auto-detected under /test_data. test_data_ref jobs with no usable staged
+      root; when omitted, staged data is auto-detected under /test_data: a
+      directory named after the dataset's hf_name (e.g. prompt-injections/ for
+      deepset/prompt-injections), or, for a benchmark with a single dataset
+      only, any parquet/json/jsonl file matching the requested split.
+      Benchmarks with several datasets (e.g. prompt_injection) must stage each
+      dataset under its own directory. test_data_ref jobs with no usable staged
       material fail fast with a clear error instead of falling back to the
       HuggingFace Hub.

@@ -387,10 +387,11 @@ def _load_staged_rows(config: dict, split: str) -> list[dict] | None:
 
     Resolution order: ``dataset_path`` in the dataset config, a staged directory
     named after the dataset (``<hf_name>`` basename), then split-aware discovery
-    over the whole root. A dataset whose own directory is missing is NOT served
-    a generic root-wide file: with several datasets staged, root-wide discovery
-    would hand every dataset the same rows (wrong data, no error). Discovery
-    over the root only runs when the root holds exactly one dataset file.
+    over the whole root. Root-wide discovery is skipped for multi-dataset
+    benchmarks (``_multi_dataset``): with several datasets sharing one staged
+    root it would hand every dataset without its own directory the same rows
+    (wrong data, no error). For a single-dataset benchmark it is split-aware and
+    raises when several files tie at the top rank.
     Returns None only when the job did NOT request staged data and nothing
     matches; a test_data_ref job with no matching material raises a clear error
     instead of silently falling back to the Hub.
@@ -415,29 +416,33 @@ def _load_staged_rows(config: dict, split: str) -> list[dict] | None:
             if found:
                 return _read_staged_file(found[0])
 
-    # Root-wide fallback ONLY when the root holds exactly one dataset file —
-    # with multiple staged datasets this would silently serve the wrong rows.
-    # When the root holds several files at the top rank, the layout is
-    # ambiguous for this dataset: raise instead of guessing.
-    root_files = _find_staged_rows_file(_test_data_root(), split, all_matches=True)
-    if root_files and len(root_files) == 1:
-        return _read_staged_file(root_files[0])
-    if root_files and len(root_files) > 1:
-        names = ", ".join(
-            os.path.relpath(p, _test_data_root()) for p in root_files[:8]
-        )
-        raise _AmbiguousStagedDataset(
-            f"Ambiguous staged dataset under {_test_data_root()} "
-            f"(split={split!r}) for {config.get('hf_name', 'unknown')!r}: {names}. "
-            "Set dataset_path in the dataset config to the exact file."
-        )
+    # Root-wide discovery is only safe for a benchmark with a single dataset
+    # (split-aware: the file matching the requested split wins, several
+    # same-rank files raise). A multi-dataset benchmark shares one staged root,
+    # so a dataset without its own directory would silently be handed another
+    # dataset's rows: those must be staged under ``<root>/<hf_name basename>/``.
+    if not config.get("_multi_dataset"):
+        root_files = _find_staged_rows_file(_test_data_root(), split, all_matches=True)
+        if root_files and len(root_files) == 1:
+            return _read_staged_file(root_files[0])
+        if root_files and len(root_files) > 1:
+            names = ", ".join(
+                os.path.relpath(p, _test_data_root()) for p in root_files[:8]
+            )
+            raise _AmbiguousStagedDataset(
+                f"Ambiguous staged dataset under {_test_data_root()} "
+                f"(split={split!r}) for {config.get('hf_name', 'unknown')!r}: {names}. "
+                "Set dataset_path in the dataset config to the exact file."
+            )
 
     if _job_spec_requests_test_data():
+        hf_name = str(config.get("hf_name", "unknown"))
         raise RuntimeError(
             f"Job requests staged data (test_data_ref) but no usable dataset "
             f"material was found under {_test_data_root()} (split={split!r}) for "
-            f"{config.get('hf_name', 'unknown')!r}. Set dataset_path in the "
-            "dataset config or fix the staged layout."
+            f"{hf_name!r}. Stage it under "
+            f"{os.path.join(_test_data_root(), hf_name.split('/')[-1])}/ or set "
+            "dataset_path in the dataset config."
         )
     return None
 
@@ -1215,6 +1220,32 @@ def _load_benchmark_datasets(benchmark_id: str) -> list[dict]:
     raise ValueError(f"Benchmark '{benchmark_id}' not found. Available: {available}")
 
 
+def _prepare_dataset_configs(dataset_configs: list[dict], params: dict) -> list[dict]:
+    """Copy dataset configs, forwarding the provider-declared job parameters.
+
+    ``evalhub_test_data_dir`` is exported as ``EVALHUB_TEST_DATA_DIR`` (read by
+    ``_test_data_root``) and takes precedence over an inherited env value.
+    ``hf_revision`` is applied to every dataset entry that does not set its own.
+    With several datasets sharing one staged root, each entry is flagged
+    ``_multi_dataset`` so staged discovery never guesses a root-wide file.
+    """
+    test_data_dir = params.get("evalhub_test_data_dir")
+    if test_data_dir:
+        os.environ["EVALHUB_TEST_DATA_DIR"] = str(test_data_dir)
+    hf_revision = params.get("hf_revision")
+    multi_dataset = len(dataset_configs) > 1
+
+    prepared = []
+    for dataset_config in dataset_configs:
+        dc = dict(dataset_config)
+        if hf_revision and not dc.get("hf_revision"):
+            dc["hf_revision"] = str(hf_revision)
+        if multi_dataset:
+            dc["_multi_dataset"] = True
+        prepared.append(dc)
+    return prepared
+
+
 # ---------------------------------------------------------------------------
 # Adapter
 # ---------------------------------------------------------------------------
@@ -1264,7 +1295,9 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
             JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
         )
 
-        dataset_configs = _load_benchmark_datasets(config.benchmark_id)
+        dataset_configs = _prepare_dataset_configs(
+            _load_benchmark_datasets(config.benchmark_id), params
+        )
         samples = []
         for dc in dataset_configs:
             logger.info("Loading dataset: %s (%s)", dc.get("name", "unnamed"), dc["source"])

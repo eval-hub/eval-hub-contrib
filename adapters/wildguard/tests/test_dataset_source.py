@@ -417,7 +417,7 @@ def test_load_dataset_rows_staged_pvc_airgap(tmp_path, monkeypatch):
     _write_jsonl(root / "wildguard" / "test.jsonl", CANNED_ROWS)
 
     loader = _install_fake_datasets(monkeypatch, fail=True)  # Hub is unreachable
-    rows = load_dataset_rows(
+    rows, source = load_dataset_rows(
         {},
         hf_dataset_id="allenai/wildguard",
         split="test",
@@ -425,6 +425,7 @@ def test_load_dataset_rows_staged_pvc_airgap(tmp_path, monkeypatch):
         test_data_root=root,
     )
     assert len(rows) == 2
+    assert source == "staged"
     loader.assert_not_called()  # the Hub was never contacted
 
 
@@ -456,10 +457,11 @@ def test_load_dataset_rows_staged_s3_layout(tmp_path, monkeypatch):
     pyarrow.parquet.write_table(table, str(layout / "test-00000-of-00001.parquet"))
 
     loader = _install_fake_datasets(monkeypatch, fail=True)
-    rows = load_dataset_rows(
+    rows, source = load_dataset_rows(
         {}, hf_dataset_id="allenai/wildguard", job_spec_path=path, test_data_root=root
     )
     assert len(rows) == 2
+    assert source == "staged"
     loader.assert_not_called()
 
 
@@ -506,12 +508,13 @@ def test_load_dataset_rows_explicit_dataset_path_param(tmp_path, monkeypatch):
     staged = tmp_path / "my-copy.jsonl"
     _write_jsonl(staged, CANNED_ROWS)
     loader = _install_fake_datasets(monkeypatch, fail=True)
-    rows = load_dataset_rows(
+    rows, source = load_dataset_rows(
         {"dataset_path": str(staged)},
         hf_dataset_id="allenai/wildguard",
         test_data_root=tmp_path / "test_data",  # nonexistent — param wins
     )
     assert len(rows) == 2
+    assert source == "staged"
     loader.assert_not_called()
 
 
