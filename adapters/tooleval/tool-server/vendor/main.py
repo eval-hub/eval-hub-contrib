@@ -233,11 +233,21 @@ def get_virtual_response(request: Request, info: Info):
         "toolbench_key": user_key
     }
     
-    real_response = requests.post(CONFIG['toolbench_url'], headers=headers, data=json.dumps(data), timeout=CONFIG.get('toolbench_timeout', 30))
+    try:
+        real_response = requests.post(
+            CONFIG['toolbench_url'],
+            headers=headers,
+            data=json.dumps(data),
+            timeout=CONFIG.get('toolbench_timeout', 30),
+        )
+    except requests.RequestException as e:
+        # Timeouts / connection errors: fall through to cache/fake response below.
+        print(f"ToolBench upstream request failed: {e}")
+        real_response = None
 
     # Check if the request was successful
-    if real_response.status_code == 200:
-        real_response = real_response.json() 
+    if real_response is not None and real_response.status_code == 200:
+        real_response = real_response.json()
         if check_result(real_response):
             print("returning real_response")
             write_log(request=info, response=real_response, type="real_response")

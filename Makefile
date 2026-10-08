@@ -21,8 +21,10 @@ IMAGE_RULER = $(REGISTRY)/community-ruler:$(VERSION)
 IMAGE_NEMO_GUARDRAILS = $(REGISTRY)/community-nemo-guardrails:$(VERSION)
 IMAGE_TOOLEVAL = $(REGISTRY)/community-tooleval:$(VERSION)
 # Fixture image tag matches tool-server/deploy.yaml; full-cache appends -full.
+# Use evalhub (not REGISTRY's eval-hub) so Makefile output matches deploy.yaml / CI.
+TOOLBENCH_SERVER_REGISTRY ?= quay.io/evalhub
 TOOLBENCH_SERVER_VERSION ?= 0.3.0
-IMAGE_TOOLBENCH_SERVER = $(REGISTRY)/community-toolbench-server:$(TOOLBENCH_SERVER_VERSION)
+IMAGE_TOOLBENCH_SERVER = $(TOOLBENCH_SERVER_REGISTRY)/community-toolbench-server:$(TOOLBENCH_SERVER_VERSION)
 IMAGE_PROMPTFOO = $(REGISTRY)/community-promptfoo:$(VERSION)
 
 # Default target
@@ -482,7 +484,7 @@ clean-tooleval:
 # Fixture and full-cache images use distinct tags so IfNotPresent cannot mix them.
 FETCH_FULL_CACHE ?= 0
 ifeq ($(FETCH_FULL_CACHE),1)
-IMAGE_TOOLBENCH_SERVER = $(REGISTRY)/community-toolbench-server:$(TOOLBENCH_SERVER_VERSION)-full
+IMAGE_TOOLBENCH_SERVER = $(TOOLBENCH_SERVER_REGISTRY)/community-toolbench-server:$(TOOLBENCH_SERVER_VERSION)-full
 endif
 
 .PHONY: image-toolbench-server
