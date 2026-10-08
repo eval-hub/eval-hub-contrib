@@ -253,6 +253,11 @@ def get_virtual_response(request: Request, info: Info):
             # Empty/malformed JSON body: fall through to fake-response path.
             print(f"ToolBench upstream returned invalid JSON: {e}")
             real_response = None
+        # null / non-object JSON must not reach check_result (TypeError → HTTP 500).
+        if not isinstance(real_response, dict):
+            if real_response is not None:
+                print(f"ToolBench upstream returned non-object JSON: {type(real_response).__name__}")
+            real_response = None
         if real_response is not None and check_result(real_response):
             print("returning real_response")
             write_log(request=info, response=real_response, type="real_response")
