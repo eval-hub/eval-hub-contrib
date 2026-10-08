@@ -3,6 +3,7 @@
 import logging
 import os
 import time
+from pathlib import Path
 
 from evalhub.adapter.auth import read_model_auth_key
 
@@ -10,16 +11,43 @@ logger = logging.getLogger(__name__)
 
 _HF_MOUNT_KEY = "hf-token"
 _ENV_KEYS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
-_K8S_WAIT_TIMEOUT_S = 60.0
+_MODEL_MOUNT_DIR = Path("/var/run/secrets/model")
+# Grace period used only when the model-auth mount exists but is still empty.
+_K8S_EMPTY_MOUNT_GRACE_S = 5.0
+_WAIT_ENV = "INSPECT_HF_TOKEN_WAIT_S"
 _DEFAULT_POLL_INTERVAL_S = 0.5
 
 
 def _default_wait_timeout_s() -> float:
-    """Wait for projected ``hf-token`` only in EvalHub Kubernetes job pods."""
-    mode = os.environ.get("EVALHUB_MODE", "").strip().lower()
-    if mode == "k8s":
-        return _K8S_WAIT_TIMEOUT_S
-    return 0.0
+    """Seconds to poll for the projected ``hf-token`` before giving up.
+
+    The model-auth mount is a Kubernetes projected volume that exists only when the job
+    sets ``model.auth.secret_ref``, and kubelet writes all of its files at once before
+    the container starts. So in EvalHub k8s job pods:
+
+    * no mount directory: no model-auth secret is configured, nothing can appear: no wait
+    * mount has files: it is fully populated, a missing ``hf-token`` is final: no wait
+    * mount exists but is empty: ambiguous (a secret with none of the optional keys looks
+      the same as one not yet populated): a short grace period
+
+    ``INSPECT_HF_TOKEN_WAIT_S`` overrides this (seconds; 0 disables the wait).
+    """
+    override = os.environ.get(_WAIT_ENV, "").strip()
+    if override:
+        try:
+            return max(float(override), 0.0)
+        except ValueError:
+            logger.warning("Ignoring invalid %s=%r (expected seconds)", _WAIT_ENV, override)
+
+    if os.environ.get("EVALHUB_MODE", "").strip().lower() != "k8s":
+        return 0.0
+    try:
+        if not _MODEL_MOUNT_DIR.is_dir():
+            return 0.0
+        populated = any(not entry.name.startswith(".") for entry in _MODEL_MOUNT_DIR.iterdir())
+    except OSError:
+        return _K8S_EMPTY_MOUNT_GRACE_S
+    return 0.0 if populated else _K8S_EMPTY_MOUNT_GRACE_S
 
 
 def _is_sidecar_ref_placeholder(value: str) -> bool:
@@ -100,6 +128,12 @@ def resolve_hf_token(
         logger.warning(
             "HuggingFace token not found after %.0fs (checked mount key %r and %s)",
             timeout,
+            _HF_MOUNT_KEY,
+            ", ".join(_ENV_KEYS),
+        )
+    else:
+        logger.debug(
+            "No HuggingFace token found (checked mount key %r and %s)",
             _HF_MOUNT_KEY,
             ", ".join(_ENV_KEYS),
         )

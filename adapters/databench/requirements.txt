@@ -1,0 +1,5 @@
+eval-hub-sdk[adapter]~=1.0.5
+databench-eval==4.0.1
+openai>=1.0.0
+huggingface-hub
+pyarrow

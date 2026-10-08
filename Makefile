@@ -8,6 +8,7 @@ VERSION ?= latest
 PYTHON_VERSION ?= 3.12
 
 # Image names
+IMAGE_DATABENCH = $(REGISTRY)/community-databench:$(VERSION)
 IMAGE_FOLLOWBENCH = $(REGISTRY)/community-followbench:$(VERSION)
 IMAGE_LIGHTEVAL = $(REGISTRY)/community-lighteval:$(VERSION)
 IMAGE_GUIDELLM = $(REGISTRY)/community-guidellm:$(VERSION)
@@ -506,3 +507,21 @@ test-tooleval:
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ ToolEval tests passed"
+
+# DataBench adapter
+.PHONY: image-databench push-databench clean-databench test-databench
+image-databench:
+	$(BUILD_TOOL) build -t $(IMAGE_DATABENCH) -f adapters/databench/Containerfile adapters/databench
+push-databench:
+	$(BUILD_TOOL) push $(IMAGE_DATABENCH)
+clean-databench:
+	$(BUILD_TOOL) rmi $(IMAGE_DATABENCH)
+test-databench:
+	cd adapters/databench && \
+	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \
+	uv pip install --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/python -m pytest tests/ -v
+images: image-databench
+push-images: push-databench
+clean-images: clean-databench
+tests: test-databench

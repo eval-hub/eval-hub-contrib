@@ -132,17 +132,27 @@ offline mode when `/test_data` is populated.
 
 When online, the adapter reads an
 `hf-token` secret mounted at `/var/run/secrets/model/hf-token` and injects it as
-`HF_TOKEN` and `HUGGING_FACE_HUB_TOKEN` (with retry while the projected volume
-appears). Sidecar `:ref` placeholders are ignored. In EvalHub jobs, set
-`model.auth.secret_ref` to a Kubernetes Secret that includes the `hf-token` key
-(alongside `api-key` if needed).
+`HF_TOKEN` and `HUGGING_FACE_HUB_TOKEN`. Sidecar `:ref` placeholders are ignored.
+In EvalHub jobs, set `model.auth.secret_ref` to a Kubernetes Secret that includes the
+`hf-token` key (alongside `api-key` if needed).
+
+The mount is a projected volume that Kubernetes populates before the container starts,
+so the adapter does not wait for it when it is absent (no `model.auth.secret_ref`) or
+already populated. Only an empty mount gets a 5-second grace period. Set
+`INSPECT_HF_TOKEN_WAIT_S` (seconds; `0` disables) to override.
 
 ### Sample limits
 
 Inspect `--limit` is driven by `benchmarks[].parameters.num_examples` (lifted to
-JobSpec `num_examples` by eval-hub). When unset, the adapter defaults to `--limit 5`
-so Petri/Bloom and large datasets do not run unbounded. Set an explicit
-`num_examples` to raise or lower the cap.
+JobSpec `num_examples` by eval-hub), the same parameter every other contrib adapter
+uses. When unset, standard inspect-evals benchmarks run the **full dataset**.
+Petri and Bloom default to `--limit 5` because their full seed sets are very
+expensive; set `num_examples` to raise or lower the cap.
+
+`parameters.max_samples` is a **deprecated alias** for `num_examples` and logs a
+warning; `num_examples` wins if both are set. Note that Inspect's own
+`--max-samples` flag controls how many samples run *in parallel*, not how many
+are evaluated, which is why the name is being retired here.
 
 Open-Telco dataset size is controlled via `parameters.full`
 (`true` → `GSMA/ot-full`, `false` → `GSMA/ot-lite`). TeleQnA also accepts
@@ -166,10 +176,30 @@ as-is — bare (`claude-opus-4-7`, `granite3.3`) or org/model
 | `ANTHROPIC_API_KEY` | Anthropic Messages API |
 | `ANTHROPIC_BASE_URL` | Anthropic API base URL override (proxies, on-prem) |
 
-Client selection priority per role (no per-role override):
+Global client selection priority for roles without explicit routing:
 1. `model.url` present → OpenAI-compatible client
 2. `ANTHROPIC_API_KEY` or `ANTHROPIC_BASE_URL` set → Anthropic client
 3. `OPENAI_BASE_URL` or `OPENAI_API_KEY` set → OpenAI-compatible client
+
+### Independent StrongREJECT grader
+
+For `inspect/strong-reject`, set `parameters.grader_model` to route scoring to
+Inspect's named `grader` role instead of StrongREJECT's built-in `judge_llm`
+default. For example, use `gpt-4o-mini` with `grader_base_url` set to
+`https://api.openai.com/v1`. The adapter routes that role through Inspect's
+isolated `openai-api/openai_judge/...` provider namespace, so the target keeps
+its own `OPENAI_BASE_URL` and `OPENAI_API_KEY`.
+
+The judge credential must be provided to the adapter process as
+`OPENAI_JUDGE_API_KEY` from a Kubernetes Secret. The adapter does not accept a
+judge key in evaluation parameters, and it never places the key in the Inspect
+command line. `OPENAI_JUDGE_BASE_URL` can supply the endpoint instead of
+`grader_base_url`; it defaults to `https://api.openai.com/v1`.
+
+This adapter support assumes the EvalHub runtime injects that Secret-backed
+environment variable into the job. If the job currently mounts only the
+target model Secret, a corresponding EvalHub core change is required before
+this route can be exercised in-cluster.
 
 ### Per-role credential overrides
 
@@ -344,7 +374,7 @@ Environment: `ANTHROPIC_API_KEY=sk-ant-...` (for auditor), `OPENAI_BASE_URL` set
 | `max_turns` | `30` | Max auditor turns per scenario |
 | `enable_rollback` | `true` | Allow auditor to backtrack and retry approaches |
 | `realism_filter` | `false` | Filter unrealistic auditor outputs (experimental) |
-| `num_examples` | `5` | Cap scenarios/samples via EvalHub `benchmarks[].parameters.num_examples` (JobSpec `num_examples` → Inspect `--limit`; defaults to 5 when unset) |
+| `num_examples` | `5` (Petri/Bloom) | Cap scenarios/samples via EvalHub `benchmarks[].parameters.num_examples` (JobSpec `num_examples` → Inspect `--limit`; Petri/Bloom default to 5 when unset, standard benchmarks are unbounded) |
 | `seed_instructions` | *(from benchmark_id)* | Override seed selection (`tags:deception`, `id:seed_name`, inline text) |
 | `judge_dimensions` | *(all 38)* | Filter judge dimensions (`tags:safety` or custom directory) |
 | `task_args` | `{}` | Escape hatch for non–first-class Inspect `-T` flags (e.g. Dish `dish_scaffold`). Not for Open-Telco `full`. |
@@ -377,8 +407,36 @@ make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
 
 ## Requirements
 
-- `inspect-ai >= 0.3.40`
-- `inspect-evals >= 0.1.0`
-- `inspect-petri >= 3.0.0`
-- `petri-bloom >= 0.1.0`
-- `eval-hub-sdk[adapter] >= 0.1.7`
+Direct dependencies are pinned to exact versions in `requirements.txt`
+(`inspect-ai`, `inspect-evals`, `inspect-petri`, `petri-bloom`, `openai`,
+`nltk`; `eval-hub-sdk[adapter]` is a compatible-release pin). `constraints.txt`
+pins the full transitive tree, and the Containerfile installs with both, so an
+image rebuild reproduces the same dependency set.
+
+### Updating dependencies
+
+Bump the pins in `requirements.txt`, then regenerate the lock and audit it. Run
+from `adapters/inspect/`:
+
+```bash
+# 1. Regenerate the transitive pins (platform-independent; git lines are
+#    excluded because pip does not accept URLs in constraints files)
+{ echo "# Transitive dependency pins for the Inspect adapter image, applied with: pip install -r requirements.txt -c constraints.txt"
+  echo "# Generated; do not edit by hand. Regenerate (and re-audit) with the command in README.md → Updating dependencies."
+  uv pip compile requirements.txt --universal --python-version 3.12 --no-header --no-annotate | grep -v "@ git"
+} > constraints.txt
+
+# 2. Audit every pinned version for known vulnerabilities
+grep -E '^[A-Za-z0-9_.-]+==' constraints.txt | sed -E 's/ *;.*//' | sort -u > /tmp/inspect-pins.txt
+pip-audit -r /tmp/inspect-pins.txt --no-deps --disable-pip
+```
+
+The repository's Trivy filesystem scan only sees versions that are pinned, which
+is why the pins matter: with open-ended `>=` ranges it cannot see what actually
+lands in the image. Packages installed straight from git (`instruction_following_eval`,
+`evals`) are not on PyPI and cannot be audited by name; they are pinned to a
+commit or tag.
+
+Known advisory: `nltk` 3.10.3 carries GHSA-8mgp-746c-j5xp (CVE-2026-81726) with no
+patched release yet. It affects nltk's parser and perceptron model save/load APIs,
+which nothing in this image calls. Revisit when a fixed nltk is published.
