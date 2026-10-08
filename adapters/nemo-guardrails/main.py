@@ -215,11 +215,15 @@ def _balance_and_limit(samples: list[dict], eval_limit: int | None, seed: int | 
     return result
 
 
+#: Where eval-hub mounts ``test_data_ref`` material inside the adapter pod.
+_DEFAULT_TEST_DATA_DIR = "/test_data"
+
+
 def _test_data_root() -> str:
     """Staged-data root: ``/test_data`` (EvalHub mount) unless overridden for tests/smokes."""
     return (
-        os.environ.get("EVALHUB_TEST_DATA_DIR", "/test_data").rstrip("/")
-        or "/test_data"
+        os.environ.get("EVALHUB_TEST_DATA_DIR", _DEFAULT_TEST_DATA_DIR).rstrip("/")
+        or _DEFAULT_TEST_DATA_DIR
     )
 
 
@@ -243,15 +247,26 @@ def _job_spec_requests_test_data() -> bool:
     return any(ref.get(key) for key in ("s3", "pvc", "git", "hf"))
 
 
+def _dir_has_entries(path: str) -> bool:
+    try:
+        with os.scandir(path) as entries:
+            return any(True for _ in entries)
+    except OSError:
+        return False
+
+
 def _test_data_mount_usable() -> bool:
-    """True when the staged root (or the default ``/test_data`` mount) holds entries."""
-    for root in {_test_data_root(), "/test_data"}:
-        try:
-            if os.path.isdir(root) and any(os.scandir(root)):
-                return True
-        except OSError:
-            continue
-    return False
+    """True when the configured staged root or the default mount holds entries.
+
+    The default ``/test_data`` mount is deliberately checked as well as a custom
+    ``evalhub_test_data_dir``: if the override is mistyped or empty while the real
+    mount is populated, the job is still a staged job and must fail with a clear
+    "stage it under <dir>" error instead of silently reaching for the Hub on an
+    air-gapped cluster.
+    """
+    return any(
+        _dir_has_entries(root) for root in {_test_data_root(), _DEFAULT_TEST_DATA_DIR}
+    )
 
 
 def _staged_data_requested() -> bool:

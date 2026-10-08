@@ -830,3 +830,36 @@ def test_single_dataset_root_wide_fallback_is_split_aware(tmp_path, monkeypatch)
 
     rows = main._load_staged_rows(_classification_config(), "test")
     assert rows == [{"prompt": "test-p", "label": "blocked"}]
+
+
+def test_custom_root_empty_but_default_mount_populated_still_fails_fast(tmp_path, monkeypatch):
+    """A mistyped evalhub_test_data_dir must not send a staged job to the Hub.
+
+    The default /test_data mount is populated (a staged job), the configured root
+    is not: the dataset raises the "Stage it under" error rather than falling
+    through to the HuggingFace Hub on an air-gapped cluster.
+    """
+    import main
+
+    monkeypatch.setenv("EVALHUB_JOB_SPEC_PATH", _write_job_spec_with_test_data_ref(tmp_path, None))
+    default_mount = tmp_path / "default_mount"
+    (default_mount / "somewhere").mkdir(parents=True)
+    monkeypatch.setattr(main, "_DEFAULT_TEST_DATA_DIR", str(default_mount))
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "typo-root"))  # does not exist
+
+    with pytest.raises(RuntimeError, match=r"Stage it under .*typo-root/"):
+        main._load_staged_rows(_classification_config(), "test")
+
+
+def test_mount_check_handles_missing_and_unreadable_roots(tmp_path, monkeypatch):
+    import main
+
+    monkeypatch.setattr(main, "_DEFAULT_TEST_DATA_DIR", str(tmp_path / "no-default"))
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(tmp_path / "no-custom"))
+    assert main._test_data_mount_usable() is False
+
+    populated = tmp_path / "custom"
+    populated.mkdir()
+    (populated / "x").write_text("1")
+    monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(populated))
+    assert main._test_data_mount_usable() is True
