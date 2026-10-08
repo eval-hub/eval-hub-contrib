@@ -14,7 +14,7 @@ RUN dnf install -y unzip && dnf clean all
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY vendor/main.py vendor/utils.py vendor/system_prompts.py ./
+COPY vendor/main.py vendor/utils.py vendor/system_prompts.py vendor/path_safety.py ./
 COPY config.yml entrypoint.sh PIN.txt ./
 COPY scripts/fetch-cache.sh /tmp/fetch-cache.sh
 COPY data/fixtures /app/data/fixtures

@@ -10,10 +10,12 @@ import pytest
 from main import (
     ToolEvalAdapter,
     _calls_match,
+    _first_api_name,
     _normalize_pass_label,
     _normalize_win_label,
     _parse_agent_action,
     _require_tool_server_healthy,
+    _resolve_tool,
     _run_virtual_call,
     _structural_score,
 )
@@ -56,8 +58,18 @@ def _base_config(benchmark_id: str = "single-tool", **param_overrides: object) -
 
 def _tools_catalog() -> list[dict]:
     return [
-        {"category": "Tools", "tool_name": "echo", "path": "Tools/echo.json"},
-        {"category": "Tools", "tool_name": "uppercase", "path": "Tools/uppercase.json"},
+        {
+            "category": "Tools",
+            "tool_name": "echo",
+            "path": "Tools/echo.json",
+            "api_list": [{"name": "echo_message"}],
+        },
+        {
+            "category": "Tools",
+            "tool_name": "uppercase",
+            "path": "Tools/uppercase.json",
+            "api_list": [{"name": "uppercase_message"}],
+        },
     ]
 
 
@@ -461,3 +473,48 @@ def test_virtual_debug_redacts_toolbench_key() -> None:
     joined = " ".join(str(c) for c in info.call_args_list)
     assert "super-secret" not in joined
     assert "<redacted>" in joined
+
+def test_first_api_name_from_api_list() -> None:
+    assert _first_api_name({"api_list": [{"name": "search_flights"}]}) == "search_flights"
+    assert _first_api_name({"api_list": [{"name": "  "}, {"name": "book"}]}) == "book"
+    assert _first_api_name({}) == "echo_message"
+    assert _first_api_name(None) == "echo_message"
+
+
+def test_parse_agent_action_api_name_from_catalog() -> None:
+    action = _parse_agent_action(
+        '{"action":"call","tool_name":"uppercase","tool_input":{"message":"hi"}}',
+        catalog=_tools_catalog(),
+    )
+    assert action["api_name"] == "uppercase_message"
+
+    full_cache_catalog = [
+        {
+            "category": "Travel",
+            "tool_name": "flights",
+            "api_list": [{"name": "search_flights"}, {"name": "book_flight"}],
+        }
+    ]
+    action = _parse_agent_action(
+        '{"action":"call","tool_name":"flights","tool_input":{"from":"SFO"}}',
+        catalog=full_cache_catalog,
+    )
+    assert action["api_name"] == "search_flights"
+
+
+def test_resolve_tool_api_name_from_api_list() -> None:
+    tools = [
+        {
+            "category": "Travel",
+            "tool_name": "flights",
+            "api_list": [{"name": "search_flights"}],
+        }
+    ]
+    tool, api, cat = _resolve_tool(tools, category="Travel", tool_name="flights", api_name="")
+    assert (tool, api, cat) == ("flights", "search_flights", "Travel")
+
+    tool, api, cat = _resolve_tool(
+        tools, category="Travel", tool_name="flights", api_name="book_flight"
+    )
+    assert api == "book_flight"
+

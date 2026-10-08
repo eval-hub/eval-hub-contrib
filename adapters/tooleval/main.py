@@ -105,34 +105,6 @@ class ToolEvalAdapter(FrameworkAdapter):
         # (path, content_bytes, content_type) tuples for callbacks.mlflow.save
         self.mlflow_artifacts: list[tuple[str, bytes, str]] = []
 
-    def generate_additional_info(self, results: JobResults) -> dict[str, Any] | None:
-        """Compact summary attached by DefaultCallbacks.report_results()."""
-        meta = results.evaluation_metadata or {}
-        return {
-            "adapter_version": _ADAPTER_VERSION,
-            "framework": "tooleval",
-            "tool_server_url": meta.get("tool_server_url", ""),
-            "num_tasks": meta.get("num_tasks"),
-            "seed": meta.get("seed"),
-            "tool_subset": meta.get("tool_subset"),
-            "mode": meta.get("mode"),
-            "max_steps": meta.get("max_steps"),
-            "tasks_succeeded": meta.get("tasks_succeeded"),
-            "tasks_failed": meta.get("tasks_failed"),
-            "judge_model": meta.get("judge_model"),
-            "mut_calls": meta.get("mut_calls"),
-            "judge_calls": meta.get("judge_calls"),
-            "avg_steps": meta.get("avg_steps"),
-            "pass_rate": next(
-                (r.metric_value for r in results.results if r.metric_name == "pass_rate"),
-                None,
-            ),
-            "win_rate": next(
-                (r.metric_value for r in results.results if r.metric_name == "win_rate"),
-                None,
-            ),
-        }
-
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         start_time = time.time()
         logger.info(
@@ -857,11 +829,11 @@ def _parse_agent_action(text: str, *, catalog: list[dict[str, Any]]) -> dict[str
     api_name = str(data.get("api_name") or "").strip()
     tool_name = str(data.get("tool_name") or default_tool.get("tool_name") or "").strip()
     if not api_name:
-        # Fixture defaults
-        if tool_name == "uppercase":
-            api_name = "uppercase_message"
-        else:
-            api_name = "echo_message"
+        chosen = next(
+            (t for t in catalog if str(t.get("tool_name") or "") == tool_name),
+            default_tool,
+        )
+        api_name = _first_api_name(chosen)
 
     return {
         "action": "call",
@@ -1079,12 +1051,7 @@ def _resolve_tool(
     resolved_tool = str(chosen.get("tool_name") or "").strip()
     if not resolved_tool:
         raise ValueError(f"invalid tool entry: {chosen!r}")
-    if api_name:
-        resolved_api = api_name
-    elif resolved_tool == "uppercase":
-        resolved_api = "uppercase_message"
-    else:
-        resolved_api = "echo_message"
+    resolved_api = api_name.strip() if api_name else _first_api_name(chosen)
     return resolved_tool, resolved_api, resolved_category
 
 
@@ -1123,12 +1090,26 @@ def _run_virtual_call(
     return body
 
 
+def _first_api_name(tool: dict[str, Any] | None) -> str:
+    """Prefer the first api_list entry from GET /tools; fixture fallback is echo_message."""
+    for entry in (tool or {}).get("api_list") or []:
+        if isinstance(entry, dict):
+            name = str(entry.get("name") or "").strip()
+            if name:
+                return name
+    return "echo_message"
+
+
 def _local_only_run() -> bool:
     return os.getenv("TOOLEVAL_LOCAL_ONLY", "").strip().lower() in ("1", "true", "yes")
 
 
 def _callbacks_for_adapter(adapter: ToolEvalAdapter) -> DefaultCallbacks:
-    """Match ragas/lighteval: DefaultCallbacks with additional_info + MLflow backend."""
+    """Match ragas/lighteval: DefaultCallbacks + MLflow backend.
+
+    additional_info is set inline on JobResults in run_benchmark_job (SDK only
+    calls generate_additional_info_fn when additional_info is None).
+    """
     if _local_only_run():
         return DefaultCallbacks(
             job_id=adapter.job_spec.id,
@@ -1140,7 +1121,6 @@ def _callbacks_for_adapter(adapter: ToolEvalAdapter) -> DefaultCallbacks:
             oci_auth_config_path=adapter.settings.oci_auth_config_path,
             oci_insecure=adapter.settings.oci_insecure,
             mlflow_backend=adapter.settings.mlflow_backend,
-            generate_additional_info_fn=adapter.generate_additional_info,
             primary_score=adapter.job_spec.primary_score,
         )
     return DefaultCallbacks.from_adapter(adapter)

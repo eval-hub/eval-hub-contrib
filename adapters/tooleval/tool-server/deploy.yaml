@@ -44,12 +44,16 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           resources:
+            # Fixture image (echo/uppercase) is fine with ~1Gi.
+            # Full-cache (FETCH_FULL_CACHE=1): GET /tools reads every tool JSON for
+            # api_list and OOMs at 1Gi — values below are what we validated on cluster
+            # for full-cache single-tool (4Gi request / 8Gi limit).
             requests:
-              cpu: 50m
-              memory: 128Mi
+              cpu: 250m
+              memory: 4Gi
             limits:
-              cpu: 500m
-              memory: 1Gi
+              cpu: "2"
+              memory: 8Gi
 ---
 apiVersion: v1
 kind: Service
