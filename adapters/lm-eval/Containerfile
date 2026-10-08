@@ -11,7 +11,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy adapter implementation
 COPY main.py _tasks.py _lmevaljob_tasks.py _execution.py _results.py ./
 
-RUN mkdir -p /tmp/.cache && \
+# /tmp/.cache must be writable by the arbitrary non-root UID OpenShift assigns
+# (group 0): HF_HOME and HF_DATASETS_CACHE live under it.
+RUN mkdir -p /tmp/.cache/huggingface && \
+    chown -R 1001:0 /tmp/.cache && \
+    chmod -R g+rwX /tmp/.cache && \
     chown -R 1001:0 /app && \
     chmod -R g+rwX /app && \
     chown -R 1001:0 /opt/app-root && \
@@ -21,6 +25,7 @@ ENV PYTHONUNBUFFERED=1
 ENV EVALHUB_MODE=k8s
 ENV HOME=/tmp
 # HuggingFace datasets cache — override via hf_datasets_cache parameter
+ENV HF_HOME=/tmp/.cache/huggingface
 ENV HF_DATASETS_CACHE=/tmp/.cache/huggingface/datasets
 ENV TOKENIZERS_PARALLELISM=false
 
