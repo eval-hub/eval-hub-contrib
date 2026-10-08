@@ -122,3 +122,48 @@ only the metric functions from `scripts/eval/synthetic/constants.py`.
 
 Apache 2.0 — see repository root `LICENSE`.
 Vendored NVIDIA RULER scripts retain their original NVIDIA copyright.
+
+## Model and tokenizer authentication
+
+For EvalHub jobs, set `model.auth.secret_ref` to the existing model credential
+Secret. The adapter uses the SDK's mounted `api-key` credential, including the
+sidecar reference token, for model requests. Keep the configured proxy URL;
+the sidecar resolves the reference to the actual model credential.
+
+For Kubernetes jobs using the local sidecar, an API key is optional when the
+sidecar supplies ServiceAccount authentication. The adapter recognizes this
+route by the shared loopback origin of the model and callback URLs with
+`EVALHUB_MODE=k8s`, and creates the client with a `local` placeholder. The sidecar replaces this
+placeholder with its ServiceAccount token before forwarding. Direct model
+endpoints still require credentials.
+
+The Secret's `hf-token` is passed to the tokenizer precheck and inherited by
+synthetic data-generation subprocesses as `HF_TOKEN` and
+`HUGGING_FACE_HUB_TOKEN`. Tokens are not passed as CLI arguments.
+
+For direct model endpoints, `MODEL_API_KEY` or `OPENAI_API_KEY` remains supported
+when no SDK credential is available. Existing HF token environment variables
+remain supported when no mounted `hf-token` is available.
+
+## Per-example diagnostics
+
+The result directory includes `samples.jsonl` alongside `summary.csv` and
+`results.json`. When OCI export is configured, all three files are included in
+the result artifact before temporary predictions are deleted.
+
+Each JSONL row contains `job_id`, `benchmark_id`, `model_name`, `task_id`,
+`context_length`, the original sample `index`, `input` (full prompt), `outputs`
+(expected answers, including expected variable names for variable tracking), and
+`pred` (model answer). It also includes `metric_name`, `scorer`, `score` (0–1),
+and `reference_matches` (one case-insensitive substring-match flag per expected
+answer, in the same order as `outputs`). Indices can repeat across tasks/context
+lengths; use `(task_id, context_length, index)` to identify a sample.
+
+Scores use the same upstream metric function as aggregate scoring:
+`string_match_all` gives partial credit for the fraction of expected answers
+found, while QA uses `string_match_part` and gives credit when any expected
+answer is found. These are substring metrics, not exact answer comparisons.
+The upstream scorer rounds percentages to two decimals, so averaging rounded
+sample scores can differ slightly from the aggregate score. Diagnostics are
+saved for successfully completed evaluations; they do not recover samples from
+previous runs whose temporary prediction files were already deleted.

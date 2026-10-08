@@ -274,19 +274,41 @@ def test_custom_task_with_task_param_runs(tmp_path, mock_callbacks, monkeypatch)
 
 @pytest.mark.integration
 def test_missing_model_url_raises(tmp_path, mock_callbacks):
-    """SDK 1.0.0 validates model.url at construction time; empty string fails Pydantic."""
+    """An empty model.url (valid in SDK >= 1.0.5) fails at job start with a clear error."""
     meta_dir = tmp_path / "meta"
     meta_dir.mkdir()
     with open(Path("meta/job.json")) as f:
         job = json.load(f)
     job["model"]["url"] = ""
     (meta_dir / "job.json").write_text(json.dumps(job))
+    adapter = LMEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
 
-    # SDK raises ValidationError (not ValueError) on load when url is empty.
-    from pydantic import ValidationError
+    with pytest.raises(ValueError, match="'model.url' is required"):
+        adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
 
-    with pytest.raises(ValidationError, match="cannot be empty"):
-        LMEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
+
+@pytest.mark.integration
+def test_base_url_param_used_when_model_url_empty(tmp_path, mock_callbacks, monkeypatch):
+    """params['base_url'] is accepted as a fallback when model.url is empty."""
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    with open(Path("meta/job.json")) as f:
+        job = json.load(f)
+    job["model"]["url"] = ""
+    job["parameters"]["base_url"] = "http://localhost:8000"
+    (meta_dir / "job.json").write_text(json.dumps(job))
+    adapter = LMEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
+
+    seen = {}
+
+    def fake_run(cmd, env, timeout):
+        seen["cmd"] = cmd
+        raise RuntimeError("stop after command build")
+
+    monkeypatch.setattr(adapter, "_run_lmeval", fake_run)
+    with pytest.raises(RuntimeError, match="stop after command build"):
+        adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+    assert any("http://localhost:8000/v1/completions" in str(a) for a in seen["cmd"])
 
 
 # ── Tokenizer warning ─────────────────────────────────────────────────────────

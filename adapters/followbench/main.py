@@ -391,7 +391,17 @@ class FollowBenchAdapter(FrameworkAdapter):
             max_tokens = int(parameters.get("max_tokens", 2048))
             temperature = float(parameters.get("temperature", 0.0))
             request_timeout = int(parameters.get("request_timeout", 120))
-            num_examples = _select_num_examples(parameters)
+            # EvalHub promotes this standard sampling limit to JobSpec.num_examples
+            # rather than keeping it in the provider-specific parameters map.
+            job_spec_num_examples = getattr(config, "num_examples", None)
+            if job_spec_num_examples is not None:
+                num_examples = _select_num_examples(
+                    {"num_examples": job_spec_num_examples}
+                )
+            else:
+                # Keep compatibility with locally-authored JobSpecs that place it
+                # in parameters, such as adapters/followbench/meta/job.json.
+                num_examples = _select_num_examples(parameters)
 
             model_name = str(config.model.name or "").strip()
             model_client = _build_model_client(config, request_timeout)
@@ -413,6 +423,12 @@ class FollowBenchAdapter(FrameworkAdapter):
 
             if not groups:
                 raise ValueError("No FollowBench examples were selected")
+
+            logger.info(
+                "Selected %d FollowBench example groups (num_examples=%s)",
+                len(groups),
+                num_examples if num_examples is not None else "all",
+            )
 
             judge_client, judge_model = _build_judge_client(
                 config,
@@ -441,6 +457,7 @@ class FollowBenchAdapter(FrameworkAdapter):
             ]
 
             total = len(evaluated_records)
+            logger.info("Evaluating %d FollowBench records", total)
 
             for index, (group, example) in enumerate(evaluated_records, start=1):
                 response = _call_chat_model(

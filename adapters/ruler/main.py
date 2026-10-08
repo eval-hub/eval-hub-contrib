@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from evalhub.adapter import (
     CapabilityEvalEntry,
@@ -35,6 +36,8 @@ from evalhub.adapter import (
     MessageInfo,
     OCIArtifactSpec,
 )
+
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +322,7 @@ class RulerAdapter(FrameworkAdapter):
                 model_name=config.model.name,
                 evaluation_results=evaluation_results,
                 work_dir=work_dir,
+                raw_results=raw_results,
             )
 
             # Phase 5 — persist artifacts
@@ -472,6 +476,7 @@ class RulerAdapter(FrameworkAdapter):
                     use_fast=True,
                     # Request tokenizer files only — skip model weights
                     local_files_only=False,
+                    token=self._hf_token(),
                 )
                 return True
             if tokenizer_type == "openai":
@@ -520,13 +525,51 @@ class RulerAdapter(FrameworkAdapter):
         """Create a single shared OpenAI-compatible client for the whole job."""
         from openai import OpenAI  # noqa: PLC0415
 
-        api_key = os.getenv("MODEL_API_KEY", "")
-        if not api_key:
+        api_key = (
+            resolve_model_credentials().api_key
+            or os.getenv("MODEL_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+        )
+        if not api_key and self._uses_local_sidecar(model_url):
+            # The SDK requires a nonempty key. The sidecar replaces this
+            # placeholder with ServiceAccount authentication before forwarding.
+            api_key = "local"
+        elif not api_key:
             raise ValueError(
-                "MODEL_API_KEY environment variable is required for API authentication. "
-                "Set it to 'dummy' or 'none' explicitly if the endpoint has no auth."
+                "Model API credentials are required. Configure model.auth.secret_ref "
+                "or MODEL_API_KEY/OPENAI_API_KEY for a direct endpoint."
             )
         return OpenAI(base_url=model_url, api_key=api_key)
+
+    def _uses_local_sidecar(self, model_url: str) -> bool:
+        """Recognize the shared loopback model/callback origin of K8s jobs."""
+        if os.getenv("EVALHUB_MODE") != "k8s":
+            return False
+        callback_url = getattr(getattr(self, "job_spec", None), "callback_url", None)
+        if not callback_url:
+            return False
+        try:
+            model = urlsplit(model_url)
+            callback = urlsplit(callback_url)
+            return (
+                model.scheme in ("http", "https")
+                and model.hostname in ("localhost", "127.0.0.1", "::1")
+                and model.username is None
+                and callback.username is None
+                and (model.scheme, model.hostname, model.port)
+                == (callback.scheme, callback.hostname, callback.port)
+            )
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _hf_token() -> str | None:
+        """Resolve Hub authentication without exposing it in command arguments."""
+        return (
+            read_model_auth_key("hf-token")
+            or os.getenv("HF_TOKEN")
+            or os.getenv("HUGGING_FACE_HUB_TOKEN")
+        )
 
     def _generate_task_data(
         self,
@@ -579,6 +622,11 @@ class RulerAdapter(FrameworkAdapter):
             "--random_seed", str(random_seed),
             "--model_template_type", model_template,
         ]
+
+        hf_token = self._hf_token()
+        if hf_token:
+            env["HF_TOKEN"] = hf_token
+            env["HUGGING_FACE_HUB_TOKEN"] = hf_token
 
         logger.info(f"Generating data: task={task_id} ctx={context_length}")
         result = subprocess.run(
@@ -670,7 +718,7 @@ class RulerAdapter(FrameworkAdapter):
                 if isinstance(exc, (_openai.AuthenticationError, _openai.PermissionDeniedError)):
                     raise RuntimeError(
                         f"API authentication failed for {model_name}: {exc}. "
-                        "Check MODEL_API_KEY."
+                        "Check model.auth.secret_ref or the model API credential environment."
                     ) from exc
                 logger.warning(
                     f"Inference failed for sample {sample.get('index', '?')}: {exc}"
@@ -1083,6 +1131,7 @@ class RulerAdapter(FrameworkAdapter):
         model_name: str,
         evaluation_results: list[EvaluationResult],
         work_dir: Path,
+        raw_results: dict[str, dict[int, list[dict]]],
     ) -> list[Path]:
         # Determine output directory: prefer the SDK-provided path (k8s persistent volume),
         # fall back to $HOME/ruler_<job_id>_results if that path is not writable
@@ -1133,6 +1182,38 @@ class RulerAdapter(FrameworkAdapter):
                 indent=2,
             )
         files.append(results_file)
+
+        # Write diagnostics beside the aggregate files so OCI export includes them
+        # before the temporary predictions directory is removed during cleanup.
+        eval_constants = _load_module_from_path(
+            "ruler_eval_constants",
+            self.SCRIPTS_DIR / "eval" / "synthetic" / "constants.py",
+        )
+        samples_file = output_dir / "samples.jsonl"
+        with samples_file.open("w", encoding="utf-8") as fh:
+            for task_id, ctx_results in raw_results.items():
+                base_task_type = self._load_task_config(task_id)["task"]
+                metric_fn = eval_constants.TASKS[base_task_type]["metric_fn"]
+                for context_length, predictions in ctx_results.items():
+                    for sample in predictions:
+                        reference_matches = [
+                            answer.lower() in sample["pred"].lower()
+                            for answer in sample["outputs"]
+                        ]
+                        row = {
+                            "job_id": job_id,
+                            "benchmark_id": benchmark_id,
+                            "model_name": model_name,
+                            "task_id": task_id,
+                            "context_length": context_length,
+                            **sample,
+                            "metric_name": f"{task_id}.ctx_{context_length}.score",
+                            "scorer": metric_fn.__name__,
+                            "score": metric_fn([sample["pred"]], [sample["outputs"]]) / 100.0,
+                            "reference_matches": reference_matches,
+                        }
+                        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        files.append(samples_file)
 
         logger.info(f"Saved {len(files)} result file(s) to {output_dir}")
         return files
