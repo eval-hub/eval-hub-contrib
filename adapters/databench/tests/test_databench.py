@@ -153,6 +153,20 @@ def test_adapter_http_generation_scoring_and_diagnostics(
         }
     )
     callbacks = MagicMock()
+    def check_status_timing(status):
+        if status.phase == main.JobPhase.INITIALIZING:
+            assert not tables.called
+            assert not requests
+        elif status.phase == main.JobPhase.RUNNING_EVALUATION and status.progress == 0:
+            assert not requests
+        elif status.phase == main.JobPhase.POST_PROCESSING:
+            assert len(requests) == 2
+            assert len((tmp_path / "samples.jsonl").read_text().splitlines()) == 2
+            assert not (tmp_path / "results.json").exists()
+        elif status.phase == main.JobPhase.PERSISTING_ARTIFACTS:
+            assert (tmp_path / "results.json").exists()
+
+    callbacks.report_status.side_effect = check_status_timing
     if with_export:
         from evalhub.adapter import OCIArtifactResult
 
@@ -175,6 +189,16 @@ def test_adapter_http_generation_scoring_and_diagnostics(
         )
     adapter = object.__new__(main.DataBenchAdapter)
     result = adapter.run_benchmark_job(config, callbacks)
+    phases = [call.args[0].phase for call in callbacks.report_status.call_args_list]
+    assert phases == [
+        main.JobPhase.INITIALIZING,
+        main.JobPhase.LOADING_DATA,
+        main.JobPhase.RUNNING_EVALUATION,
+        main.JobPhase.RUNNING_EVALUATION,
+        main.JobPhase.RUNNING_EVALUATION,
+        main.JobPhase.POST_PROCESSING,
+        main.JobPhase.PERSISTING_ARTIFACTS,
+    ]
     if with_export:
         assert result.oci_artifact.reference == "quay.io/test/results@sha256:test"
         assert callbacks.create_oci_artifact.call_args.args[0].files_path == tmp_path

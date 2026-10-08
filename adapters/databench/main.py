@@ -54,6 +54,9 @@ def positive_int(value: object, name: str) -> int:
 class DataBenchAdapter(FrameworkAdapter):
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         start = time.monotonic()
+        callbacks.report_status(
+            JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
+        )
         if config.benchmark_id not in BENCHMARKS:
             raise ValueError(f"Unsupported benchmark_id: {config.benchmark_id}")
         params = config.parameters or {}
@@ -87,6 +90,13 @@ class DataBenchAdapter(FrameworkAdapter):
         samples_path = directory / "samples.jsonl"
         correct = 0
         tables = {}
+        callbacks.report_status(
+            JobStatusUpdate(
+                status=JobStatus.RUNNING,
+                phase=JobPhase.RUNNING_EVALUATION,
+                progress=0.0,
+            )
+        )
         with (
             openai.OpenAI(
                 base_url=config.model.url, api_key=api_key, timeout=timeout
@@ -143,6 +153,9 @@ class DataBenchAdapter(FrameworkAdapter):
                         progress=(index + 1) / len(qa),
                     )
                 )
+        callbacks.report_status(
+            JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
+        )
         accuracy = correct / len(qa)
         metadata = {
             "framework": "databench-eval",
