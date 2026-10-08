@@ -863,3 +863,38 @@ def test_mount_check_handles_missing_and_unreadable_roots(tmp_path, monkeypatch)
     (populated / "x").write_text("1")
     monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(populated))
     assert main._test_data_mount_usable() is True
+
+
+# ---------------------------------------------------------------------------
+# Job-spec path default (the platform mounts /meta/job.json; no env var is set)
+# ---------------------------------------------------------------------------
+
+
+def test_job_spec_path_env_wins(tmp_path, monkeypatch):
+    import main
+
+    k8s = tmp_path / "job.json"
+    k8s.write_text("{}")
+    monkeypatch.setattr(main, "_K8S_JOB_SPEC_PATH", str(k8s))
+    monkeypatch.setenv("EVALHUB_JOB_SPEC_PATH", "/explicit/job.json")
+    assert main._default_job_spec_path() == "/explicit/job.json"
+
+
+def test_job_spec_path_defaults_to_k8s_mount_when_present(tmp_path, monkeypatch):
+    """On a cluster no env var is set: the adapter must find /meta/job.json."""
+    import main
+
+    k8s = tmp_path / "job.json"
+    k8s.write_text("{}")
+    monkeypatch.setattr(main, "_K8S_JOB_SPEC_PATH", str(k8s))
+    monkeypatch.delenv("EVALHUB_JOB_SPEC_PATH", raising=False)
+    assert main._default_job_spec_path() == str(k8s)
+
+
+def test_job_spec_path_falls_back_to_local_sample(tmp_path, monkeypatch):
+    """Local runs (no mount, no env) keep using the sample meta/job.json."""
+    import main
+
+    monkeypatch.setattr(main, "_K8S_JOB_SPEC_PATH", str(tmp_path / "absent.json"))
+    monkeypatch.delenv("EVALHUB_JOB_SPEC_PATH", raising=False)
+    assert main._default_job_spec_path() == os.path.join(main.ADAPTER_DIR, "meta", "job.json")

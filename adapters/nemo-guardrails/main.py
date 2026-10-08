@@ -1470,10 +1470,30 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
 # Entrypoint
 # ---------------------------------------------------------------------------
 
+#: Where eval-hub mounts the job spec inside the adapter pod.
+_K8S_JOB_SPEC_PATH = "/meta/job.json"
+
+
+def _default_job_spec_path() -> str:
+    """Resolve the job spec path.
+
+    ``EVALHUB_JOB_SPEC_PATH`` wins; otherwise the eval-hub mount (``/meta/job.json``)
+    when present, so the adapter starts on a cluster without extra provider env
+    (every other adapter defaults to that path); otherwise the sample
+    ``meta/job.json`` next to this file for local runs.
+    """
+    explicit = os.environ.get("EVALHUB_JOB_SPEC_PATH")
+    if explicit:
+        return explicit
+    if os.path.isfile(_K8S_JOB_SPEC_PATH):
+        return _K8S_JOB_SPEC_PATH
+    return os.path.join(ADAPTER_DIR, "meta", "job.json")
+
+
 def main() -> None:
     logger.info("Starting NeMo Guardrails adapter")
     try:
-        job_spec_path = os.environ.get("EVALHUB_JOB_SPEC_PATH", os.path.join(ADAPTER_DIR, "meta", "job.json"))
+        job_spec_path = _default_job_spec_path()
         adapter = NemoGuardrailsAdapter(job_spec_path=job_spec_path)
         callbacks = DefaultCallbacks.from_adapter(adapter)
         callbacks.report_status(
