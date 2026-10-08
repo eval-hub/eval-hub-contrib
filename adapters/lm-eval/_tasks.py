@@ -12,12 +12,18 @@ Benchmarks are split into two scoring classes:
 
 from __future__ import annotations
 
+from _lmevaljob_tasks import (
+    CODE_EXECUTION_IDS,
+    LMEVALJOB_COMPLETIONS_IDS,
+    LMEVALJOB_GENERATION_IDS,
+    LMEVALJOB_ROLLING_IDS,
+)
+
 # Maps benchmark_id → lm-eval task name(s).
 # All tasks here use loglikelihood (multiple_choice or loglikelihood output type).
 # Requires: completions endpoint with echo=True and logprobs=1.
 LOGLIKELIHOOD_TASKS: dict[str, str | list[str]] = {
     "lm-eval/mmlu": "mmlu",
-    "lm-eval/mmlu_pro": "mmlu_pro",
     "lm-eval/arc_easy": "arc_easy",
     "lm-eval/arc_challenge": "arc_challenge",
     "lm-eval/hellaswag": "hellaswag",
@@ -26,7 +32,6 @@ LOGLIKELIHOOD_TASKS: dict[str, str | list[str]] = {
     "lm-eval/boolq": "boolq",
     "lm-eval/piqa": "piqa",
     "lm-eval/openbookqa": "openbookqa",
-    "lm-eval/bbh": "bbh",
     # GPQA: the zero-shot diamond variant is the registered task name in lm-eval.
     # The leaderboard group task is "leaderboard_gpqa" (used in the OLL-v2 composite).
     "lm-eval/gpqa": "gpqa_diamond_zeroshot",
@@ -41,6 +46,9 @@ GENERATION_TASKS: dict[str, str | list[str]] = {
     "lm-eval/ifeval": "ifeval",
     "lm-eval/triviaqa": "triviaqa",
     "lm-eval/nq_open": "nq_open",
+    # mmlu_pro and bbh (bbh_cot_fewshot) are generate_until in lm-eval 0.4.x.
+    "lm-eval/mmlu_pro": "mmlu_pro",
+    "lm-eval/bbh": "bbh",
     # The task is registered as "hendrycks_math500" in lm-eval; "math_500" does not exist.
     "lm-eval/math_500": "hendrycks_math500",
 }
@@ -75,18 +83,12 @@ _COMPOSITE_NEEDS_COMPLETIONS: dict[str, bool] = {
     "lm-eval/generation-suite": False,
 }
 
-# Tasks explicitly excluded from this adapter with a human-readable reason.
-EXCLUDED_TASKS: dict[str, str] = {
-    "lm-eval/humaneval": (
-        "HumanEval requires sandboxed Python code execution (exec()) and is not "
-        "supported in this adapter. For code execution benchmarks use the "
-        "swebench adapter, or request a sandboxed lm-eval variant from your "
-        "platform team."
-    ),
-    "lm-eval/mbpp": (
-        "MBPP uses code_eval metrics (Python exec) and is not supported in this "
-        "adapter. For code execution benchmarks use the swebench adapter."
-    ),
+# Tasks that execute model-generated Python (lm-eval ``code_eval`` metric).
+# Refused unless the job sets allow_code_execution=true; the code then runs
+# inside the adapter pod, so the pod itself is the sandbox boundary.
+CODE_EXECUTION_TASKS: dict[str, str] = {
+    "lm-eval/humaneval": "humaneval",
+    "lm-eval/mbpp": "mbpp",
 }
 
 _ALL_KNOWN: dict[str, str | list[str]] = {**LOGLIKELIHOOD_TASKS, **GENERATION_TASKS}
@@ -94,14 +96,46 @@ _LOGLIKELIHOOD_IDS: frozenset[str] = frozenset(LOGLIKELIHOOD_TASKS)
 _GENERATION_IDS: frozenset[str] = frozenset(GENERATION_TASKS)
 
 
-def resolve_tasks(benchmark_id: str, task_override: str | None) -> str:
+def lmevaljob_task(benchmark_id: str) -> str | None:
+    """Return the lm-eval task for an LMEvalJob-compatible benchmark ID, or None.
+
+    Accepts the bare ID used by the server's ``lm_evaluation_harness`` provider
+    (``arc_easy``) and the same ID under this adapter's prefix (``lm-eval/arc_easy``).
+    """
+    name = benchmark_id.removeprefix("lm-eval/")
+    if name in LMEVALJOB_COMPLETIONS_IDS or name in LMEVALJOB_GENERATION_IDS:
+        return name
+    return None
+
+
+def is_rolling(benchmark_id: str) -> bool:
+    """Return True for perplexity (loglikelihood_rolling) benchmarks."""
+    return benchmark_id.removeprefix("lm-eval/") in LMEVALJOB_ROLLING_IDS
+
+
+def is_code_execution(benchmark_id: str) -> bool:
+    """Return True if the benchmark executes model-generated code."""
+    return (
+        benchmark_id in CODE_EXECUTION_TASKS
+        or benchmark_id.removeprefix("lm-eval/") in CODE_EXECUTION_IDS
+    )
+
+
+def resolve_tasks(
+    benchmark_id: str,
+    task_override: str | None,
+    allow_code_execution: bool = False,
+) -> str:
     """Return lm-eval task name(s) as a comma-separated string.
 
-    Raises ValueError for excluded or unknown benchmark IDs.
+    Raises ValueError for unknown benchmark IDs, and for code-execution
+    benchmarks unless ``allow_code_execution`` is set.
     """
-    if benchmark_id in EXCLUDED_TASKS:
+    if is_code_execution(benchmark_id) and not allow_code_execution:
         raise ValueError(
-            f"Benchmark '{benchmark_id}' is not supported: {EXCLUDED_TASKS[benchmark_id]}"
+            f"Benchmark '{benchmark_id}' executes model-generated Python code "
+            "(sandboxed Python code execution). It is disabled by default; set the "
+            "job parameter allow_code_execution=true to run it inside the adapter pod."
         )
 
     if benchmark_id == "lm-eval/custom":
@@ -115,11 +149,19 @@ def resolve_tasks(benchmark_id: str, task_override: str | None) -> str:
     if benchmark_id in COMPOSITE_SUITES:
         return ",".join(COMPOSITE_SUITES[benchmark_id])
 
+    if benchmark_id in CODE_EXECUTION_TASKS:
+        return CODE_EXECUTION_TASKS[benchmark_id]
+
     if benchmark_id in _ALL_KNOWN:
         val = _ALL_KNOWN[benchmark_id]
         return ",".join(val) if isinstance(val, list) else val
 
+    task = lmevaljob_task(benchmark_id)
+    if task is not None:
+        return task
+
     all_ids = sorted(_ALL_KNOWN) + sorted(COMPOSITE_SUITES) + ["lm-eval/custom"]
+    all_ids += sorted(LMEVALJOB_COMPLETIONS_IDS | LMEVALJOB_GENERATION_IDS)
     raise ValueError(
         f"Unknown benchmark '{benchmark_id}'.\nSupported benchmarks: {all_ids}"
     )
@@ -131,6 +173,8 @@ def requires_completions_endpoint(benchmark_id: str) -> bool:
         return True
     if benchmark_id in _COMPOSITE_NEEDS_COMPLETIONS:
         return _COMPOSITE_NEEDS_COMPLETIONS[benchmark_id]
+    if benchmark_id.removeprefix("lm-eval/") in LMEVALJOB_COMPLETIONS_IDS:
+        return True
     # Unknown/custom: assume generation — user is responsible for endpoint choice.
     return False
 

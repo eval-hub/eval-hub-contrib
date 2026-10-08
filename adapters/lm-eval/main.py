@@ -68,6 +68,8 @@ from _results import (
 from _tasks import (
     build_endpoint_url,
     detect_api_style,
+    is_code_execution,
+    is_rolling,
     lmeval_model_type,
     preflight_check,
     resolve_tasks,
@@ -102,7 +104,9 @@ _ABILITY_MAP: dict[str, str] = {
 
 def _benchmark_ability(benchmark_id: str) -> str:
     """Return the EvalCard ability category string for a given benchmark ID."""
-    return _ABILITY_MAP.get(benchmark_id, "custom")
+    return _ABILITY_MAP.get(
+        benchmark_id, _ABILITY_MAP.get(f"lm-eval/{benchmark_id}", "custom")
+    )
 
 
 def _primary_metric_name(results: list) -> str:
@@ -135,7 +139,10 @@ class LMEvalAdapter(FrameworkAdapter):
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
             )
 
-            tasks = resolve_tasks(config.benchmark_id, params.get("task"))
+            allow_code_execution = bool(params.get("allow_code_execution", False))
+            tasks = resolve_tasks(
+                config.benchmark_id, params.get("task"), allow_code_execution
+            )
             # Resolve model_url before api_style detection so URL-based auto-detection
             # uses the final resolved value (config.model.url may be supplemented by
             # a params["base_url"] fallback when the job spec omits model.url).
@@ -155,6 +162,13 @@ class LMEvalAdapter(FrameworkAdapter):
                     "No tokenizer configured — context length enforcement is approximate. "
                     "Set the 'tokenizer' parameter to a HuggingFace model ID (e.g. "
                     "'meta-llama/Meta-Llama-3-8B') for accurate truncation."
+                )
+
+            if is_rolling(config.benchmark_id) and not tokenizer:
+                logger.warning(
+                    "%s is a perplexity (loglikelihood_rolling) benchmark; set the "
+                    "'tokenizer' parameter so lm-eval can window the text correctly.",
+                    config.benchmark_id,
                 )
 
             env_card = EnvironmentCardMetadata.capture(
@@ -196,6 +210,7 @@ class LMEvalAdapter(FrameworkAdapter):
                 s3_endpoint=params.get("s3_endpoint"),
                 aws_access_key_id=params.get("aws_access_key_id"),
                 aws_secret_access_key=params.get("aws_secret_access_key"),
+                allow_code_execution=allow_code_execution,
             )
 
             cmd = build_cmd(
@@ -210,6 +225,9 @@ class LMEvalAdapter(FrameworkAdapter):
                 include_path=params.get("custom_tasks_path"),
                 apply_chat_template=bool(params.get("apply_chat_template", False)),
                 system_instruction=params.get("system_instruction"),
+                trust_remote_code=bool(params.get("trust_remote_code", False)),
+                confirm_run_unsafe_code=allow_code_execution
+                and is_code_execution(config.benchmark_id),
             )
             # Command is already logged at INFO level inside run_lmeval().
 

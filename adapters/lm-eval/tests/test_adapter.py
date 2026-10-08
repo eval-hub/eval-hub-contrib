@@ -220,7 +220,7 @@ def test_mbpp_raises_with_helpful_message(tmp_path, mock_callbacks):
     (meta_dir / "job.json").write_text(json.dumps(job))
     adapter = LMEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
 
-    with pytest.raises(ValueError, match="code_eval"):
+    with pytest.raises(ValueError, match="allow_code_execution"):
         adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
 
 
@@ -446,9 +446,11 @@ def test_resolve_custom_without_override_raises():
 
 
 def test_resolve_excluded_task_raises():
-    """HumanEval is excluded; resolve_tasks raises ValueError with the exclusion reason."""
+    """HumanEval is refused unless allow_code_execution is set."""
     with pytest.raises(ValueError, match="sandboxed Python code execution"):
         resolve_tasks("lm-eval/humaneval", None)
+    with pytest.raises(ValueError, match="allow_code_execution"):
+        resolve_tasks("humaneval", None)
 
 
 def test_resolve_unknown_raises():
@@ -592,3 +594,124 @@ def test_compute_overall_score_percent_normalised():
 def test_compute_overall_score_empty_returns_none():
     """An empty result list returns None rather than raising."""
     assert compute_overall_score([]) is None
+
+
+# ── LMEvalJob parity ──────────────────────────────────────────────────────────
+
+import yaml  # noqa: E402
+
+from _execution import build_cmd, build_env  # noqa: E402
+from _tasks import is_code_execution, requires_completions_endpoint  # noqa: E402
+
+_TESTS_DIR = Path(__file__).resolve().parent
+_ADAPTER_DIR = _TESTS_DIR.parent
+# Snapshot of benchmark IDs in the lm_evaluation_harness (LMEvalJob) provider: the
+# RHOAI 3.5 live list (188) unioned with eval-hub server main (167).
+_LMEVALJOB_IDS = (_TESTS_DIR / "lmevaljob_benchmark_ids.txt").read_text().split()
+
+
+def test_lmevaljob_snapshot_has_expected_size():
+    assert len(_LMEVALJOB_IDS) == 193
+    assert len(set(_LMEVALJOB_IDS)) == 193
+
+
+def test_provider_yaml_exposes_every_lmevaljob_benchmark():
+    """provider.yaml is a superset of the LMEvalJob provider's benchmark IDs."""
+    provider = yaml.safe_load((_ADAPTER_DIR / "provider.yaml").read_text())
+    exposed = [b["id"] for b in provider["benchmarks"]]
+    assert len(exposed) == len(set(exposed)), "duplicate benchmark IDs"
+    assert set(_LMEVALJOB_IDS) <= set(exposed)
+
+
+@pytest.mark.parametrize("benchmark_id", _LMEVALJOB_IDS)
+def test_every_lmevaljob_benchmark_resolves(benchmark_id):
+    """Each LMEvalJob ID resolves to its lm-eval task (code-exec ones need opt-in)."""
+    task = resolve_tasks(benchmark_id, None, allow_code_execution=True)
+    assert task == benchmark_id
+    assert resolve_tasks(f"lm-eval/{benchmark_id}", None, allow_code_execution=True)
+
+
+def test_every_provider_benchmark_resolves():
+    """No benchmark listed in provider.yaml is rejected as unknown."""
+    provider = yaml.safe_load((_ADAPTER_DIR / "provider.yaml").read_text())
+    for b in provider["benchmarks"]:
+        if b["id"] == "lm-eval/custom":
+            continue
+        assert resolve_tasks(b["id"], None, allow_code_execution=True)
+
+
+def test_api_style_classification():
+    assert requires_completions_endpoint("arc_easy")
+    assert requires_completions_endpoint("lm-eval/arc_easy")
+    assert requires_completions_endpoint("wikitext")  # loglikelihood_rolling
+    assert requires_completions_endpoint("lambada_openai")
+    assert not requires_completions_endpoint("gsm8k")
+    # bbh / mmlu_pro are generate_until in lm-eval 0.4.x
+    assert not requires_completions_endpoint("lm-eval/bbh")
+    assert not requires_completions_endpoint("bbh")
+    assert not requires_completions_endpoint("lm-eval/mmlu_pro")
+
+
+def test_loglikelihood_bare_id_rejected_on_chat_endpoint():
+    with pytest.raises(ValueError, match="loglikelihood"):
+        preflight_check("hellaswag_ar", "chat")
+    preflight_check("bbh", "chat")  # generation: fine
+
+
+def test_code_execution_ids():
+    for b in ("humaneval", "humaneval_instruct", "mbpp", "lm-eval/mbpp"):
+        assert is_code_execution(b)
+    assert not is_code_execution("gsm8k")
+    assert resolve_tasks("lm-eval/humaneval", None, allow_code_execution=True) == "humaneval"
+
+
+def _cmd(**kw):
+    base = dict(
+        model_type="local-completions", model_args="m", tasks="t", output_dir=Path("/o"),
+        batch_size=1, num_fewshot=None, limit=2, gen_kwargs=None, include_path=None,
+        apply_chat_template=False, system_instruction=None,
+    )
+    return build_cmd(**{**base, **kw})
+
+
+def test_build_cmd_safety_flags_off_by_default():
+    cmd = _cmd()
+    assert "--trust_remote_code" not in cmd
+    assert "--confirm_run_unsafe_code" not in cmd
+
+
+def test_build_cmd_safety_flags_opt_in():
+    cmd = _cmd(trust_remote_code=True, confirm_run_unsafe_code=True)
+    assert "--trust_remote_code" in cmd
+    assert "--confirm_run_unsafe_code" in cmd
+
+
+def test_build_env_code_eval_opt_in():
+    kw = dict(api_key="k", hf_datasets_cache=None, dataset_source="hub",
+              s3_endpoint=None, aws_access_key_id=None, aws_secret_access_key=None)
+    assert build_env(**kw, allow_code_execution=True)["HF_ALLOW_CODE_EVAL"] == "1"
+
+
+@pytest.mark.integration
+def test_code_execution_job_passes_flags(tmp_path, mock_callbacks, monkeypatch):
+    """allow_code_execution=true runs humaneval with the unsafe-code flag and env."""
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    with open(Path("meta/job.json")) as f:
+        job = json.load(f)
+    job["benchmark_id"] = "humaneval"
+    job["parameters"]["allow_code_execution"] = True
+    (meta_dir / "job.json").write_text(json.dumps(job))
+    adapter = LMEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
+
+    seen = {}
+
+    def fake_run(cmd, env, timeout):
+        seen["cmd"], seen["env"] = cmd, env
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(adapter, "_run_lmeval", fake_run)
+    with pytest.raises(RuntimeError, match="stop"):
+        adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+    assert "--confirm_run_unsafe_code" in seen["cmd"]
+    assert seen["env"]["HF_ALLOW_CODE_EVAL"] == "1"

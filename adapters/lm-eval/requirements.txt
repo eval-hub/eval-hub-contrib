@@ -1,7 +1,17 @@
 # lm-eval adapter — runtime dependencies
 
 # lm-evaluation-harness with API model extras (no GPU/transformers weights)
-lm_eval[api]>=0.4.12
+# Pinned: _lmevaljob_tasks.py (api-style routing per benchmark) is generated from
+# the 0.4.13 task registry. [ifeval] and [math] supply langdetect / math-verify,
+# needed by ifeval, leaderboard_ifeval, hendrycks_math500 and leaderboard_math_hard.
+lm_eval[api,ifeval,math]==0.4.13
+
+# datasets>=4 dropped loading-script support, which pile_*, cmmlu_*, aclue_*,
+# qasper and ethics_cm still rely on (they load with trust_remote_code=true).
+datasets>=2.16,<4
+
+# HuggingFace tokenizers for tokenizer_backend=huggingface (no torch required).
+transformers>=4.40
 
 # S3-compatible dataset loading (dataset_source=s3)
 boto3>=1.34

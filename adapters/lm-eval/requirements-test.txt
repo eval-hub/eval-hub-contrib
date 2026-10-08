@@ -5,4 +5,5 @@
 #   uv pip install --system -r requirements.txt -r requirements-test.txt
 eval-hub-sdk[adapter]~=1.0.5
 pytest>=8.0
+pyyaml>=6.0
 pytest-cov>=5.0

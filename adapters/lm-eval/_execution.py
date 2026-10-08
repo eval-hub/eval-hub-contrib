@@ -69,6 +69,8 @@ def build_cmd(
     include_path: str | None,
     apply_chat_template: bool,
     system_instruction: str | None,
+    trust_remote_code: bool = False,
+    confirm_run_unsafe_code: bool = False,
 ) -> list[str]:
     """Build the lm_eval CLI command list from evaluation parameters."""
     cmd = [
@@ -97,6 +99,10 @@ def build_cmd(
         cmd += ["--apply_chat_template"]
     if system_instruction:
         cmd += ["--system_instruction", system_instruction]
+    if trust_remote_code:
+        cmd += ["--trust_remote_code"]
+    if confirm_run_unsafe_code:
+        cmd += ["--confirm_run_unsafe_code"]
     return cmd
 
 
@@ -108,6 +114,7 @@ def build_env(
     s3_endpoint: str | None,
     aws_access_key_id: str | None,
     aws_secret_access_key: str | None,
+    allow_code_execution: bool = False,
 ) -> dict[str, str]:
     """Build environment variables for the lm_eval subprocess."""
     env = dict(os.environ)
@@ -116,6 +123,9 @@ def build_env(
     env["OPENAI_API_KEY"] = api_key if api_key else "dummy"
     # Prevent HuggingFace tokenizer parallelism warnings in the subprocess.
     env["TOKENIZERS_PARALLELISM"] = "false"
+    if allow_code_execution:
+        # Required by the HF code_eval metric before it will exec() model output.
+        env["HF_ALLOW_CODE_EVAL"] = "1"
     if hf_datasets_cache:
         env["HF_DATASETS_CACHE"] = hf_datasets_cache
     if dataset_source == "s3":
