@@ -20,6 +20,7 @@ IMAGE_SWEBENCH = $(REGISTRY)/community-swebench:$(VERSION)
 IMAGE_RULER = $(REGISTRY)/community-ruler:$(VERSION)
 IMAGE_NEMO_GUARDRAILS = $(REGISTRY)/community-nemo-guardrails:$(VERSION)
 IMAGE_PROMPTFOO = $(REGISTRY)/community-promptfoo:$(VERSION)
+IMAGE_WILDGUARD = $(REGISTRY)/community-wildguard:$(VERSION)
 
 # Default target
 .PHONY: help
@@ -447,6 +448,44 @@ test-promptfoo:
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ promptfoo tests passed"
+
+.PHONY: image-wildguard
+image-wildguard:
+	@echo "Building WildGuard adapter image..."
+	cd adapters/wildguard && \
+	$(BUILD_TOOL) build -t $(IMAGE_WILDGUARD) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_WILDGUARD)"
+
+.PHONY: push-wildguard
+push-wildguard:
+	@echo "Pushing WildGuard adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_WILDGUARD)
+	@echo "✅ Pushed: $(IMAGE_WILDGUARD)"
+
+.PHONY: clean-wildguard
+clean-wildguard:
+	@echo "Removing WildGuard adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_WILDGUARD) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_WILDGUARD)"
+
+.PHONY: build-and-push-wildguard
+build-and-push-wildguard: image-wildguard push-wildguard
+	@echo "✅ WildGuard adapter built and pushed"
+
+# Offline by design (matches CI): tests that need the HuggingFace Hub carry the live_hf marker.
+.PHONY: test-wildguard
+test-wildguard:
+	@echo "Running WildGuard adapter tests..."
+	cd adapters/wildguard && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v -m "not live_hf"
+	@echo "✅ WildGuard tests passed"
+
+images: image-wildguard
+push-images: push-wildguard
+clean-images: clean-wildguard
+tests: test-wildguard
 
 # DataBench adapter
 .PHONY: image-databench push-databench clean-databench test-databench
