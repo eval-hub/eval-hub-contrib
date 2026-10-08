@@ -1,0 +1,41 @@
+name: Test WildGuard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'adapters/wildguard/**'
+      - '.github/workflows/test-wildguard.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'adapters/wildguard/**'
+      - '.github/workflows/test-wildguard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v7
+        with:
+          # Matches the adapter image base (ubi9/python-311).
+          python-version: '3.11'
+      - name: Install dependencies
+        working-directory: adapters/wildguard
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+      - name: Run tests
+        working-directory: adapters/wildguard
+        # Offline by design: the suite stubs the model endpoint and datasets and reads
+        # staged data from tmp dirs. Tests that need the HuggingFace Hub must carry the
+        # live_hf marker; CI has no HF access by default, so they are deselected here.
+        run: pytest tests/ -v -m "not live_hf"

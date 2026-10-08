@@ -16,6 +16,10 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "integration: integration tests for adapter plumbing"
     )
+    config.addinivalue_line(
+        "markers",
+        "live_hf: needs HuggingFace Hub access (deselected in CI with -m 'not live_hf')",
+    )
 
 
 @pytest.fixture()
