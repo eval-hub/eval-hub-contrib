@@ -42,6 +42,8 @@ from evalhub.adapter.models.cards import (
     SafetyEvalEntry,
 )
 
+import _dataset_source
+
 logger = logging.getLogger(__name__)
 
 # WildGuard instruction template (matches the original paper / model card).
@@ -220,16 +222,25 @@ class WildGuardAdapter(FrameworkAdapter):
                 )
             )
 
-            # Deferred import — do NOT load at module level
-            from datasets import load_dataset  # noqa: PLC0415
+            # Airgap-aware dataset loading: prefers test_data_ref-staged data
+            # under /test_data (S3/PVC/git/HF staged by the init container).
+            # Raises a clear error when nothing usable is staged — no silent
+            # Hub fall-through to mask a broken staging step.
+            rows, dataset_source = _dataset_source.load_dataset_rows(
+                config.parameters,
+                hf_dataset_id=_WILDGUARD_VERSION,
+                split=split,
+                num_examples=num_examples,
+                job_spec_path=os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json"),
+            )
 
-            dataset = load_dataset(_WILDGUARD_VERSION, split=split)
-            if num_examples is not None:
-                dataset = dataset.select(range(min(num_examples, len(dataset))))
-
-            rows = list(dataset)
             total = len(rows)
-            logger.info("Loaded %d examples from WildGuard split=%s", total, split)
+            logger.info(
+                "Loaded %d examples from WildGuard split=%s (source=%s)",
+                total,
+                split,
+                dataset_source,
+            )
 
             # --- RUNNING_EVALUATION ---
             callbacks.report_status(
@@ -309,6 +320,7 @@ class WildGuardAdapter(FrameworkAdapter):
                     "framework": "wildguard",
                     "dataset": _WILDGUARD_VERSION,
                     "split": split,
+                    "dataset_source": dataset_source,
                     "adapter_version": _ADAPTER_VERSION,
                 },
                 eval_card=eval_card,

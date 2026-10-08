@@ -116,6 +116,17 @@ parameters:
       Optional. Cap the number of examples evaluated. Useful for smoke-testing.
       When omitted the full split is used.
 
+  - name: dataset_path
+    type: string
+    description: >
+      Optional. Path to staged dataset material, used with test_data_ref jobs
+      (S3/PVC/git/HF staged under /test_data). Accepts an absolute path, a path
+      relative to /test_data, or a parquet/json/jsonl file. When omitted, staged
+      data under /test_data (wildguard/ directory or any dataset file matching
+      the requested split) is auto-detected. test_data_ref jobs with no usable
+      staged material fail fast with a clear error instead of falling back to
+      the Hub.
+
   - name: max_concurrent
     type: integer
     default: 4

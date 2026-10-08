@@ -332,3 +332,27 @@ parameters:
     description: >-
       Fraction of each chunk window (in [0.0, 1.0)) to overlap with the next chunk. 
       Only applies to the 'chunk' strategy; chunk_overlap=.10 for a 2000-char window overlaps 200 chars.
+  - name: hf_revision
+    type: string
+    default: null
+    description: >-
+      Optional. HuggingFace dataset revision (commit SHA or tag) to pin Hub
+      downloads to, for reproducible and auditable runs. Applies to every
+      'huggingface'-source dataset entry that does not set its own
+      'hf_revision'. Ignored when a dataset entry sets 'dataset_path' or when
+      test_data_ref-staged data is used (airgap path).
+  - name: evalhub_test_data_dir
+    type: string
+    default: null
+    description: >-
+      Optional. Root directory for test_data_ref-staged dataset material
+      (S3/PVC/git/HF staged under /test_data on air-gapped clusters).
+      'dataset_path' in a dataset entry may be absolute or relative to this
+      root; when omitted, staged data is auto-detected under /test_data: a
+      directory named after the dataset's hf_name (e.g. prompt-injections/ for
+      deepset/prompt-injections), or, for a benchmark with a single dataset
+      only, any parquet/json/jsonl file matching the requested split.
+      Benchmarks with several datasets (e.g. prompt_injection) must stage each
+      dataset under its own directory. test_data_ref jobs with no usable staged
+      material fail fast with a clear error instead of falling back to the
+      HuggingFace Hub.

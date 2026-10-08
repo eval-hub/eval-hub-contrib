@@ -7,12 +7,19 @@ import pytest
 # Add the adapter directory to sys.path so `from main import ...` works.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from evalhub.adapter import JobCallbacks  # noqa: E402
-from main import WildGuardAdapter  # noqa: E402
+from evalhub.adapter import JobCallbacks
+
+from main import WildGuardAdapter
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "integration: integration tests for adapter plumbing")
+    config.addinivalue_line(
+        "markers", "integration: integration tests for adapter plumbing"
+    )
+    config.addinivalue_line(
+        "markers",
+        "live_hf: needs HuggingFace Hub access (deselected in CI with -m 'not live_hf')",
+    )
 
 
 @pytest.fixture()
