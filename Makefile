@@ -469,7 +469,8 @@ clean-wildguard:
 	@echo "✅ Removed: $(IMAGE_WILDGUARD)"
 
 .PHONY: build-and-push-wildguard
-build-and-push-wildguard: image-wildguard push-wildguard
+build-and-push-wildguard: image-wildguard
+	$(MAKE) push-wildguard
 	@echo "✅ WildGuard adapter built and pushed"
 
 # Offline by design (matches CI): tests that need the HuggingFace Hub carry the live_hf marker.
