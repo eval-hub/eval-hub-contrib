@@ -1,0 +1,39 @@
+id: evalhub-internal
+internal_only: true
+name: EvalHub Post Processor
+description: Ordered post-processing operations on completed evaluation results.
+type: internal
+runtime:
+  k8s:
+    image: quay.io/evalhub/evalhub-post-processor:latest
+    entrypoint: [python, main.py]
+    cpu_request: 500m
+    memory_request: 1Gi
+    cpu_limit: '4'
+    memory_limit: 8Gi
+  local:
+    entrypoint: [python, main.py]
+benchmarks:
+  - id: evaluation-post-processor
+    name: Evaluation Post Processor
+    description: Computes post-processing outputs in additional_info; no model inference.
+    category: post_processing
+    domains: [post_processing]
+    tasks: [post_processing]
+    modalities: [tabular]
+    evaluation_targets: [model]
+    metrics: []
+parameters:
+  - name: operations
+    type: object
+    description: >
+      Map of operation names to operation configurations. Supports
+      confidence_interval with results_data_ref, calibration_data_ref,
+      significance_level (alpha), optional num_parallel_threads, optional
+      data_config format and column mappings in each calibration_data_ref entry,
+      and optional results_data_ref.data_config with column and numeric value mappings.
+  - name: operation_order
+    type: array
+    description: >
+      Optional array listing every operation name exactly once in execution
+      order. If omitted, the relative execution order is unspecified.

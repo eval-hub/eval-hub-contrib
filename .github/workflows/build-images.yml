@@ -74,7 +74,11 @@ jobs:
             [clear]=ibm-clear
           )
           suffix="${IMAGE_MAP[$ADAPTER]:-$ADAPTER}"
-          echo "name=community-${suffix}" >> "$GITHUB_OUTPUT"
+          if [[ "$ADAPTER" == "evalhub-post-processor" ]]; then
+            echo "name=evalhub-post-processor" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=community-${suffix}" >> "$GITHUB_OUTPUT"
+          fi
           # main -> latest; v* branches -> branch name (e.g. v0.5)
           if [[ "$BRANCH" == "main" ]]; then
             echo "channel=latest" >> "$GITHUB_OUTPUT"

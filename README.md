@@ -10,6 +10,7 @@ This repository contains adapters that integrate various evaluation frameworks w
 
 | Framework | Container Image | Kubernetes | Notes |
 |-----------|----------------|------------|-------|
+| [EvalHub Post Processor](adapters/evalhub-post-processor/README.md) | `quay.io/evalhub/evalhub-post-processor:latest` | ✓ | Ordered post-processing of completed evaluations; PPI confidence intervals and sidecar-only MLflow/OCI access |
 | [LightEval](https://github.com/huggingface/lighteval) | `quay.io/evalhub/community-lighteval:latest` | ✓ | Lightweight evaluation framework for language models |
 | [GuideLLM](https://github.com/vllm-project/guidellm) | `quay.io/evalhub/community-guidellm:latest` | ✓ | Performance benchmarking for LLM inference servers |
 | [MTEB](https://github.com/embeddings-benchmark/mteb) | `quay.io/evalhub/community-mteb:latest` | ✓ | Massive Text Embedding Benchmark for embedding models |
