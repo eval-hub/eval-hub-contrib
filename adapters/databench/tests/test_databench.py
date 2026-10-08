@@ -3,12 +3,13 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import MagicMock
 
-import main
 import pandas as pd
 import pytest
-from _evaluation import build_prompt, load_table, make_evaluator, score_answer
 from datasets import Dataset
 from evalhub.adapter import JobSpec
+
+import main
+from _evaluation import build_prompt, load_table, make_evaluator, score_answer
 
 
 @pytest.mark.parametrize(

@@ -5,9 +5,10 @@ import sys
 sys.path.insert(0, "/app")
 
 import pandas as pd
-from _evaluation import build_prompt, make_evaluator, score_answer
 from datasets import Dataset
 from evalhub.adapter import JobSpec
+
+from _evaluation import build_prompt, make_evaluator, score_answer
 from main import DataBenchAdapter
 
 row = {

@@ -12,16 +12,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import openai
-from _evaluation import (
-    BENCHMARKS,
-    DATASET,
-    REVISION,
-    build_prompt,
-    load_questions,
-    load_table,
-    make_evaluator,
-    score_answer,
-)
 from evalhub.adapter import (
     DefaultCallbacks,
     EvaluationResult,
@@ -37,6 +27,17 @@ from evalhub.adapter import (
 )
 from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 from evalhub.models import MetricSchema, ResultType
+
+from _evaluation import (
+    BENCHMARKS,
+    DATASET,
+    REVISION,
+    build_prompt,
+    load_questions,
+    load_table,
+    make_evaluator,
+    score_answer,
+)
 
 logger = logging.getLogger(__name__)
 
