@@ -247,8 +247,13 @@ def get_virtual_response(request: Request, info: Info):
 
     # Check if the request was successful
     if real_response is not None and real_response.status_code == 200:
-        real_response = real_response.json()
-        if check_result(real_response):
+        try:
+            real_response = real_response.json()
+        except ValueError as e:
+            # Empty/malformed JSON body: fall through to fake-response path.
+            print(f"ToolBench upstream returned invalid JSON: {e}")
+            real_response = None
+        if real_response is not None and check_result(real_response):
             print("returning real_response")
             write_log(request=info, response=real_response, type="real_response")
             if CONFIG['is_save']:
