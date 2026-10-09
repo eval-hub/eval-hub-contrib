@@ -36,19 +36,19 @@ TASKS = {
     
     'common_words_extraction': {
         'tokens_to_generate': 120,
-        'template': """Below is a numbered list of words. In these words, some appear more often than others. Memorize the ones that appear most often.\\n{context}\\nQuestion: What are the 10 most common words in the above list for {query}?""",
+        'template': """Below is a numbered list of words. In these words, some appear more often than others. Memorize the ones that appear most often.\n{context}\nQuestion: What are the 10 most common words in the above list?""",
         'answer_prefix': """ Answer: The top 10 words that appear most often in the list are:"""
     },
     
     'freq_words_extraction' : {
         'tokens_to_generate': 50,
-        'template': """Read the following coded text and track the frequency of each coded word. Find the three most frequently appeared coded words. {context}\\nQuestion: Do not provide any explanation. Please ignore the dots '....'. What are the three most frequently appeared words in the above coded text for {query}?""",
+        'template': """Read the following coded text and track the frequency of each coded word. Find the three most frequently appeared coded words. {context}\nQuestion: Do not provide any explanation. Please ignore the dots '....'. What are the three most frequently appeared words in the above coded text?""",
         'answer_prefix': """ Answer: According to the coded text above, the three most frequently appeared words are:"""
     },
     
     'qa': {
         'tokens_to_generate': 32, 
-        'template': """Answer the question based on the given documents. Only give me the answer and do not output any other words.\\n\\nThe following are given documents.\\n\\n{context}\\n\\nAnswer the question based on the given documents. Only give me the answer and do not output any other words.\\n\\nQuestion: {query}""",
+        'template': """Answer the question based on the given documents. Only give me the answer and do not output any other words.\n\nThe following are given documents.\n\n{context}\n\nAnswer the question based on the given documents. Only give me the answer and do not output any other words.\n\nQuestion: {query}""",
         'answer_prefix': """ Answer:"""
     },
 }
