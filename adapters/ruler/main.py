@@ -984,9 +984,9 @@ class RulerAdapter(FrameworkAdapter):
     ) -> EvalCardMetadata:
         """Build a RULER EvalCard (Dhar et al. arXiv:2511.21695) from scored results.
 
-        Produces one CapabilityEvalEntry per evaluated category (NIAH, variable
-        tracking, aggregation, QA) with the zero-shot average score for that
-        category across all context lengths.
+        Groups task overall scores by category and actual shot count. Worked
+        examples remain in the official prompts; only zero-shot groups populate
+        zero_shot. Few-shot groups use alt_prompting and describe their shot count.
         """
         CATEGORY_ABILITIES = {
             "needle_in_a_haystack": "Long-context retrieval (NIAH)",
@@ -999,25 +999,40 @@ class RulerAdapter(FrameworkAdapter):
         }
         DEFAULT_METRIC = "string_match_all (% exact ref recall)"
 
-        # Collect per-category overall scores from .overall EvaluationResult entries
-        category_scores: dict[str, list[float]] = {}
+        # Keep different prompting conditions separate within each category.
+        category_scores: dict[tuple[str, int], list[float]] = {}
         for result in evaluation_results:
             if not result.metric_name.endswith(".overall"):
                 continue
             meta = result.metadata or {}
-            cat = meta.get("category", "unknown")
-            category_scores.setdefault(cat, []).append(float(result.metric_value))
+            task_id = meta.get("task_id") or result.metric_name.removesuffix(".overall")
+            task_config = self._load_task_config(task_id)
+            if task_config["task"] == "common_words_extraction":
+                num_shots = max(0, int(task_config["args"].get("num_fewshot", 1)))
+            elif task_config["task"] == "variable_tracking":
+                # main() always supplies one ICL example; the CLI flag is unused.
+                num_shots = 1
+            else:
+                num_shots = 0
+            cat = meta.get("category") or self._get_category(task_id)
+            category_scores.setdefault((cat, num_shots), []).append(float(result.metric_value))
 
         capability_evaluations: list[CapabilityEvalEntry] = []
-        for cat in sorted(category_scores):
-            scores = category_scores[cat]
-            avg = sum(scores) / len(scores)
+        for (cat, num_shots), scores in sorted(category_scores.items()):
+            avg = round(sum(scores) / len(scores), 4)
+            if num_shots == 0:
+                prompting = {"zero_shot": avg}
+            else:
+                prompting = {
+                    "alt_prompting": avg,
+                    "alt_prompting_description": f"{num_shots}-shot prompting (worked examples)",
+                }
             capability_evaluations.append(
                 CapabilityEvalEntry(
                     ability=CATEGORY_ABILITIES.get(cat, cat),
                     benchmark=f"RULER 1.0 / {benchmark_id}",
                     metric=CATEGORY_METRICS.get(cat, DEFAULT_METRIC),
-                    zero_shot=round(avg, 4),
+                    **prompting,
                 )
             )
 
@@ -1034,7 +1049,10 @@ class RulerAdapter(FrameworkAdapter):
                 "Datasets are generated deterministically (fixed random_seed); "
                 "scores reflect synthetic retrieval/tracking/aggregation tasks, "
                 "not real-world document understanding performance. "
-                "All tasks use zero-shot prompting with task-specific answer-prefix templates. "
+                "CWE uses num_fewshot from its task configuration (default 1); "
+                "variable tracking includes one worked example. "
+                "NIAH, frequency-words extraction and QA use zero-shot prompting. "
+                "EvalCard category averages are grouped by shot count. "
                 "Scoring: string_match_all (fraction of expected references found in "
                 "prediction) for NIAH, variable-tracking, and aggregation tasks; "
                 "string_match_part (any expected reference in prediction) for QA tasks. "
