@@ -117,8 +117,7 @@ def test_custom_task_file_is_not_probed_by_default():
 
 
 def test_bfcl_needs_github_not_huggingface(tmp_path):
-    # BFCL downloads from GitHub, not HuggingFace. It must not be rejected when HF egress
-    # is blocked but data is staged, and it must not add HF even when data is absent.
+    """BFCL downloads from GitHub, not HuggingFace; HF must never be probed for it."""
     env = {"INSPECT_EVALS_CACHE_DIR": str(tmp_path)}
     assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
     (tmp_path / "BFCL").mkdir()

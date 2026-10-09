@@ -24,11 +24,10 @@ from __future__ import annotations
 
 import logging
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -170,21 +169,26 @@ def run_preflight(task_spec: str, env: dict[str, str]) -> None:
     if not urls:
         return
 
-    # Run probes in parallel, bounded by a wall-clock deadline that covers DNS resolution.
-    # opener.open(timeout=...) does not bound getaddrinfo; as_completed(timeout=...) does.
-    executor = ThreadPoolExecutor(max_workers=len(urls))
-    future_to_url = {executor.submit(probe, u, timeout_s, env): u for u in urls}
-    results: list[tuple[str, bool, str, float]] = []
-    try:
-        for future in as_completed(future_to_url, timeout=timeout_s):
-            u = future_to_url[future]
-            results.append((u, *future.result()))
-    except FuturesTimeoutError:
-        for f, u in future_to_url.items():
-            if not f.done():
-                results.append((u, False, f"no response within {timeout_s:g}s (DNS or connection)", timeout_s))
-    finally:
-        executor.shutdown(wait=False)
+    # Run probes in parallel with daemon threads so stalled DNS workers do not delay
+    # interpreter exit.  opener.open(timeout=...) does not bound getaddrinfo; the
+    # wall-clock deadline enforced by joining with a remaining-time budget covers it.
+    out: dict[str, tuple[bool, str, float]] = {}
+    threads = []
+    for u in urls:
+        t = threading.Thread(
+            target=lambda u=u: out.__setitem__(u, probe(u, timeout_s, env)),
+            daemon=True,
+        )
+        t.start()
+        threads.append(t)
+    deadline = time.monotonic() + timeout_s
+    for t in threads:
+        t.join(max(0.0, deadline - time.monotonic()))
+    results: list[tuple[str, bool, str, float]] = [
+        (u, *out[u]) if u in out
+        else (u, False, f"no response within {timeout_s:g}s (DNS or connection)", timeout_s)
+        for u in urls
+    ]
 
     unreachable = []
     for url, ok, detail, elapsed in results:
