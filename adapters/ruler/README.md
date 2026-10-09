@@ -145,6 +145,15 @@ For direct model endpoints, `MODEL_API_KEY` or `OPENAI_API_KEY` remains supporte
 when no SDK credential is available. Existing HF token environment variables
 remain supported when no mounted `hf-token` is available.
 
+## Inference failures
+
+Inference uses the OpenAI client's built-in retries. If a request still fails,
+the job reports `FAILED` and stops before scoring or exporting result artifacts.
+The error identifies the task/context pair, sample index, exception type and
+HTTP status when available. API failures are never recorded as empty answers or
+included in the score. A successful response containing an empty or incorrect
+answer is still scored normally and remains in the sample count.
+
 ## Per-example diagnostics
 
 The result directory includes `samples.jsonl` alongside `summary.csv` and

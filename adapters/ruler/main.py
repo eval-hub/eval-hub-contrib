@@ -689,6 +689,10 @@ class RulerAdapter(FrameworkAdapter):
 
         Returns:
             List of prediction dicts with 'pred' key added.
+
+        Raises:
+            RuntimeError: An inference call failed after the client's retries.
+                API failures are not converted into scored predictions.
         """
         samples: list[dict] = []
         with open(data_file) as fh:
@@ -700,7 +704,6 @@ class RulerAdapter(FrameworkAdapter):
         predictions: list[dict] = []
         n_samples = len(samples)
         log_interval = max(1, batch_size)
-        failure_count = 0
 
         for i, sample in enumerate(samples):
             try:
@@ -712,28 +715,23 @@ class RulerAdapter(FrameworkAdapter):
                 )
                 pred_text: str = response.choices[0].message.content or ""
             except Exception as exc:
-                # Re-raise auth/connection errors immediately; swallow only per-sample
-                # transient errors (e.g., timeout on a single long prompt).
+                # The shared OpenAI client handles retries. A remaining failure
+                # must fail the job rather than become an empty, scored answer.
                 import openai as _openai  # noqa: PLC0415
-                if isinstance(exc, (_openai.AuthenticationError, _openai.PermissionDeniedError)):
-                    raise RuntimeError(
-                        f"API authentication failed for {model_name}: {exc}. "
-                        "Check model.auth.secret_ref or the model API credential environment."
-                    ) from exc
-                logger.warning(
-                    f"Inference failed for sample {sample.get('index', '?')}: {exc}"
+
+                detail = type(exc).__name__
+                status_code = getattr(exc, "status_code", None)
+                if status_code is not None:
+                    detail += f" (HTTP {status_code})"
+                error_msg = (
+                    f"Inference failed for {pred_file.stem}, "
+                    f"sample {sample.get('index', '?')} on model {model_name}: {detail}."
                 )
-                pred_text = ""
-                failure_count += 1
-                # Abort early if more than half the samples have failed — a dead
-                # endpoint would otherwise run to completion with a 0.0 score.
-                failure_threshold = max(5, n_samples // 2)
-                if failure_count >= failure_threshold:
-                    raise RuntimeError(
-                        f"{failure_count}/{n_samples} inference calls failed "
-                        f"(threshold={failure_threshold}). "
-                        "Check that model.url is reachable and the model is loaded."
-                    ) from exc
+                if isinstance(exc, (_openai.AuthenticationError, _openai.PermissionDeniedError)):
+                    error_msg += (
+                        " Check model.auth.secret_ref or the model API credential environment."
+                    )
+                raise RuntimeError(error_msg) from exc
 
             predictions.append(
                 {
@@ -761,12 +759,6 @@ class RulerAdapter(FrameworkAdapter):
                             ),
                         )
                     )
-
-        if failure_count > 0 and failure_count == n_samples:
-            raise RuntimeError(
-                f"All {n_samples} inference calls failed. "
-                "Check that model.url is reachable and the model is loaded."
-            )
 
         pred_file.parent.mkdir(parents=True, exist_ok=True)
         with open(pred_file, "w") as fh:
