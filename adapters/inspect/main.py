@@ -307,10 +307,7 @@ class InspectAdapter(FrameworkAdapter):
         if eval_status is not None:
             info["inspect_status"] = eval_status
 
-        # Standard / Open-Telco tasks are generate-or-MCQ without few-shot demos.
-        if mode == "standard" and overall_score is not None:
-            info["zero_shot"] = overall_score
-        elif mode in ("petri", "bloom") and overall_score is not None:
+        if mode in ("petri", "bloom") and overall_score is not None:
             # Multi-turn auditor/target/judge pipelines — not zero-shot MCQ.
             info["alt_prompting"] = overall_score
             info["alt_prompting_description"] = f"Inspect {mode} audit"

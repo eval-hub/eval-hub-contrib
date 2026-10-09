@@ -921,7 +921,7 @@ def test_standard_happy_path(monkeypatch, job_spec_path, standard_log_file):
     assert results.eval_card is None
     assert results.additional_info is not None
     assert results.additional_info["mode"] == "standard"
-    assert results.additional_info["zero_shot"] == results.overall_score
+    assert "zero_shot" not in results.additional_info
     assert "alt_prompting" not in results.additional_info
 
 
