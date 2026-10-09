@@ -19,6 +19,12 @@ IMAGE_RAGAS = $(REGISTRY)/community-ragas:$(VERSION)
 IMAGE_SWEBENCH = $(REGISTRY)/community-swebench:$(VERSION)
 IMAGE_RULER = $(REGISTRY)/community-ruler:$(VERSION)
 IMAGE_NEMO_GUARDRAILS = $(REGISTRY)/community-nemo-guardrails:$(VERSION)
+IMAGE_TOOLEVAL = $(REGISTRY)/community-tooleval:$(VERSION)
+# Fixture image tag matches tool-server/deploy.yaml; full-cache appends -full.
+# Use evalhub (not REGISTRY's eval-hub) so Makefile output matches deploy.yaml / CI.
+TOOLBENCH_SERVER_REGISTRY ?= quay.io/evalhub
+TOOLBENCH_SERVER_VERSION ?= 0.3.0
+IMAGE_TOOLBENCH_SERVER = $(TOOLBENCH_SERVER_REGISTRY)/community-toolbench-server:$(TOOLBENCH_SERVER_VERSION)
 IMAGE_PROMPTFOO = $(REGISTRY)/community-promptfoo:$(VERSION)
 
 # Default target
@@ -34,6 +40,8 @@ help:
 	@echo "  make image-inspect      - Build Inspect AI adapter image"
 	@echo "  make image-deepeval     - Build DeepEval adapter image"
 	@echo "  make image-ragas        - Build RAGAS adapter image"
+	@echo "  make image-tooleval     - Build ToolEval adapter image"
+	@echo "  make image-toolbench-server - Build ToolBench tool server ($(TOOLBENCH_SERVER_VERSION); FETCH_FULL_CACHE=1 -> $(TOOLBENCH_SERVER_VERSION)-full)"
 	@echo "  make image-swebench     - Build SWE-bench adapter image"
 	@echo "  make image-ruler        - Build RULER adapter image"
 	@echo "  make images             - Build all adapter images"
@@ -45,6 +53,8 @@ help:
 	@echo "  make push-inspect       - Push Inspect AI adapter image"
 	@echo "  make push-deepeval      - Push DeepEval adapter image"
 	@echo "  make push-ragas         - Push RAGAS adapter image"
+	@echo "  make push-tooleval      - Push ToolEval adapter image"
+	@echo "  make push-toolbench-server - Push ToolBench tool server image"
 	@echo "  make push-swebench      - Push SWE-bench adapter image"
 	@echo "  make push-ruler         - Push RULER adapter image"
 	@echo "  make push-images        - Push all adapter images"
@@ -56,6 +66,8 @@ help:
 	@echo "  make clean-inspect      - Remove Inspect AI adapter image"
 	@echo "  make clean-deepeval     - Remove DeepEval adapter image"
 	@echo "  make clean-ragas        - Remove RAGAS adapter image"
+	@echo "  make clean-tooleval     - Remove ToolEval adapter image"
+	@echo "  make clean-toolbench-server - Remove ToolBench tool server image"
 	@echo "  make clean-swebench     - Remove SWE-bench adapter image"
 	@echo "  make clean-ruler        - Remove RULER adapter image"
 	@echo "  make clean-images       - Remove all adapter images"
@@ -68,6 +80,7 @@ help:
 	@echo "  make test-inspect      - Run Inspect AI adapter tests"
 	@echo "  make test-deepeval     - Run DeepEval adapter tests"
 	@echo "  make test-ragas        - Run RAGAS adapter tests"
+	@echo "  make test-tooleval     - Run ToolEval adapter tests"
 	@echo "  make test-ruler        - Run RULER adapter tests"
 	@echo "  make tests             - Run all adapter tests"
 	@echo ""
@@ -142,7 +155,7 @@ image-swebench:
 	@echo "✅ Built: $(IMAGE_SWEBENCH)"
 
 .PHONY: images
-images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler image-nemo-guardrails image-promptfoo
+images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler image-nemo-guardrails image-promptfoo image-tooleval image-toolbench-server
 	@echo "✅ All adapter images built"
 
 # Push targets
@@ -193,7 +206,7 @@ push-swebench:
 	@echo "✅ Pushed: $(IMAGE_SWEBENCH)"
 
 .PHONY: push-images
-push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench push-ruler push-nemo-guardrails push-promptfoo
+push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench push-ruler push-nemo-guardrails push-promptfoo push-tooleval push-toolbench-server
 	@echo "✅ All adapter images pushed"
 
 # Clean targets
@@ -244,7 +257,7 @@ clean-swebench:
 	@echo "✅ Removed: $(IMAGE_SWEBENCH)"
 
 .PHONY: clean-images
-clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench clean-ruler clean-nemo-guardrails clean-promptfoo
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench clean-ruler clean-nemo-guardrails clean-promptfoo clean-tooleval clean-toolbench-server
 	@echo "✅ All adapter images removed"
 
 # Development targets
@@ -340,7 +353,7 @@ test-ragas:
 	@echo "✅ RAGAS tests passed"
 
 .PHONY: tests
-tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler test-nemo-guardrails test-promptfoo test-swebench
+tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler test-nemo-guardrails test-promptfoo test-swebench test-tooleval
 	@echo "✅ All adapter tests passed"
 .PHONY: test-swebench
 test-swebench:
@@ -447,6 +460,61 @@ test-promptfoo:
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ promptfoo tests passed"
+
+.PHONY: image-tooleval
+image-tooleval:
+	@echo "Building ToolEval adapter image..."
+	cd adapters/tooleval && \
+	$(BUILD_TOOL) build -t $(IMAGE_TOOLEVAL) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_TOOLEVAL)"
+
+.PHONY: push-tooleval
+push-tooleval:
+	@echo "Pushing ToolEval adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_TOOLEVAL)
+	@echo "✅ Pushed: $(IMAGE_TOOLEVAL)"
+
+.PHONY: clean-tooleval
+clean-tooleval:
+	@echo "Removing ToolEval adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_TOOLEVAL) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_TOOLEVAL)"
+
+# Optional: FETCH_FULL_CACHE=1 bakes the HF StableToolBench tools+cache into the image.
+# Fixture and full-cache images use distinct tags so IfNotPresent cannot mix them.
+FETCH_FULL_CACHE ?= 0
+ifeq ($(FETCH_FULL_CACHE),1)
+IMAGE_TOOLBENCH_SERVER = $(TOOLBENCH_SERVER_REGISTRY)/community-toolbench-server:$(TOOLBENCH_SERVER_VERSION)-full
+endif
+
+.PHONY: image-toolbench-server
+image-toolbench-server:
+	@echo "Building ToolBench tool server image (FETCH_FULL_CACHE=$(FETCH_FULL_CACHE)) -> $(IMAGE_TOOLBENCH_SERVER)"
+	cd adapters/tooleval/tool-server && \
+	$(BUILD_TOOL) build -t $(IMAGE_TOOLBENCH_SERVER) -f Containerfile \
+		--build-arg FETCH_FULL_CACHE=$(FETCH_FULL_CACHE) .
+	@echo "✅ Built: $(IMAGE_TOOLBENCH_SERVER)"
+
+.PHONY: push-toolbench-server
+push-toolbench-server:
+	@echo "Pushing ToolBench tool server image..."
+	$(BUILD_TOOL) push $(IMAGE_TOOLBENCH_SERVER)
+	@echo "✅ Pushed: $(IMAGE_TOOLBENCH_SERVER)"
+
+.PHONY: clean-toolbench-server
+clean-toolbench-server:
+	@echo "Removing ToolBench tool server image..."
+	$(BUILD_TOOL) rmi $(IMAGE_TOOLBENCH_SERVER) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_TOOLBENCH_SERVER)"
+
+.PHONY: test-tooleval
+test-tooleval:
+	@echo "Running ToolEval adapter tests..."
+	cd adapters/tooleval && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ ToolEval tests passed"
 
 # DataBench adapter
 .PHONY: image-databench push-databench clean-databench test-databench

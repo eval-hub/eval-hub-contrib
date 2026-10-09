@@ -1,0 +1,17 @@
+{
+  "tool_name": "echo",
+  "tool_description": "Echo tool for ToolEval offline fixture",
+  "api_list": [
+    {
+      "name": "echo_message",
+      "description": "Echo a message back",
+      "required_parameters": [
+        {
+          "name": "message",
+          "type": "string"
+        }
+      ],
+      "optional_parameters": []
+    }
+  ]
+}

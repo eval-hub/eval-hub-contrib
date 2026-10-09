@@ -1,0 +1,43 @@
+# StableToolBench virtual API server (cache-only) for ToolEval.
+# Build with --build-arg FETCH_FULL_CACHE=1 to bake HF tools+cache (~236MB).
+# Default image uses data/fixtures for smoke testing.
+FROM registry.access.redhat.com/ubi9/python-312:latest
+
+ARG FETCH_FULL_CACHE=0
+
+USER 0
+WORKDIR /app
+
+# ubi9/python-312 already has curl-minimal (conflicts with package "curl").
+RUN dnf install -y unzip && dnf clean all
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY vendor/main.py vendor/utils.py vendor/system_prompts.py vendor/path_safety.py ./
+COPY config.yml entrypoint.sh PIN.txt ./
+COPY scripts/fetch-cache.sh /tmp/fetch-cache.sh
+COPY data/fixtures /app/data/fixtures
+
+RUN chmod +x entrypoint.sh /tmp/fetch-cache.sh && \
+    if [ "$FETCH_FULL_CACHE" = "1" ]; then \
+      /tmp/fetch-cache.sh /app/data/cache && \
+      sed -i 's|tools_folder:.*|tools_folder: "./data/cache/tools"|' config.yml && \
+      sed -i 's|cache_folder:.*|cache_folder: "./data/cache/tool_response_cache"|' config.yml ; \
+    else \
+      mkdir -p /app/data/cache && \
+      cp -a /app/data/fixtures/tools /app/data/cache/tools && \
+      cp -a /app/data/fixtures/tool_response_cache /app/data/cache/tool_response_cache && \
+      sed -i 's|tools_folder:.*|tools_folder: "./data/cache/tools"|' config.yml && \
+      sed -i 's|cache_folder:.*|cache_folder: "./data/cache/tool_response_cache"|' config.yml ; \
+    fi && \
+    chown -R 1001:0 /app && chmod -R g+rwX /app
+
+ENV PYTHONUNBUFFERED=1
+ENV PORT=8080
+ENV HOME=/tmp
+ENV STABLETOOLBENCH_CONFIG=/app/config.yml
+
+EXPOSE 8080
+USER 1001
+ENTRYPOINT ["/app/entrypoint.sh"]

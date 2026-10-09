@@ -1,0 +1,40 @@
+{
+  "name": "tooleval-multi-tool-smoke",
+  "timeout_minutes": 30,
+  "model": {
+    "name": "my-model",
+    "url": "https://my-vllm.example.com/v1",
+    "auth": {
+      "secret_ref": "my-model-auth"
+    }
+  },
+  "benchmarks": [
+    {
+      "id": "multi-tool",
+      "provider_id": "tooleval",
+      "parameters": {
+        "tool_server_url": "http://toolbench-server.my-tenant.svc:8080",
+        "num_tasks": 1,
+        "max_steps": 3,
+        "instruction": "First echo the message hello with the echo tool, then uppercase that same message with the uppercase tool. Finish when both are done.",
+        "enable_judge": true,
+        "probe_models": true,
+        "debug_io": true,
+        "reference_calls": [
+          {
+            "category": "Tools",
+            "tool_name": "echo",
+            "api_name": "echo_message",
+            "tool_input": { "message": "hello" }
+          },
+          {
+            "category": "Tools",
+            "tool_name": "uppercase",
+            "api_name": "uppercase_message",
+            "tool_input": { "message": "hello" }
+          }
+        ]
+      }
+    }
+  ]
+}

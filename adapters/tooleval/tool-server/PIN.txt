@@ -1,0 +1,15 @@
+# Pinned StableToolBench revision used for vendor/ sources.
+# https://github.com/THUNLP-MT/StableToolBench
+REPO=https://github.com/THUNLP-MT/StableToolBench
+COMMIT=aa4ed9f4737ad98bd706663f01d63623c3427812
+LICENSE=Apache-2.0
+CACHE_DATASET=https://huggingface.co/datasets/stabletoolbench/Cache
+CACHE_REVISION=bd6dcef8100632b113c9c277a1293ed79cb90865
+CACHE_FILE=server_cache.zip
+# Git LFS OID / SHA-256 of server_cache.zip at CACHE_REVISION
+CACHE_SHA256=a3ed72052c2dc961d8e9b71860374d90ded6d475ca6f6449c78fb248cb82a5b2
+NOTES=
+  vendor/main.py is patched for cache_only=true (no outbound on cache miss).
+  Full tool_response_cache + tools are fetched at image build via scripts/fetch-cache.sh
+  (or mounted at runtime). data/fixtures/ is a tiny offline smoke set.
+  fetch-cache.sh pins CACHE_REVISION and verifies CACHE_SHA256 before unzip.
