@@ -103,12 +103,30 @@ def test_custom_task_file_is_not_probed_by_default():
     assert pf.required_urls("/work/my_task.py", {}) == []
 
 
-def test_bfcl_also_needs_github_until_data_is_staged(tmp_path):
+def test_bfcl_needs_github_not_huggingface(tmp_path):
+    # BFCL downloads from GitHub, not HuggingFace. It must not be rejected when HF egress
+    # is blocked but data is staged, and it must not add HF even when data is absent.
     env = {"INSPECT_EVALS_CACHE_DIR": str(tmp_path)}
-    assert pf.required_urls("inspect_evals/bfcl", env) == ["https://huggingface.co", "https://github.com"]
+    assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
     (tmp_path / "BFCL").mkdir()
     (tmp_path / "BFCL" / "BFCL_v4_simple_python.json").write_text("{}")
-    assert pf.required_urls("inspect_evals/bfcl", env) == ["https://huggingface.co"]
+    assert pf.required_urls("inspect_evals/bfcl", env) == []
+
+
+def test_run_preflight_returns_within_deadline_when_dns_stalls(monkeypatch):
+    """run_preflight must not block beyond preflight_timeout_s even if DNS stalls."""
+    import time as _time
+
+    def _slow_probe(url, timeout_s, env):
+        _time.sleep(timeout_s * 10)
+        return (True, "ok", timeout_s * 10)
+
+    monkeypatch.setattr(pf, "probe", _slow_probe)
+    env = {pf.MODE_ENV: "warn", pf.TIMEOUT_ENV: "0.2"}
+    start = _time.monotonic()
+    pf.run_preflight("inspect_evals/mmlu_pro", env)
+    elapsed = _time.monotonic() - start
+    assert elapsed < 2.0, f"preflight blocked for {elapsed:.1f}s — DNS deadline not enforced"
 
 
 def test_user_hosts_are_added_and_deduplicated():

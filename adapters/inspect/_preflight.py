@@ -27,7 +27,8 @@ import ssl
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -47,6 +48,9 @@ DEFAULT_HF_ENDPOINT = "https://huggingface.co"
 _NO_PROBE_PREFIXES = ("inspect_petri/", "petri_bloom/")
 # Task specs whose dataset comes from the HuggingFace Hub.
 _HF_TASK_PREFIXES = ("inspect_evals/", "evals/")
+# Task-spec substrings that download from GitHub (not HuggingFace) even when
+# the spec falls under an _HF_TASK_PREFIXES namespace.
+_GITHUB_ONLY_TASKS = frozenset({"bfcl"})
 
 
 class PreflightError(RuntimeError):
@@ -98,7 +102,10 @@ def required_urls(task_spec: str, env: dict[str, str]) -> list[str]:
     urls: list[str] = []
     if not task_spec.startswith(_NO_PROBE_PREFIXES):
         hub_offline = env.get("HF_HUB_OFFLINE") == "1" or env.get("HF_DATASETS_OFFLINE") == "1"
-        if task_spec.startswith(_HF_TASK_PREFIXES) and not hub_offline:
+        is_hf_task = task_spec.startswith(_HF_TASK_PREFIXES) and not any(
+            t in task_spec for t in _GITHUB_ONLY_TASKS
+        )
+        if is_hf_task and not hub_offline:
             urls.append(env.get("HF_ENDPOINT") or DEFAULT_HF_ENDPOINT)
         if "bfcl" in task_spec and not _bfcl_data_present(env):
             urls.append("https://github.com")
@@ -162,8 +169,21 @@ def run_preflight(task_spec: str, env: dict[str, str]) -> None:
     if not urls:
         return
 
-    with ThreadPoolExecutor(max_workers=len(urls)) as pool:
-        results = list(pool.map(lambda u: (u, *probe(u, timeout_s, env)), urls))
+    # Run probes in parallel, bounded by a wall-clock deadline that covers DNS resolution.
+    # opener.open(timeout=...) does not bound getaddrinfo; as_completed(timeout=...) does.
+    executor = ThreadPoolExecutor(max_workers=len(urls))
+    future_to_url = {executor.submit(probe, u, timeout_s, env): u for u in urls}
+    results: list[tuple[str, bool, str, float]] = []
+    try:
+        for future in as_completed(future_to_url, timeout=timeout_s):
+            u = future_to_url[future]
+            results.append((u, *future.result()))
+    except FuturesTimeoutError:
+        for f, u in future_to_url.items():
+            if not f.done():
+                results.append((u, False, f"no response within {timeout_s:g}s (DNS or connection)", timeout_s))
+    finally:
+        executor.shutdown(wait=False)
 
     unreachable = []
     for url, ok, detail, elapsed in results:

@@ -145,6 +145,29 @@ def test_timeout_also_stops_child_processes(tmp_path):
     assert time.monotonic() - started < 15
 
 
+def test_timeout_kills_term_resistant_descendants_keeping_pipe_open(tmp_path):
+    """SIGKILL is sent to the process group after the grace period even when the direct child already exited.
+
+    os.fork() preserves the open pipe write-end in the grandchild, so the stdout loop blocks
+    until the grandchild is killed. Without an unconditional post-grace SIGKILL to the group
+    the loop would hang for the full grandchild sleep duration.
+    """
+    script = "\n".join([
+        "import os, signal, sys, time",
+        "pid = os.fork()",
+        "if pid == 0:",
+        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+        "    time.sleep(60)",
+        "    sys.exit(0)",
+        "else:",
+        "    sys.exit(0)",
+    ])
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="timed out"):
+        ex.run_inspect(_cmd(script), {**_OFF, "INSPECT_TIMEOUT_S": "1"}, tmp_path)
+    assert time.monotonic() - started < 20
+
+
 def test_default_timeout_k8s_unbounded_local_two_hours():
     assert ex._resolve_job_timeout({"EVALHUB_MODE": "k8s"}) is None
     assert ex._resolve_job_timeout({}) == 7200.0

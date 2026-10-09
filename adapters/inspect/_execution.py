@@ -430,7 +430,11 @@ def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
         try:
             proc.wait(timeout=_KILL_GRACE_S)
         except subprocess.TimeoutExpired:
-            _signal_group(signal.SIGKILL)
+            pass
+        # Always SIGKILL the group after the grace period. The direct child may
+        # have exited on SIGTERM while a TERM-resistant descendant in the same
+        # process group still holds the stdout pipe open, blocking the read loop.
+        _signal_group(signal.SIGKILL)
 
     watchdog = threading.Timer(timeout, _kill) if timeout else None
     if watchdog:
