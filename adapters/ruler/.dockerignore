@@ -6,3 +6,7 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+scripts/data/synthetic/json/PaulGrahamEssays.json
+scripts/data/synthetic/json/english_words.json
+scripts/data/synthetic/json/squad.json
+scripts/data/synthetic/json/hotpotqa.json

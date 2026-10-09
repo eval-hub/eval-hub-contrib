@@ -114,10 +114,11 @@ def read_hotpotqa(file):
 
 
 DOCUMENT_PROMPT = "Document {i}:\n{document}"
+data_dir = os.environ.get("RULER_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "json"))
 if args.dataset == 'squad':
-    QAS, DOCS = read_squad(os.path.join(os.path.dirname(os.path.abspath(__file__)), "json/squad.json"))
+    QAS, DOCS = read_squad(os.path.join(data_dir, "squad.json"))
 elif args.dataset == 'hotpotqa':
-    QAS, DOCS = read_hotpotqa(os.path.join(os.path.dirname(os.path.abspath(__file__)), "json/hotpotqa.json"))
+    QAS, DOCS = read_hotpotqa(os.path.join(data_dir, "hotpotqa.json"))
 else:
     raise NotImplementedError(f'{args.dataset} is not implemented.')
 

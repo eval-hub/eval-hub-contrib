@@ -82,7 +82,8 @@ TOKENIZER = select_tokenizer(args.tokenizer_type, args.tokenizer_path)
 # Define Needle/Haystack Format
 needle = "One of the special magic {type_needle_v} for {key} is: {value}."
 if args.type_haystack == 'essay':
-    essay = os.path.join(os.path.dirname(os.path.abspath(__file__)), "json/PaulGrahamEssays.json")
+    data_dir = os.environ.get("RULER_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "json"))
+    essay = os.path.join(data_dir, "PaulGrahamEssays.json")
     essay = json.load(open(essay))['text']
     haystack = re.sub(r'\s+', " ", essay).split(" ")
 elif args.type_haystack == 'noise':

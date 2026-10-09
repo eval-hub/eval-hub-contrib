@@ -20,6 +20,7 @@ openai>=1.10.0
 wonderwords>=2.2
 nltk>=3.8
 numpy>=1.24.0
+scipy>=1.11.0
 
 # Paul Graham essay haystack generation
 beautifulsoup4>=4.12.0

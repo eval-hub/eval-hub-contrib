@@ -78,7 +78,8 @@ random.Random(args.random_seed).shuffle(words)
 logger.info(f'loaded {len(words)} wonderwords')
 
 # Randleword english words
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "json/english_words.json") , "r") as f:
+data_dir = os.environ.get("RULER_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "json"))
+with open(os.path.join(data_dir, "english_words.json"), "r") as f:
     randle_words = list(json.load(f).values())
     logger.info(f'loaded {len(randle_words)} randle words')
 
