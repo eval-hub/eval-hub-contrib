@@ -921,8 +921,36 @@ def test_standard_happy_path(monkeypatch, job_spec_path, standard_log_file):
     assert results.eval_card is None
     assert results.additional_info is not None
     assert results.additional_info["mode"] == "standard"
-    assert results.additional_info["zero_shot"] == results.overall_score
+    assert "zero_shot" not in results.additional_info
     assert "alt_prompting" not in results.additional_info
+
+
+@pytest.mark.parametrize(
+    "task_args, expected_zero_shot",
+    [
+        ({"fewshot": 0}, True),
+        ({"few_shot": "0"}, True),
+        ({"few_shots": []}, True),
+        ({"fewshot": 5}, False),
+        ({"fewshot": True}, False),
+        ({"fewshot_shuffle": True}, False),
+        ({}, False),
+    ],
+)
+def test_standard_zero_shot_metadata_requires_confirmed_task_setting(task_args, expected_zero_shot):
+    info = InspectAdapter._build_additional_info(
+        mode="standard",
+        task_spec="inspect_evals/mmlu_pro",
+        inspect_version="0.3.276",
+        overall_score=0.713,
+        eval_status="success",
+        num_samples=10,
+        eval_log={"eval": {"task_args": task_args}},
+    )
+
+    assert ("zero_shot" in info) is expected_zero_shot
+    if expected_zero_shot:
+        assert info["zero_shot"] == 0.713
 
 
 # ---------------------------------------------------------------------------
