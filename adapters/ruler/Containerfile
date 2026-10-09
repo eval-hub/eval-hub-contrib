@@ -26,6 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY scripts ./scripts
+COPY prepare_assets.py DATA_LICENSES.md ./
 COPY main.py .
 COPY provider.yaml .
 COPY .dockerignore .

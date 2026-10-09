@@ -39,6 +39,8 @@ from evalhub.adapter import (
 
 from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 
+from prepare_assets import prepare_assets
+
 logger = logging.getLogger(__name__)
 
 # Maps provider.yaml benchmark IDs → internal RULER task keys (from synthetic.yaml)
@@ -173,16 +175,18 @@ class RulerAdapter(FrameworkAdapter):
                     progress=0.1,
                     message=MessageInfo(
                         message=(
-                            f"Generating RULER datasets: {len(tasks)} task(s) × "
+                            f"Preparing RULER data: {len(tasks)} task(s) × "
                             f"{len(context_lengths)} context length(s)"
                         ),
                         message_code="loading_data",
                     ),
-                    current_step="Generating synthetic datasets",
+                    current_step="Preparing required data assets",
                     total_steps=total_pairs + 2,
                     completed_steps=0,
                 )
             )
+
+            self._prepare_task_assets(tasks, data_dir, timeout=data_gen_timeout)
 
             for task_id in tasks:
                 for ctx_len in context_lengths:
@@ -595,10 +599,6 @@ class RulerAdapter(FrameworkAdapter):
             logger.info(f"Reusing existing dataset: {output_file}")
             return output_file
 
-        task_config = self._load_task_config(task_id)
-        if task_config.get("args", {}).get("type_haystack") == "essay":
-            self._ensure_essay_haystack(timeout=timeout)
-
         prepare_script = self.SCRIPTS_DIR / "data" / "prepare.py"
         pythonpath = os.pathsep.join(
             filter(None, [
@@ -607,7 +607,11 @@ class RulerAdapter(FrameworkAdapter):
                 os.environ.get("PYTHONPATH", ""),
             ])
         )
-        env = {**os.environ, "PYTHONPATH": pythonpath}
+        env = {
+            **os.environ,
+            "PYTHONPATH": pythonpath,
+            "RULER_DATA_DIR": str(data_dir / "assets"),
+        }
 
         cmd = [
             sys.executable,
@@ -634,33 +638,18 @@ class RulerAdapter(FrameworkAdapter):
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"Data generation failed for {task_id}/{context_length}:\n{result.stderr}"
+                f"Data generation failed for {task_id}/{context_length}:\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
         logger.debug(f"Data generation stdout: {result.stdout}")
         return output_file
 
-    def _ensure_essay_haystack(self, timeout: int) -> None:
-        """Download the essay haystack lazily when an essay task needs it."""
-        essay_file = self.SCRIPTS_DIR / "data" / "synthetic" / "json" / "PaulGrahamEssays.json"
-        if essay_file.exists() and essay_file.stat().st_size > 0:
-            return
-
-        downloader = essay_file.parent / "download_paulgraham_essay.py"
-        logger.info("Essay haystack is missing; downloading RULER essay data")
-        result = subprocess.run(
-            [sys.executable, str(downloader)],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+    def _prepare_task_assets(self, tasks: list[str], data_dir: Path, timeout: int) -> None:
+        """Prepare this job's required inputs in one shared writable cache."""
+        prepare_assets(
+            [self._load_task_config(task) for task in tasks],
+            data_dir / "assets", self.SCRIPTS_DIR, timeout,
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                "Failed to download RULER essay haystack. "
-                "The runtime must have network access to GitHub and Paul Graham.\n"
-                f"{result.stderr}"
-            )
-        if not essay_file.exists() or essay_file.stat().st_size == 0:
-            raise RuntimeError("RULER essay downloader completed without creating essay data")
 
     def _run_api_inference(
         self,
