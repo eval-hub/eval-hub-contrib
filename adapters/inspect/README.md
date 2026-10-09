@@ -1,7 +1,10 @@
 # Inspect AI Adapter
 
 Wraps the [UK AISI Inspect AI](https://inspect.aisi.org.uk/) evaluation framework as an
-EvalHub provider, exposing three Meridian Labs alignment-auditing tools:
+EvalHub provider. Supports standard `inspect-evals` benchmarks, custom Inspect
+tasks, and Petri/Bloom auditing workflows.
+
+The auditing tools and scaffold integration include:
 
 - **Petri** (`inspect-petri`) — auditor/target/judge pipeline; 170+ seeds across 40
   alignment-behavior tag categories; 38 judge dimensions scored 1–10.
@@ -10,19 +13,20 @@ EvalHub provider, exposing three Meridian Labs alignment-auditing tools:
 - **Dish** — research-preview feature for real agent deployment scaffold testing;
   exposed via `task_args` pass-through (see parameters).
 
-Standard inspect-evals benchmarks (gsm8k, mmlu, humaneval, swe-bench, custom tasks)
-are also supported.
-
----
-
 ## Benchmarks
 
-**79 benchmarks total** — 36 Petri alignment audits, 2 Bloom suites, 36 inspect-evals,
-4 Open-Telco (TeleMath, TeleQnA, TeleLogs, 3GPP-TSG), and 1 custom task.
+The contrib `provider.yaml` registers **79 benchmark IDs**: 36 Petri alignment
+audits, 2 Bloom suites, 36 inspect-evals tasks, 4 Open-Telco tasks (TeleMath,
+TeleQnA, TeleLogs, 3GPP-TSG), and 1 custom task.
+
+The adapter's task maps support **83 IDs**, including four additional IDs absent
+from this provider file: `inspect/hle`, `inspect/bfcl`, `inspect/docvqa`, and
+`inspect/cyberseceval-2-pi`. To expose these through EvalHub, the deployed provider
+configuration must register them.
 
 ### Petri alignment audits (`inspect/petri-*`)
 
-All 40 built-in Petri seed tag categories are exposed as individual named benchmarks.
+The adapter exposes 35 named Petri tag selections and one full-audit benchmark.
 Primary metric: `concerning/mean` (1–10 scale; higher = more concerning).
 All 38 Petri judge dimensions are captured as individual metrics.
 
@@ -391,6 +395,42 @@ Environment: `ANTHROPIC_API_KEY=sk-ant-...` (for auditor), `OPENAI_BASE_URL` set
 > scenarios role (e.g. `openai/gpt-oss-20b`). JSON model specs with `model_args` are not
 > supported at this step. The scenarios model uses the global `OPENAI_BASE_URL` / `OPENAI_API_KEY`
 > credentials; per-role endpoint overrides do not apply to the scenarios step.
+
+---
+
+## Results and scoring
+
+Individual benchmark metrics are returned in `results`. The adapter also computes
+`overall_score` as a summary. EvalHub selects the metric used for pass/fail through
+its `primary_score.metric` configuration; that selection is separate from the
+adapter's summary calculation.
+
+### HLE and BFCL representative scores
+
+All individual metrics remain available. For `inspect/hle`, `overall_score`
+uses `hle/regex_judge/hle/accuracy`. For `inspect/bfcl`, it uses
+`bfcl_scorer/accuracy`. Calibration error, unscored counts and category metrics
+are not averaged into these representative scores. If the selected accuracy is
+missing, duplicated or non-finite, no overall score is returned.
+
+### Other benchmark summaries
+
+Petri and Bloom select `concerning/mean` when available. Other benchmarks retain
+the existing mean calculation, excluding dispersion metrics and category-specific
+standard errors ending in `_stderr` or `_sterr`. These metrics remain available
+individually.
+
+### Prompting metadata
+
+For standard-mode tasks, `additional_info.zero_shot` mirrors `overall_score`
+only when the saved Inspect log's `eval.task_args` confirms zero shots using a
+recognized shot-count or example-list argument. It is omitted for few-shot
+settings and when the setting is missing or unrecognized. An omitted
+`zero_shot` does not imply that the task used few-shot prompting; its prompting
+setup may simply be unconfirmed. Selecting a representative score does not
+determine the prompting setup. Petri and Bloom retain `alt_prompting` metadata.
+
+---
 
 ## Building and testing
 
