@@ -757,7 +757,9 @@ def test_standard_overall_score_excludes_stderr(job_spec_path, standard_eval_log
     assert adapter._compute_overall_score(results, "standard") == pytest.approx(accuracy)
 
 
-@pytest.mark.parametrize("stderr_name", ["stderr", "bootstrap_stderr", "std", "var"])
+@pytest.mark.parametrize("stderr_name", [
+    "stderr", "bootstrap_stderr", "std", "var", "simple_python_sterr", "category_stderr",
+])
 def test_overall_score_ignores_dispersion_metrics(job_spec_path, stderr_name):
     """accuracy 1.0 with a zero-width spread reports 1.0, not 0.5."""
     adapter = InspectAdapter(job_spec_path=job_spec_path)

@@ -139,7 +139,7 @@ class InspectAdapter(FrameworkAdapter):
             )
 
             evaluation_results, _, num_samples = extract_results(eval_log, config.benchmark_id, mode)
-            overall_score = compute_overall_score(evaluation_results, mode)
+            overall_score = compute_overall_score(evaluation_results, mode, config.benchmark_id)
             logger.info(f"Post-processing complete | samples={num_samples} | overall_score={overall_score}")
 
             oci_artifact = None
@@ -336,8 +336,8 @@ class InspectAdapter(FrameworkAdapter):
     def _extract_results(self, eval_log, benchmark_id, mode):
         return extract_results(eval_log, benchmark_id, mode)
 
-    def _compute_overall_score(self, results, mode):
-        return compute_overall_score(results, mode)
+    def _compute_overall_score(self, results, mode, benchmark_id=None):
+        return compute_overall_score(results, mode, benchmark_id)
 
     def _get_inspect_version(self):
         return get_inspect_version()
