@@ -91,6 +91,7 @@ def normalize_hosts(value: Any, name: str = "preflight_hosts") -> list[str]:
 
 
 def _bfcl_data_present(env: dict[str, str]) -> bool:
+    """Return True if BFCL dataset files are already staged in INSPECT_EVALS_CACHE_DIR."""
     cache = env.get("INSPECT_EVALS_CACHE_DIR")
     if not cache:
         return False

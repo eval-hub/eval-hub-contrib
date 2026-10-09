@@ -361,6 +361,7 @@ def _petri_model_role_flags(config: JobSpec, env: dict[str, str]) -> list[str]:
 def _petri_task_flags(
     config: JobSpec, mode: str, behavior_dir: Path | None
 ) -> list[str]:
+    """Build -T CLI flags for petri (seed, turns, rollback, realism, tools, judge) and bloom (behavior, turns) modes."""
     flags: list[str] = []
 
     if mode == "petri":
@@ -419,12 +420,14 @@ def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
         raise
 
     def _signal_group(sig: int) -> None:
+        """Send sig to the process group, silently ignoring lookup and permission errors."""
         try:
             os.killpg(proc.pid, sig)
         except (ProcessLookupError, PermissionError):
             pass
 
     def _kill() -> None:
+        """Watchdog callback: SIGTERM the group, wait for the grace period, then unconditionally SIGKILL."""
         timed_out.set()
         _signal_group(signal.SIGTERM)
         try:
@@ -488,6 +491,7 @@ def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
 
 
 def get_inspect_version() -> str:
+    """Return the installed inspect-ai version string, or 'unknown' if the binary is unavailable."""
     try:
         result = subprocess.run(["inspect", "--version"], capture_output=True, text=True, timeout=10)
         raw = result.stdout.strip() or result.stderr.strip()

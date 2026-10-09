@@ -12,18 +12,19 @@ _OFF = {"INSPECT_PREFLIGHT": "off"}
 
 
 def _cmd(script: str) -> list[str]:
-    # cmd[2] is the "task spec" slot run_inspect hands to the pre-flight; the script text
-    # matches no known task prefix, so nothing is probed.
+    """Return a command list that runs script via sys.executable -c; cmd[2] acts as the task spec."""
     return [sys.executable, "-c", script]
 
 
 def _write_log_script(log_dir) -> str:
+    """Return a Python one-liner that writes an empty JSON file to log_dir for run_inspect to find."""
     return f"import json,pathlib; pathlib.Path({str(log_dir)!r}, 'run.json').write_text('{{}}')"
 
 
 # -- streaming ----------------------------------------------------------------------------------
 
 def test_output_is_streamed_to_the_adapter_log(tmp_path, caplog):
+    """Each line of inspect's stdout is logged with the 'inspect |' prefix as it arrives."""
     script = "print('loading dataset', flush=True); print('2 of 4 samples', flush=True)\n" + _write_log_script(tmp_path)
     with caplog.at_level("INFO"):
         ex.run_inspect(_cmd(script), dict(_OFF), tmp_path)
@@ -32,6 +33,7 @@ def test_output_is_streamed_to_the_adapter_log(tmp_path, caplog):
 
 
 def test_stderr_is_merged_into_the_stream(tmp_path, caplog):
+    """stderr is merged with stdout so diagnostic messages appear in the adapter log."""
     script = "import sys; print('warn on stderr', file=sys.stderr, flush=True)\n" + _write_log_script(tmp_path)
     with caplog.at_level("INFO"):
         ex.run_inspect(_cmd(script), dict(_OFF), tmp_path)
@@ -39,6 +41,7 @@ def test_stderr_is_merged_into_the_stream(tmp_path, caplog):
 
 
 def test_stream_logs_can_be_disabled(tmp_path, caplog):
+    """INSPECT_STREAM_LOGS=0 suppresses per-line logging; only the tail is kept for failures."""
     script = "print('quiet please', flush=True)\n" + _write_log_script(tmp_path)
     with caplog.at_level("INFO"):
         ex.run_inspect(_cmd(script), {**_OFF, "INSPECT_STREAM_LOGS": "0"}, tmp_path)
@@ -59,6 +62,7 @@ def test_lines_arrive_before_the_process_exits(tmp_path):
 
     class _Probe(logging.Handler):
         def emit(self, record):
+            """Record whether the marker file exists when the first streamed line is logged."""
             if "inspect | first" in record.getMessage():
                 seen_while_running.append(not marker.exists())
 
@@ -75,11 +79,13 @@ def test_lines_arrive_before_the_process_exits(tmp_path):
 # -- results and failures ---------------------------------------------------------------------
 
 def test_returns_newest_json_log(tmp_path):
+    """run_inspect returns the path to the most recently modified JSON log in log_dir."""
     ex.run_inspect(_cmd(_write_log_script(tmp_path)), dict(_OFF), tmp_path)
     assert ex.run_inspect(_cmd(_write_log_script(tmp_path)), dict(_OFF), tmp_path).name == "run.json"
 
 
 def test_failure_reports_exit_code_and_output_tail(tmp_path):
+    """A non-zero exit raises RuntimeError with the exit code and the last lines of output."""
     script = "print('boom detail', flush=True); raise SystemExit(3)"
     with pytest.raises(RuntimeError, match=r"exit 3") as exc:
         ex.run_inspect(_cmd(script), dict(_OFF), tmp_path)
@@ -87,11 +93,13 @@ def test_failure_reports_exit_code_and_output_tail(tmp_path):
 
 
 def test_missing_json_log_is_an_error(tmp_path):
+    """run_inspect raises RuntimeError when inspect exits 0 but writes no JSON log file."""
     with pytest.raises(RuntimeError, match="no JSON log"):
         ex.run_inspect(_cmd("print('ok')"), dict(_OFF), tmp_path)
 
 
 def test_unlaunchable_command_raises_oserror(tmp_path):
+    """OSError is raised directly when the subprocess binary does not exist."""
     with pytest.raises(OSError):
         ex.run_inspect(["/nonexistent/inspect", "eval", "x"], dict(_OFF), tmp_path)
 
@@ -105,11 +113,13 @@ def test_interrupted_run_reaps_the_child_and_closes_the_pipe(tmp_path, monkeypat
     real_popen = ex.subprocess.Popen
 
     def spy_popen(*args, **kwargs):
+        """Wrap Popen to record the created process object for later assertions."""
         proc = real_popen(*args, **kwargs)
         created.append(proc)
         return proc
 
     def boom(msg, *args):
+        """Raise RuntimeError on the first streamed inspect line, simulating a logging failure."""
         if str(msg).startswith("inspect |"):
             pids.append(int(args[0]))
             raise RuntimeError("logging failed")
@@ -130,6 +140,7 @@ def test_interrupted_run_reaps_the_child_and_closes_the_pipe(tmp_path, monkeypat
 # -- timeout ----------------------------------------------------------------------------------
 
 def test_timeout_stops_a_hung_run(tmp_path):
+    """A run that exceeds timeout_s is killed and raises RuntimeError naming the timeout."""
     started = time.monotonic()
     with pytest.raises(RuntimeError, match="timed out after 1s"):
         ex.run_inspect(_cmd("import time; time.sleep(60)"), {**_OFF, "INSPECT_TIMEOUT_S": "1"}, tmp_path)
@@ -169,17 +180,20 @@ def test_timeout_kills_term_resistant_descendants_keeping_pipe_open(tmp_path):
 
 
 def test_default_timeout_k8s_unbounded_local_two_hours():
+    """k8s mode is unbounded by default; non-k8s modes default to 7200s."""
     assert ex._resolve_job_timeout({"EVALHUB_MODE": "k8s"}) is None
     assert ex._resolve_job_timeout({}) == 7200.0
 
 
 @pytest.mark.parametrize("raw,expected", [("90", 90.0), ("0", None), ("none", None), ("1.5", 1.5)])
 def test_timeout_override(raw, expected):
+    """INSPECT_TIMEOUT_S overrides the default; 0 and 'none' disable the limit."""
     assert ex._resolve_job_timeout({"INSPECT_TIMEOUT_S": raw, "EVALHUB_MODE": "k8s"}) == expected
 
 
 @pytest.mark.parametrize("raw", ["soon", "-5"])
 def test_invalid_timeout_names_the_parameter(raw):
+    """Non-numeric or negative INSPECT_TIMEOUT_S raises ValueError naming the parameter."""
     with pytest.raises(ValueError, match="timeout_s"):
         ex._resolve_job_timeout({"INSPECT_TIMEOUT_S": raw})
 
@@ -187,6 +201,7 @@ def test_invalid_timeout_names_the_parameter(raw):
 # -- pre-flight is wired into the run ---------------------------------------------------------
 
 def test_unreachable_host_fails_before_inspect_starts(tmp_path, monkeypatch):
+    """Pre-flight failure raises before Popen is called so inspect never starts."""
     cmd = ["inspect", "eval", "inspect_evals/mmlu_pro"]
     env = {"HF_ENDPOINT": "http://127.0.0.1:1", "INSPECT_PREFLIGHT_TIMEOUT_S": "0.5"}
     monkeypatch.setattr(ex.subprocess, "Popen", lambda *_a, **_k: pytest.fail("inspect must not start"))
@@ -197,6 +212,7 @@ def test_unreachable_host_fails_before_inspect_starts(tmp_path, monkeypatch):
 # -- job parameters -> env --------------------------------------------------------------------
 
 def _adapter(job_spec_path, **params):
+    """Create an InspectAdapter for mmlu-pro with the given job parameters."""
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.benchmark_id = "inspect/mmlu-pro"
     adapter.job_spec.parameters.update(params)
@@ -204,6 +220,7 @@ def _adapter(job_spec_path, **params):
 
 
 def test_parameters_map_to_env(job_spec_path, monkeypatch):
+    """Each diagnosability job parameter is written to its corresponding env var."""
     for v in ("INSPECT_PREFLIGHT", "INSPECT_PREFLIGHT_TIMEOUT_S", "INSPECT_PREFLIGHT_HOSTS", "INSPECT_TIMEOUT_S"):
         monkeypatch.delenv(v, raising=False)
     adapter = _adapter(
@@ -220,12 +237,14 @@ def test_parameters_map_to_env(job_spec_path, monkeypatch):
 
 
 def test_parameter_beats_inherited_env(job_spec_path, monkeypatch):
+    """A job parameter overrides the same-named env var already in the process environment."""
     monkeypatch.setenv("INSPECT_PREFLIGHT", "off")
     adapter = _adapter(job_spec_path, preflight="fail")
     assert adapter._build_env(adapter.job_spec, "standard")["INSPECT_PREFLIGHT"] == "fail"
 
 
 def test_env_alone_still_applies_when_no_parameter(job_spec_path, monkeypatch):
+    """When no parameter is set, the env var passes through to the subprocess env unchanged."""
     monkeypatch.setenv("INSPECT_PREFLIGHT", "warn")
     adapter = _adapter(job_spec_path)
     assert adapter._build_env(adapter.job_spec, "standard")["INSPECT_PREFLIGHT"] == "warn"
@@ -241,6 +260,7 @@ def test_env_alone_still_applies_when_no_parameter(job_spec_path, monkeypatch):
     ],
 )
 def test_bad_parameters_fail_at_start_naming_the_parameter(job_spec_path, params, match):
+    """An invalid parameter value raises ValueError at env-build time, naming the bad parameter."""
     adapter = _adapter(job_spec_path, **params)
     with pytest.raises(ValueError, match=match):
         adapter._build_env(adapter.job_spec, "standard")
