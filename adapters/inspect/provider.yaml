@@ -464,7 +464,10 @@ benchmarks:
     name: WMDP
     description: Weapons of Mass Destruction Prevention benchmark — tests whether models provide dangerous technical uplift.
     category: safety
-    metrics: [accuracy/accuracy]
+    metrics: [choice/accuracy, choice/stderr]
+    primary_score:
+      metric: choice/accuracy
+      lower_is_better: false
     tags: [safety, inspect-evals]
 
   - id: inspect/mask
@@ -553,14 +556,20 @@ benchmarks:
     name: BigCodeBench
     description: Complex programming tasks requiring library usage and API calls.
     category: coding
-    metrics: [accuracy/accuracy]
+    metrics: [verify/mean, verify/std]
+    primary_score:
+      metric: verify/mean
+      lower_is_better: false
     tags: [coding, inspect-evals]
 
   - id: inspect/mbpp
     name: MBPP
     description: Mostly Basic Python Programming — 374 entry-level programming tasks.
     category: coding
-    metrics: [accuracy/accuracy]
+    metrics: [verify/accuracy, verify/stderr]
+    primary_score:
+      metric: verify/accuracy
+      lower_is_better: false
     tags: [coding, inspect-evals]
 
   # Mathematics
@@ -678,9 +687,9 @@ benchmarks:
     name: MMLU
     description: Massive Multitask Language Understanding — 57 academic subjects.
     category: knowledge
-    metrics: [accuracy/accuracy, accuracy/stderr]
+    metrics: [choice/accuracy, choice/stderr]
     primary_score:
-      metric: accuracy/accuracy
+      metric: choice/accuracy
       lower_is_better: false
     tags: [knowledge, academic, inspect-evals]
 
@@ -688,14 +697,20 @@ benchmarks:
     name: MMLU-Pro
     description: Harder version of MMLU with 10-choice questions and more reasoning-intensive problems.
     category: knowledge
-    metrics: [accuracy/accuracy]
+    metrics: [choice/accuracy, choice/stderr]
+    primary_score:
+      metric: choice/accuracy
+      lower_is_better: false
     tags: [knowledge, academic, inspect-evals]
 
   - id: inspect/gpqa
     name: GPQA
     description: Graduate-level Google-proof questions in biology, chemistry, and physics.
     category: knowledge
-    metrics: [accuracy/accuracy]
+    metrics: [choice/accuracy, choice/stderr]
+    primary_score:
+      metric: choice/accuracy
+      lower_is_better: false
     tags: [knowledge, science, inspect-evals]
 
   - id: inspect/bbh
@@ -709,28 +724,40 @@ benchmarks:
     name: ARC
     description: AI2 Reasoning Challenge — science questions requiring reasoning beyond memorization.
     category: reasoning
-    metrics: [accuracy/accuracy]
+    metrics: [choice/accuracy, choice/stderr]
+    primary_score:
+      metric: choice/accuracy
+      lower_is_better: false
     tags: [reasoning, inspect-evals]
 
   - id: inspect/hellaswag
     name: HellaSwag
     description: Commonsense NLI — choose the most plausible continuation for a situation.
     category: reasoning
-    metrics: [accuracy/accuracy]
+    metrics: [choice/accuracy, choice/stderr]
+    primary_score:
+      metric: choice/accuracy
+      lower_is_better: false
     tags: [reasoning, commonsense, inspect-evals]
 
   - id: inspect/winogrande
     name: WinoGrande
     description: Large-scale Winograd schema challenge testing commonsense reasoning.
     category: reasoning
-    metrics: [accuracy/accuracy]
+    metrics: [choice/accuracy, choice/stderr]
+    primary_score:
+      metric: choice/accuracy
+      lower_is_better: false
     tags: [reasoning, commonsense, inspect-evals]
 
   - id: inspect/truthfulqa
     name: TruthfulQA
     description: Tests whether models generate truthful answers or reproduce common misconceptions.
     category: knowledge
-    metrics: [accuracy/accuracy]
+    metrics: [choice/accuracy, choice/stderr]
+    primary_score:
+      metric: choice/accuracy
+      lower_is_better: false
     tags: [knowledge, truthfulness, inspect-evals]
 
   - id: inspect/simpleqa

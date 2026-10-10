@@ -3,7 +3,10 @@
 import logging
 import os
 import re
+import signal
 import subprocess
+import threading
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +21,15 @@ from _hf_offline import (
     ensure_test_data_ready_for_offline,
     should_use_hf_offline,
 )
+from _preflight import (
+    HOSTS_ENV,
+    MODE_ENV,
+    TIMEOUT_ENV,
+    normalize_hosts,
+    normalize_mode,
+    normalize_timeout,
+    run_preflight,
+)
 from _routing import (
     _is_ollama_endpoint,
     grader_model_spec,
@@ -30,6 +42,14 @@ from _routing import (
 logger = logging.getLogger(__name__)
 
 _API_KEY_RE = re.compile(r'"api_key"\s*:\s*"[^"]*"')
+
+# Runtime knobs. Each can be set as a job parameter (wins) or as an environment variable,
+# for example through the provider's runtime.k8s.env. See "Diagnosing stalled jobs" in README.md.
+_JOB_TIMEOUT_ENV = "INSPECT_TIMEOUT_S"      # parameters.timeout_s
+_STREAM_LOGS_ENV = "INSPECT_STREAM_LOGS"    # parameters.stream_logs
+_DEFAULT_LOCAL_TIMEOUT_S = 7200.0
+_OUTPUT_TAIL_LINES = 200
+_KILL_GRACE_S = 10.0
 
 
 def redact_cmd(cmd: list[str]) -> str:
@@ -110,7 +130,48 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
         apply_hf_hub_auth(env)
 
     env["INSPECT_NO_TELEMETRY"] = "1"
+    _apply_runtime_overrides(p, env)
     return env
+
+
+def _apply_runtime_overrides(parameters: dict[str, Any], env: dict[str, str]) -> None:
+    """Copy job-level diagnosability knobs into the subprocess env (parameter wins).
+
+    Values are validated here so a bad parameter fails the job at start with a message
+    naming it, rather than surfacing later from inside the run.
+    """
+    if parameters.get("preflight") is not None:
+        env[MODE_ENV] = normalize_mode(parameters["preflight"], "preflight")
+    if parameters.get("preflight_timeout_s") is not None:
+        env[TIMEOUT_ENV] = str(normalize_timeout(parameters["preflight_timeout_s"], "preflight_timeout_s"))
+    if parameters.get("preflight_hosts") is not None:
+        env[HOSTS_ENV] = ",".join(normalize_hosts(parameters["preflight_hosts"], "preflight_hosts"))
+    if parameters.get("timeout_s") is not None:
+        env[_JOB_TIMEOUT_ENV] = str(parameters["timeout_s"])
+        _resolve_job_timeout(env)  # validate
+    if parameters.get("stream_logs") is not None:
+        env[_STREAM_LOGS_ENV] = "1" if parameters["stream_logs"] else "0"
+
+
+def _resolve_job_timeout(env: dict[str, str]) -> float | None:
+    """Wall-clock limit for ``inspect eval`` in seconds, or None for no limit.
+
+    ``INSPECT_TIMEOUT_S`` (``parameters.timeout_s``) overrides the default: ``0`` or
+    ``none`` disables the limit. Without an override, k8s jobs are unbounded (long full-dataset
+    runs are normal there) and other modes keep the 2 hour limit.
+    """
+    raw = (env.get(_JOB_TIMEOUT_ENV) or "").strip().lower()
+    if not raw:
+        return None if env.get("EVALHUB_MODE", "") == "k8s" else _DEFAULT_LOCAL_TIMEOUT_S
+    if raw in ("0", "none", "false", "off"):
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        raise ValueError(f"timeout_s must be a positive number of seconds, or 0 for none (got {raw!r})") from None
+    if seconds < 0:
+        raise ValueError(f"timeout_s must be a positive number of seconds, or 0 for none (got {raw!r})")
+    return seconds or None
 
 
 def build_command(
@@ -300,6 +361,7 @@ def _petri_model_role_flags(config: JobSpec, env: dict[str, str]) -> list[str]:
 def _petri_task_flags(
     config: JobSpec, mode: str, behavior_dir: Path | None
 ) -> list[str]:
+    """Build -T CLI flags for petri (seed, turns, rollback, realism, tools, judge) and bloom (behavior, turns) modes."""
     flags: list[str] = []
 
     if mode == "petri":
@@ -331,37 +393,96 @@ def _petri_task_flags(
 
 
 def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
+    """Run ``inspect eval``, streaming its output to the adapter log as it arrives.
+
+    Output used to be captured and shown only on failure, so a job waiting on a dataset
+    download or an unresponsive model endpoint looked frozen. Now every line is logged
+    live (prefixed ``inspect |``), a network pre-flight fails fast when a required host is
+    unreachable, and the run is bounded by ``timeout_s`` when one is configured.
+    """
     refresh_hf_hub_auth(env)
+    run_preflight(cmd[2] if len(cmd) > 2 else "", env)
+    timeout = _resolve_job_timeout(env)
+    stream = (env.get(_STREAM_LOGS_ENV) or "1").strip().lower() not in ("0", "false", "no", "off")
+
+    tail: deque[str] = deque(maxlen=_OUTPUT_TAIL_LINES)
+    timed_out = threading.Event()
     try:
-        if env.get("EVALHUB_MODE", "") == "k8s":
-            # allows long running benchmarks in k8s to run indefinitely
-            timeout = None
-        else:
-            timeout = 7200
-        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"inspect eval timed out after {timeout}.") from e
-    except (subprocess.SubprocessError, OSError):
+        proc = subprocess.Popen(
+            cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, errors="replace",
+            # Own process group, so a timeout also stops children such as `git clone`
+            # that would otherwise keep the output pipe open.
+            start_new_session=True,
+        )
+    except OSError:
         logger.exception("Subprocess failed")
         raise
 
-    if result.returncode != 0:
-        logger.error(f"inspect eval stdout:\n{result.stdout[-3000:]}")
-        logger.error(f"inspect eval stderr:\n{result.stderr[-3000:]}")
-        raise RuntimeError(
-            f"inspect eval failed (exit {result.returncode}).\n"
-            f"stderr: {result.stderr[-2000:]}"
-        )
+    def _signal_group(sig: int) -> None:
+        """Send sig to the process group, silently ignoring lookup and permission errors."""
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
 
-    if result.stdout:
-        logger.debug(f"stdout (tail): {result.stdout[-2000:]}")
-    if result.stderr:
-        logger.debug(f"stderr (tail): {result.stderr[-2000:]}")
+    def _kill() -> None:
+        """Watchdog callback: SIGTERM the group, wait for the grace period, then unconditionally SIGKILL."""
+        timed_out.set()
+        _signal_group(signal.SIGTERM)
+        try:
+            proc.wait(timeout=_KILL_GRACE_S)
+        except subprocess.TimeoutExpired:
+            pass
+        # Always SIGKILL the group after the grace period. The direct child may
+        # have exited on SIGTERM while a TERM-resistant descendant in the same
+        # process group still holds the stdout pipe open, blocking the read loop.
+        _signal_group(signal.SIGKILL)
+
+    watchdog = threading.Timer(timeout, _kill) if timeout else None
+    if watchdog:
+        watchdog.daemon = True
+        watchdog.start()
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            tail.append(line)
+            if stream:
+                logger.info("inspect | %s", line)
+        returncode = proc.wait()
+    except BaseException:
+        _signal_group(signal.SIGKILL)
+        try:
+            proc.wait(timeout=_KILL_GRACE_S)  # reap, so no zombie is left behind
+        except subprocess.TimeoutExpired:
+            pass
+        if proc.stdout:
+            proc.stdout.close()
+        raise
+    finally:
+        if watchdog:
+            watchdog.cancel()
+
+    output_tail = "\n".join(tail)
+    if timed_out.is_set():
+        logger.error("inspect eval output (tail):\n%s", output_tail[-3000:])
+        raise RuntimeError(f"inspect eval timed out after {timeout:g}s (timeout_s / {_JOB_TIMEOUT_ENV}).")
+
+    if returncode != 0:
+        if not stream:
+            logger.error("inspect eval output (tail):\n%s", output_tail[-3000:])
+        raise RuntimeError(
+            f"inspect eval failed (exit {returncode}).\n"
+            f"output (tail): {output_tail[-2000:]}"
+        )
 
     log_files = sorted(log_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)
     if not log_files:
         raise RuntimeError(
-            f"inspect eval produced no JSON log in {log_dir}. stdout: {result.stdout[-500:]}"
+            f"inspect eval produced no JSON log in {log_dir}. output (tail): {output_tail[-500:]}"
         )
 
     log_file = log_files[-1]
@@ -370,6 +491,7 @@ def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
 
 
 def get_inspect_version() -> str:
+    """Return the installed inspect-ai version string, or 'unknown' if the binary is unavailable."""
     try:
         result = subprocess.run(["inspect", "--version"], capture_output=True, text=True, timeout=10)
         raw = result.stdout.strip() or result.stderr.strip()

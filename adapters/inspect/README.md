@@ -134,6 +134,21 @@ adapter). Disconnected FVT jobs also set **`parameters.tokenizer`** to
 `/test_data/tokenizer` alongside **`test_data_ref`**; either signal enables
 offline mode when `/test_data` is populated.
 
+To build the tree to upload, run the benchmark once on a connected machine with a
+throwaway `HF_HOME` and a mock model, then sync `hub/` and `datasets/` to the bucket
+prefix (shown for MMLU-Pro; about 13 MB):
+
+```bash
+export HF_HOME=$(mktemp -d)
+inspect eval inspect_evals/mmlu_pro --model mockllm/model --limit 1 -T fewshot=5
+aws s3 sync "$HF_HOME/hub"      s3://<bucket>/mmlu-pro-hf/hub
+aws s3 sync "$HF_HOME/datasets" s3://<bucket>/mmlu-pro-hf/datasets
+```
+
+Point `test_data_ref.s3` at `s3://<bucket>/mmlu-pro-hf/`. Any S3-compatible store works;
+this flow was verified against RustFS (upload, download into `/test_data`, then a run with
+the internet blackholed).
+
 When online, the adapter reads an
 `hf-token` secret mounted at `/var/run/secrets/model/hf-token` and injects it as
 `HF_TOKEN` and `HUGGING_FACE_HUB_TOKEN`. Sidecar `:ref` placeholders are ignored.
@@ -144,6 +159,63 @@ The mount is a projected volume that Kubernetes populates before the container s
 so the adapter does not wait for it when it is absent (no `model.auth.secret_ref`) or
 already populated. Only an empty mount gets a 5-second grace period. Set
 `INSPECT_HF_TOKEN_WAIT_S` (seconds; `0` disables) to override.
+
+### Diagnosing stalled jobs
+
+Inspect output is streamed to the adapter's pod log as it is produced, every line
+prefixed `inspect | `, so `oc logs <pod> -c adapter -f` shows dataset loading and sample
+progress live. A network pre-flight runs first. If a host the task needs is unreachable
+the job fails within seconds with a message naming the host and the ways out, instead of
+sitting silent while the HuggingFace client and inspect-evals retry with exponential
+backoff (many minutes) or `git clone` (BFCL) waits forever.
+
+Hosts probed (a ranged `GET`, `Range: bytes=0-0`, body not read; any HTTP answer counts as reachable):
+
+| Task | Host |
+|---|---|
+| `inspect_evals/*`, `evals/*` | `$HF_ENDPOINT`, default `https://huggingface.co` (skipped when `HF_HUB_OFFLINE=1`) |
+| `inspect_evals/bfcl*` | `https://github.com` (skipped once BFCL data is in `$INSPECT_EVALS_CACHE_DIR/BFCL`) |
+| any, optional | URLs you list in `preflight_hosts` |
+
+Petri, Bloom and custom task files are not probed unless you list hosts.
+
+#### Overrides
+
+Every knob is a job parameter (wins) or an environment variable. Set parameters on the
+benchmark; set environment variables for all jobs through the provider's
+`runtime.k8s.env` in `provider.yaml` (or the CR), for example
+`- {name: INSPECT_PREFLIGHT, value: warn}`.
+
+| Parameter | Environment variable | Default | Meaning |
+|---|---|---|---|
+| `preflight` | `INSPECT_PREFLIGHT` | `fail` | `fail` stops the job, `warn` logs and continues, `off` skips the probe |
+| `preflight_timeout_s` | `INSPECT_PREFLIGHT_TIMEOUT_S` | `10` | Seconds to wait per host |
+| `preflight_hosts` | `INSPECT_PREFLIGHT_HOSTS` | none | Extra `http(s)` URLs to probe (list, or comma-separated in the env var) |
+| `timeout_s` | `INSPECT_TIMEOUT_S` | k8s: none; otherwise `7200` | Wall-clock limit for the whole `inspect eval`; `0` or `none` disables. On expiry the process group (including any `git clone`) is stopped and the job fails |
+| `stream_logs` | `INSPECT_STREAM_LOGS` | `1` | `0` logs only the output tail on failure |
+
+```yaml
+benchmarks:
+  - id: inspect/mmlu-pro
+    provider_id: inspect
+    parameters:
+      num_examples: 200
+      preflight_timeout_s: 30   # slow proxy
+      timeout_s: 3600           # fail the job after an hour
+```
+
+The probe honors `HTTPS_PROXY`/`NO_PROXY` from the job environment and a mirror set with
+`HF_ENDPOINT`. To run on a disconnected cluster, stage the dataset with `test_data_ref`
+(see [HuggingFace datasets](#huggingface-datasets)); offline mode skips the probe.
+
+### Metric names
+
+Metric names are `<scorer>/<metric>` exactly as Inspect writes them in its log, not a
+generic `accuracy`. For example MMLU-Pro, MMLU, GPQA, ARC, HellaSwag, Winogrande, TruthfulQA
+and WMDP use `choice/accuracy`; GSM8K uses `match/accuracy`; HumanEval and MBPP use
+`verify/accuracy`. A collection's `primary_score.metric` must match one of them or no
+primary score is produced; leave `primary_score` out and the first metric the benchmark
+emits is used. The authoritative list per benchmark is in `provider.yaml`.
 
 ### Sample limits
 
