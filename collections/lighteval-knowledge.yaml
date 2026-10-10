@@ -1,0 +1,69 @@
+# Lighteval — Knowledge Collection
+#
+# ⚠️  All benchmarks use logprob scoring → require PR #115 patched image.
+#     With standard image, these fail with NotImplementedError (loglikelihood not implemented).
+#     mmlu, triviaqa, openbookqa are confirmed working WITH the patched image.
+#
+# ── Threshold Justification ──────────────────────────────────────────────────
+# MMLU (Hendrycks et al. 2021): 57 academic subjects. Random = 25%, human = 89%.
+#   Top-10 <80B: 82–88%. Typical 8B: 66–76%.
+#   Threshold 0.62 = lower bound competitive 8B per Open LLM Leaderboard v2.
+#   Primary knowledge gate.
+# TriviaQA (Joshi et al. 2017): 650K Wikipedia Q&A. Top-10 <80B: 82–90%.
+#   Typical 8B: 65–78%. Threshold 0.60 per leaderboard lower bound.
+# OpenBookQA (Mihaylov et al. 2018): Science facts + reasoning. Top-10 <80B: 84–93%.
+#   Typical 8B: 74–85%. Threshold 0.68 = midpoint between min (0.65) and typical floor.
+# knowledge: meta-suite encompassing multiple knowledge benchmarks.
+#   Threshold 0.55 = approximate expected average across constituent benchmarks.
+#
+# ── Weight Rationale ─────────────────────────────────────────────────────────
+# Weight 2.0 → mmlu: Broadest 57-subject coverage; primary knowledge gate.
+# Weight 1.5 → triviaqa, openbookqa: Strong open/closed domain signals.
+# Weight 1.0 → knowledge: Meta-suite; down-weighted to avoid double-counting.
+#
+# ── Global Pass Criteria ─────────────────────────────────────────────────────
+# mmlu ≥ 0.62 (mandatory gate). Applies when PR #115 is merged.
+
+name: lighteval-knowledge
+description: >
+  Knowledge suite via Lighteval (requires PR #115 patched image — logprob benchmarks
+  fail with standard image). MMLU (Hendrycks et al. 2021, threshold 0.62 = leaderboard
+  lower bound, weight 2.0 — primary gate; 57 subjects, random=25%), TriviaQA (Joshi et al.
+  2017, threshold 0.60 per leaderboard, weight 1.5), OpenBookQA (Mihaylov et al. 2018,
+  threshold 0.68 = midpoint competitive 8B range, weight 1.5), knowledge meta-suite
+  (threshold 0.55, weight 1.0). Global PASS when image fixed: mmlu>=0.62.
+category: knowledge
+tags: [knowledge, factuality, mmlu, lighteval]
+
+benchmarks:
+  # MMLU: 57 academic subjects. Top-10 <80B: 82–88%. Threshold 0.62. Primary gate.
+  - id: mmlu
+    provider_id: lighteval
+    weight: 2.0
+    parameters: {}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.62}
+
+  # TriviaQA: 650K Wikipedia Q&A. Top-10 <80B: 82–90%. Threshold 0.60.
+  - id: triviaqa
+    provider_id: lighteval
+    weight: 1.5
+    parameters: {}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.60}
+
+  # OpenBookQA: science facts + common knowledge. Top-10 <80B: 84–93%. Threshold 0.68.
+  - id: openbookqa
+    provider_id: lighteval
+    weight: 1.5
+    parameters: {}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.68}
+
+  # knowledge: meta-suite. Threshold 0.55 = approximate expected average.
+  - id: knowledge
+    provider_id: lighteval
+    weight: 1.0
+    parameters: {}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.55}

@@ -1,0 +1,155 @@
+# RULER Long-Context Collection
+#
+# 13 RULER benchmarks covering all task categories at 4096-token context.
+# ⚠️  quay.io/evalhub/community-ruler:latest — image not yet published.
+#     All benchmarks fail with ImagePullBackOff until the image is available.
+#     Thresholds are correct for when the image is released.
+#
+# ── Threshold Justification ──────────────────────────────────────────────────
+# All RULER benchmarks use string_match_all (exact match) or string_match_part.
+# No external leaderboard data for RULER at 4096 tokens on <80B models —
+# thresholds are based on synthetic task difficulty and expected model performance.
+#
+# NIAH single variants (noise/essay/uuid): Retrieve one needle from context.
+#   At 4096 tokens, capable models should score 0.80+ on single-needle tasks.
+#   Threshold 0.80 (single noise/essay), 0.80 (uuid).
+#
+# NIAH multi variants (multikey/multivalue/multiquery/needle-bg): Harder retrieval.
+#   Multiple items or background distractors. Expected 0.70+ at 4096 tokens.
+#   Threshold 0.70 for most; 0.50 for multikey-uuid (hardest — UUID keys + values).
+#
+# variable-tracking: Track variable assignment chains. Harder at longer contexts.
+#   Expected 0.70 at 4096 tokens for capable models.
+#
+# Aggregation (common-words, frequency-words): Find most frequent items in lists.
+#   Expected 0.70 at 4096 tokens.
+#
+# QA (squad, hotpotqa): Long-context question answering. Uses string_match_part.
+#   Expected 0.50+ at 4096 tokens (partial match is lenient).
+#
+# ── Weight Rationale ─────────────────────────────────────────────────────────
+# Weight 2.0 → variable-tracking: Most cognitively demanding; best discrimination.
+# Weight 1.5 → niah-multikey-uuid, niah-multi*, aggregation, QA: Harder variants.
+# Weight 1.0 → niah-single*: Basic retrieval; less discriminating at 4096 tokens.
+#
+# ── Global Pass Criteria ─────────────────────────────────────────────────────
+# ≥ 7 of 13 benchmarks passing (simple majority across task categories).
+
+name: ruler-long-context
+description: >
+  NVIDIA RULER long-context suite — all 13 synthetic tasks at 4096-token context,
+  3 samples each. NIAH single variants threshold 0.80 (noise/essay) and 0.80 (uuid,
+  weight 1.0); NIAH multi variants threshold 0.70 (multikey/multivalue/multiquery/
+  needle-bg, weight 1.5) except multikey-uuid 0.50 (hardest, weight 1.5);
+  variable-tracking threshold 0.70 (weight 2.0 — hardest, best discrimination);
+  aggregation tasks threshold 0.70 (weight 1.5); QA tasks threshold 0.50 via
+  string_match_part (weight 1.5). WARNING: quay.io/evalhub/community-ruler:latest
+  not yet published — ImagePullBackOff until released. Global PASS: >=7/13 passing.
+category: long_context
+tags: [ruler, long_context, retrieval, niah]
+
+benchmarks:
+  # NIAH Single — Noise Haystack: one needle in random noise. Basic retrieval.
+  - id: niah-single-noise
+    provider_id: ruler
+    weight: 1.0
+    parameters: {num_samples: 3, context_lengths: [4096], tokenizer_path: Qwen/Qwen3-8B}
+    primary_score: {metric: string_match_all, lower_is_better: false}
+    pass_criteria: {threshold: 0.80}
+
+  # NIAH Single — Essay Haystack: one needle in Paul Graham essays. Basic retrieval.
+  - id: niah-single-essay
+    provider_id: ruler
+    weight: 1.0
+    parameters: {num_samples: 3, context_lengths: [4096], tokenizer_path: Qwen/Qwen3-8B}
+    primary_score: {metric: string_match_all, lower_is_better: false}
+    pass_criteria: {threshold: 0.80}
+
+  # NIAH Single — UUID Values: UUID key-value pair in essay. Harder than name/value.
+  - id: niah-single-uuid
+    provider_id: ruler
+    weight: 1.0
+    parameters: {num_samples: 3, context_lengths: [4096], tokenizer_path: Qwen/Qwen3-8B}
+    primary_score: {metric: string_match_all, lower_is_better: false}
+    pass_criteria: {threshold: 0.80}
+
+  # NIAH Multi-Key: multiple distinct needle keys. Harder than single.
+  - id: niah-multikey
+    provider_id: ruler
+    weight: 1.5
+    parameters: {num_samples: 3, context_lengths: [4096], tokenizer_path: Qwen/Qwen3-8B}
+    primary_score: {metric: string_match_all, lower_is_better: false}
+    pass_criteria: {threshold: 0.70}
+
+  # NIAH Needle Background: single needle with other needles as distractors.
+  - id: niah-needle-bg
+    provider_id: ruler
+    weight: 1.5
+    parameters: {num_samples: 3, context_lengths: [4096], tokenizer_path: Qwen/Qwen3-8B}
+    primary_score: {metric: string_match_all, lower_is_better: false}
+    pass_criteria: {threshold: 0.70}
+
+  # NIAH Multi-Key UUID: UUID keys and UUID values — hardest retrieval variant.
+  - id: niah-multikey-uuid
+    provider_id: ruler
+    weight: 1.5
+    parameters: {num_samples: 3, context_lengths: [4096], tokenizer_path: Qwen/Qwen3-8B}
+    primary_score: {metric: string_match_all, lower_is_better: false}
+    pass_criteria: {threshold: 0.50}
+
+  # NIAH Multi-Value: single key with multiple values.
+  - id: niah-multivalue
+    provider_id: ruler
+    weight: 1.5
+    parameters: {num_samples: 3, context_lengths: [4096], tokenizer_path: Qwen/Qwen3-8B}
+    primary_score: {metric: string_match_all, lower_is_better: false}
+    pass_criteria: {threshold: 0.70}
+
+  # NIAH Multi-Query: multiple queries targeting distinct needle/value pairs.
+  - id: niah-multiquery
+    provider_id: ruler
+    weight: 1.5
+    parameters: {num_samples: 3, context_lengths: [4096], tokenizer_path: Qwen/Qwen3-8B}
+    primary_score: {metric: string_match_all, lower_is_better: false}
+    pass_criteria: {threshold: 0.70}
+
+  # Variable Tracking: track variable assignment chains. Cognitively demanding.
+  # Best discrimination between context-length capability tiers. Weight 2.0.
+  - id: variable-tracking
+    provider_id: ruler
+    weight: 2.0
+    parameters: {num_samples: 3, context_lengths: [4096], tokenizer_path: Qwen/Qwen3-8B}
+    primary_score: {metric: string_match_all, lower_is_better: false}
+    pass_criteria: {threshold: 0.70}
+
+  # Common Words Extraction: find 10 most frequent words in long list.
+  - id: common-words-extraction
+    provider_id: ruler
+    weight: 1.5
+    parameters: {num_samples: 3, context_lengths: [4096], tokenizer_path: Qwen/Qwen3-8B}
+    primary_score: {metric: string_match_all, lower_is_better: false}
+    pass_criteria: {threshold: 0.70}
+
+  # Frequency Words Extraction: find 3 most frequent coded words (Zipf distributed).
+  - id: frequency-words-extraction
+    provider_id: ruler
+    weight: 1.5
+    parameters: {num_samples: 3, context_lengths: [4096], tokenizer_path: Qwen/Qwen3-8B}
+    primary_score: {metric: string_match_all, lower_is_better: false}
+    pass_criteria: {threshold: 0.70}
+
+  # QA — SQuAD: long-context QA with SQuAD passages. string_match_part (lenient).
+  - id: qa-squad
+    provider_id: ruler
+    weight: 1.5
+    parameters: {num_samples: 3, context_lengths: [4096], tokenizer_path: Qwen/Qwen3-8B}
+    primary_score: {metric: string_match_part, lower_is_better: false}
+    pass_criteria: {threshold: 0.50}
+
+  # QA — HotpotQA: multi-hop long-context QA with HotpotQA passages.
+  - id: qa-hotpotqa
+    provider_id: ruler
+    weight: 1.5
+    parameters: {num_samples: 3, context_lengths: [4096], tokenizer_path: Qwen/Qwen3-8B}
+    primary_score: {metric: string_match_part, lower_is_better: false}
+    pass_criteria: {threshold: 0.50}
