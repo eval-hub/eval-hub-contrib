@@ -1,0 +1,1 @@
+{"schema_version":"ATIF-v1.8","trajectory_id":"tool-selection-2","agent":{"name":"corpus-agent","version":"1","model_name":"corpus-model"},"steps":[{"step_id":1,"source":"agent","message":"I called search even though the available operation was file deletion.","tool_calls":[{"tool_call_id":"call-2","function_name":"search","arguments":{}}]}]}

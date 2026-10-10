@@ -1,0 +1,1 @@
+{"schema_version":"ATIF-v1.8","trajectory_id":"context-loss-1","agent":{"name":"corpus-agent","version":"1","model_name":"corpus-model"},"steps":[{"step_id":1,"source":"agent","message":"The previous observation contained the account ID, but I forgot it and used a different account."}]}
