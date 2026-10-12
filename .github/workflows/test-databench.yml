@@ -1,0 +1,35 @@
+name: Test DataBench
+on:
+  push:
+    branches: [main]
+    paths: ['adapters/databench/**']
+  pull_request:
+    branches: [main]
+    paths: ['adapters/databench/**']
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        working-directory: adapters/databench
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+      - name: Run tests and lint
+        working-directory: adapters/databench
+        run: |
+          pytest tests/ -v
+          ruff check . --exclude .venv
+      - name: Verify read-only non-root image
+        run: |
+          docker build -t databench-container-test -f adapters/databench/Containerfile adapters/databench
+          for runtime_user in 1001 1001230000:0; do
+            docker run --rm --network=none --read-only --user "$runtime_user" \
+              --tmpfs /tmp -e PYTHONDONTWRITEBYTECODE=1 \
+              -v "$PWD/adapters/databench/tests:/tests:ro" \
+              --entrypoint python databench-container-test /tests/container_smoke.py
+          done

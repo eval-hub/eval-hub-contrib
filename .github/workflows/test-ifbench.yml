@@ -26,3 +26,12 @@ jobs:
       - name: Run tests
         working-directory: adapters/ifbench
         run: pytest tests/ -v
+      - name: Verify offline non-root container runtime
+        run: |
+          docker build -t ifbench-container-test -f adapters/ifbench/Containerfile adapters/ifbench
+          for runtime_user in 1001 1001230000:0; do
+            docker run --rm --network=none --read-only --user "$runtime_user" \
+              --tmpfs /tmp -e PYTHONDONTWRITEBYTECODE=1 \
+              -v "$PWD/adapters/ifbench/tests:/tests:ro" \
+              --entrypoint python ifbench-container-test /tests/container_smoke.py
+          done

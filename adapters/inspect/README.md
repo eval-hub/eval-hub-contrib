@@ -1,7 +1,10 @@
 # Inspect AI Adapter
 
 Wraps the [UK AISI Inspect AI](https://inspect.aisi.org.uk/) evaluation framework as an
-EvalHub provider, exposing three Meridian Labs alignment-auditing tools:
+EvalHub provider. Supports standard `inspect-evals` benchmarks, custom Inspect
+tasks, and Petri/Bloom auditing workflows.
+
+The auditing tools and scaffold integration include:
 
 - **Petri** (`inspect-petri`) — auditor/target/judge pipeline; 170+ seeds across 40
   alignment-behavior tag categories; 38 judge dimensions scored 1–10.
@@ -10,19 +13,20 @@ EvalHub provider, exposing three Meridian Labs alignment-auditing tools:
 - **Dish** — research-preview feature for real agent deployment scaffold testing;
   exposed via `task_args` pass-through (see parameters).
 
-Standard inspect-evals benchmarks (gsm8k, mmlu, humaneval, swe-bench, custom tasks)
-are also supported.
-
----
-
 ## Benchmarks
 
-**79 benchmarks total** — 36 Petri alignment audits, 2 Bloom suites, 36 inspect-evals,
-4 Open-Telco (TeleMath, TeleQnA, TeleLogs, 3GPP-TSG), and 1 custom task.
+The contrib `provider.yaml` registers **79 benchmark IDs**: 36 Petri alignment
+audits, 2 Bloom suites, 36 inspect-evals tasks, 4 Open-Telco tasks (TeleMath,
+TeleQnA, TeleLogs, 3GPP-TSG), and 1 custom task.
+
+The adapter's task maps support **83 IDs**, including four additional IDs absent
+from this provider file: `inspect/hle`, `inspect/bfcl`, `inspect/docvqa`, and
+`inspect/cyberseceval-2-pi`. To expose these through EvalHub, the deployed provider
+configuration must register them.
 
 ### Petri alignment audits (`inspect/petri-*`)
 
-All 40 built-in Petri seed tag categories are exposed as individual named benchmarks.
+The adapter exposes 35 named Petri tag selections and one full-audit benchmark.
 Primary metric: `concerning/mean` (1–10 scale; higher = more concerning).
 All 38 Petri judge dimensions are captured as individual metrics.
 
@@ -130,19 +134,101 @@ adapter). Disconnected FVT jobs also set **`parameters.tokenizer`** to
 `/test_data/tokenizer` alongside **`test_data_ref`**; either signal enables
 offline mode when `/test_data` is populated.
 
+To build the tree to upload, run the benchmark once on a connected machine with a
+throwaway `HF_HOME` and a mock model, then sync `hub/` and `datasets/` to the bucket
+prefix (shown for MMLU-Pro; about 13 MB):
+
+```bash
+export HF_HOME=$(mktemp -d)
+inspect eval inspect_evals/mmlu_pro --model mockllm/model --limit 1 -T fewshot=5
+aws s3 sync "$HF_HOME/hub"      s3://<bucket>/mmlu-pro-hf/hub
+aws s3 sync "$HF_HOME/datasets" s3://<bucket>/mmlu-pro-hf/datasets
+```
+
+Point `test_data_ref.s3` at `s3://<bucket>/mmlu-pro-hf/`. Any S3-compatible store works;
+this flow was verified against RustFS (upload, download into `/test_data`, then a run with
+the internet blackholed).
+
 When online, the adapter reads an
 `hf-token` secret mounted at `/var/run/secrets/model/hf-token` and injects it as
-`HF_TOKEN` and `HUGGING_FACE_HUB_TOKEN` (with retry while the projected volume
-appears). Sidecar `:ref` placeholders are ignored. In EvalHub jobs, set
-`model.auth.secret_ref` to a Kubernetes Secret that includes the `hf-token` key
-(alongside `api-key` if needed).
+`HF_TOKEN` and `HUGGING_FACE_HUB_TOKEN`. Sidecar `:ref` placeholders are ignored.
+In EvalHub jobs, set `model.auth.secret_ref` to a Kubernetes Secret that includes the
+`hf-token` key (alongside `api-key` if needed).
+
+The mount is a projected volume that Kubernetes populates before the container starts,
+so the adapter does not wait for it when it is absent (no `model.auth.secret_ref`) or
+already populated. Only an empty mount gets a 5-second grace period. Set
+`INSPECT_HF_TOKEN_WAIT_S` (seconds; `0` disables) to override.
+
+### Diagnosing stalled jobs
+
+Inspect output is streamed to the adapter's pod log as it is produced, every line
+prefixed `inspect | `, so `oc logs <pod> -c adapter -f` shows dataset loading and sample
+progress live. A network pre-flight runs first. If a host the task needs is unreachable
+the job fails within seconds with a message naming the host and the ways out, instead of
+sitting silent while the HuggingFace client and inspect-evals retry with exponential
+backoff (many minutes) or `git clone` (BFCL) waits forever.
+
+Hosts probed (a ranged `GET`, `Range: bytes=0-0`, body not read; any HTTP answer counts as reachable):
+
+| Task | Host |
+|---|---|
+| `inspect_evals/*`, `evals/*` | `$HF_ENDPOINT`, default `https://huggingface.co` (skipped when `HF_HUB_OFFLINE=1`) |
+| `inspect_evals/bfcl*` | `https://github.com` (skipped once BFCL data is in `$INSPECT_EVALS_CACHE_DIR/BFCL`) |
+| any, optional | URLs you list in `preflight_hosts` |
+
+Petri, Bloom and custom task files are not probed unless you list hosts.
+
+#### Overrides
+
+Every knob is a job parameter (wins) or an environment variable. Set parameters on the
+benchmark; set environment variables for all jobs through the provider's
+`runtime.k8s.env` in `provider.yaml` (or the CR), for example
+`- {name: INSPECT_PREFLIGHT, value: warn}`.
+
+| Parameter | Environment variable | Default | Meaning |
+|---|---|---|---|
+| `preflight` | `INSPECT_PREFLIGHT` | `fail` | `fail` stops the job, `warn` logs and continues, `off` skips the probe |
+| `preflight_timeout_s` | `INSPECT_PREFLIGHT_TIMEOUT_S` | `10` | Seconds to wait per host |
+| `preflight_hosts` | `INSPECT_PREFLIGHT_HOSTS` | none | Extra `http(s)` URLs to probe (list, or comma-separated in the env var) |
+| `timeout_s` | `INSPECT_TIMEOUT_S` | k8s: none; otherwise `7200` | Wall-clock limit for the whole `inspect eval`; `0` or `none` disables. On expiry the process group (including any `git clone`) is stopped and the job fails |
+| `stream_logs` | `INSPECT_STREAM_LOGS` | `1` | `0` logs only the output tail on failure |
+
+```yaml
+benchmarks:
+  - id: inspect/mmlu-pro
+    provider_id: inspect
+    parameters:
+      num_examples: 200
+      preflight_timeout_s: 30   # slow proxy
+      timeout_s: 3600           # fail the job after an hour
+```
+
+The probe honors `HTTPS_PROXY`/`NO_PROXY` from the job environment and a mirror set with
+`HF_ENDPOINT`. To run on a disconnected cluster, stage the dataset with `test_data_ref`
+(see [HuggingFace datasets](#huggingface-datasets)); offline mode skips the probe.
+
+### Metric names
+
+Metric names are `<scorer>/<metric>` exactly as Inspect writes them in its log, not a
+generic `accuracy`. For example MMLU-Pro, MMLU, GPQA, ARC, HellaSwag, Winogrande, TruthfulQA
+and WMDP use `choice/accuracy`; GSM8K uses `match/accuracy`; HumanEval and MBPP use
+`verify/accuracy`. A collection's `primary_score.metric` must match one of them or no
+primary score is produced; leave `primary_score` out and the first metric the benchmark
+emits is used. The authoritative list per benchmark is in `provider.yaml`.
 
 ### Sample limits
 
 Inspect `--limit` is driven by `benchmarks[].parameters.num_examples` (lifted to
-JobSpec `num_examples` by eval-hub). When unset, the adapter defaults to `--limit 5`
-so Petri/Bloom and large datasets do not run unbounded. Set an explicit
-`num_examples` to raise or lower the cap.
+JobSpec `num_examples` by eval-hub), the same parameter every other contrib adapter
+uses. When unset, standard inspect-evals benchmarks run the **full dataset**.
+Petri and Bloom default to `--limit 5` because their full seed sets are very
+expensive; set `num_examples` to raise or lower the cap.
+
+`parameters.max_samples` is a **deprecated alias** for `num_examples` and logs a
+warning; `num_examples` wins if both are set. Note that Inspect's own
+`--max-samples` flag controls how many samples run *in parallel*, not how many
+are evaluated, which is why the name is being retired here.
 
 Open-Telco dataset size is controlled via `parameters.full`
 (`true` → `GSMA/ot-full`, `false` → `GSMA/ot-lite`). TeleQnA also accepts
@@ -166,10 +252,30 @@ as-is — bare (`claude-opus-4-7`, `granite3.3`) or org/model
 | `ANTHROPIC_API_KEY` | Anthropic Messages API |
 | `ANTHROPIC_BASE_URL` | Anthropic API base URL override (proxies, on-prem) |
 
-Client selection priority per role (no per-role override):
+Global client selection priority for roles without explicit routing:
 1. `model.url` present → OpenAI-compatible client
 2. `ANTHROPIC_API_KEY` or `ANTHROPIC_BASE_URL` set → Anthropic client
 3. `OPENAI_BASE_URL` or `OPENAI_API_KEY` set → OpenAI-compatible client
+
+### Independent StrongREJECT grader
+
+For `inspect/strong-reject`, set `parameters.grader_model` to route scoring to
+Inspect's named `grader` role instead of StrongREJECT's built-in `judge_llm`
+default. For example, use `gpt-4o-mini` with `grader_base_url` set to
+`https://api.openai.com/v1`. The adapter routes that role through Inspect's
+isolated `openai-api/openai_judge/...` provider namespace, so the target keeps
+its own `OPENAI_BASE_URL` and `OPENAI_API_KEY`.
+
+The judge credential must be provided to the adapter process as
+`OPENAI_JUDGE_API_KEY` from a Kubernetes Secret. The adapter does not accept a
+judge key in evaluation parameters, and it never places the key in the Inspect
+command line. `OPENAI_JUDGE_BASE_URL` can supply the endpoint instead of
+`grader_base_url`; it defaults to `https://api.openai.com/v1`.
+
+This adapter support assumes the EvalHub runtime injects that Secret-backed
+environment variable into the job. If the job currently mounts only the
+target model Secret, a corresponding EvalHub core change is required before
+this route can be exercised in-cluster.
 
 ### Per-role credential overrides
 
@@ -344,7 +450,7 @@ Environment: `ANTHROPIC_API_KEY=sk-ant-...` (for auditor), `OPENAI_BASE_URL` set
 | `max_turns` | `30` | Max auditor turns per scenario |
 | `enable_rollback` | `true` | Allow auditor to backtrack and retry approaches |
 | `realism_filter` | `false` | Filter unrealistic auditor outputs (experimental) |
-| `num_examples` | `5` | Cap scenarios/samples via EvalHub `benchmarks[].parameters.num_examples` (JobSpec `num_examples` → Inspect `--limit`; defaults to 5 when unset) |
+| `num_examples` | `5` (Petri/Bloom) | Cap scenarios/samples via EvalHub `benchmarks[].parameters.num_examples` (JobSpec `num_examples` → Inspect `--limit`; Petri/Bloom default to 5 when unset, standard benchmarks are unbounded) |
 | `seed_instructions` | *(from benchmark_id)* | Override seed selection (`tags:deception`, `id:seed_name`, inline text) |
 | `judge_dimensions` | *(all 38)* | Filter judge dimensions (`tags:safety` or custom directory) |
 | `task_args` | `{}` | Escape hatch for non–first-class Inspect `-T` flags (e.g. Dish `dish_scaffold`). Not for Open-Telco `full`. |
@@ -362,6 +468,42 @@ Environment: `ANTHROPIC_API_KEY=sk-ant-...` (for auditor), `OPENAI_BASE_URL` set
 > supported at this step. The scenarios model uses the global `OPENAI_BASE_URL` / `OPENAI_API_KEY`
 > credentials; per-role endpoint overrides do not apply to the scenarios step.
 
+---
+
+## Results and scoring
+
+Individual benchmark metrics are returned in `results`. The adapter also computes
+`overall_score` as a summary. EvalHub selects the metric used for pass/fail through
+its `primary_score.metric` configuration; that selection is separate from the
+adapter's summary calculation.
+
+### HLE and BFCL representative scores
+
+All individual metrics remain available. For `inspect/hle`, `overall_score`
+uses `hle/regex_judge/hle/accuracy`. For `inspect/bfcl`, it uses
+`bfcl_scorer/accuracy`. Calibration error, unscored counts and category metrics
+are not averaged into these representative scores. If the selected accuracy is
+missing, duplicated or non-finite, no overall score is returned.
+
+### Other benchmark summaries
+
+Petri and Bloom select `concerning/mean` when available. Other benchmarks retain
+the existing mean calculation, excluding dispersion metrics and category-specific
+standard errors ending in `_stderr` or `_sterr`. These metrics remain available
+individually.
+
+### Prompting metadata
+
+For standard-mode tasks, `additional_info.zero_shot` mirrors `overall_score`
+only when the saved Inspect log's `eval.task_args` confirms zero shots using a
+recognized shot-count or example-list argument. It is omitted for few-shot
+settings and when the setting is missing or unrecognized. An omitted
+`zero_shot` does not imply that the task used few-shot prompting; its prompting
+setup may simply be unconfirmed. Selecting a representative score does not
+determine the prompting setup. Petri and Bloom retain `alt_prompting` metadata.
+
+---
+
 ## Building and testing
 
 ```bash
@@ -377,8 +519,36 @@ make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
 
 ## Requirements
 
-- `inspect-ai >= 0.3.40`
-- `inspect-evals >= 0.1.0`
-- `inspect-petri >= 3.0.0`
-- `petri-bloom >= 0.1.0`
-- `eval-hub-sdk[adapter] >= 0.1.7`
+Direct dependencies are pinned to exact versions in `requirements.txt`
+(`inspect-ai`, `inspect-evals`, `inspect-petri`, `petri-bloom`, `openai`,
+`nltk`; `eval-hub-sdk[adapter]` is a compatible-release pin). `constraints.txt`
+pins the full transitive tree, and the Containerfile installs with both, so an
+image rebuild reproduces the same dependency set.
+
+### Updating dependencies
+
+Bump the pins in `requirements.txt`, then regenerate the lock and audit it. Run
+from `adapters/inspect/`:
+
+```bash
+# 1. Regenerate the transitive pins (platform-independent; git lines are
+#    excluded because pip does not accept URLs in constraints files)
+{ echo "# Transitive dependency pins for the Inspect adapter image, applied with: pip install -r requirements.txt -c constraints.txt"
+  echo "# Generated; do not edit by hand. Regenerate (and re-audit) with the command in README.md → Updating dependencies."
+  uv pip compile requirements.txt --universal --python-version 3.12 --no-header --no-annotate | grep -v "@ git"
+} > constraints.txt
+
+# 2. Audit every pinned version for known vulnerabilities
+grep -E '^[A-Za-z0-9_.-]+==' constraints.txt | sed -E 's/ *;.*//' | sort -u > /tmp/inspect-pins.txt
+pip-audit -r /tmp/inspect-pins.txt --no-deps --disable-pip
+```
+
+The repository's Trivy filesystem scan only sees versions that are pinned, which
+is why the pins matter: with open-ended `>=` ranges it cannot see what actually
+lands in the image. Packages installed straight from git (`instruction_following_eval`,
+`evals`) are not on PyPI and cannot be audited by name; they are pinned to a
+commit or tag.
+
+Known advisory: `nltk` 3.10.3 carries GHSA-8mgp-746c-j5xp (CVE-2026-81726) with no
+patched release yet. It affects nltk's parser and perceptron model save/load APIs,
+which nothing in this image calls. Revisit when a fixed nltk is published.

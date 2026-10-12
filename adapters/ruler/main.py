@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from evalhub.adapter import (
     CapabilityEvalEntry,
@@ -35,6 +36,10 @@ from evalhub.adapter import (
     MessageInfo,
     OCIArtifactSpec,
 )
+
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
+
+from prepare_assets import prepare_assets
 
 logger = logging.getLogger(__name__)
 
@@ -170,16 +175,18 @@ class RulerAdapter(FrameworkAdapter):
                     progress=0.1,
                     message=MessageInfo(
                         message=(
-                            f"Generating RULER datasets: {len(tasks)} task(s) × "
+                            f"Preparing RULER data: {len(tasks)} task(s) × "
                             f"{len(context_lengths)} context length(s)"
                         ),
                         message_code="loading_data",
                     ),
-                    current_step="Generating synthetic datasets",
+                    current_step="Preparing required data assets",
                     total_steps=total_pairs + 2,
                     completed_steps=0,
                 )
             )
+
+            self._prepare_task_assets(tasks, data_dir, timeout=data_gen_timeout)
 
             for task_id in tasks:
                 for ctx_len in context_lengths:
@@ -319,6 +326,7 @@ class RulerAdapter(FrameworkAdapter):
                 model_name=config.model.name,
                 evaluation_results=evaluation_results,
                 work_dir=work_dir,
+                raw_results=raw_results,
             )
 
             # Phase 5 — persist artifacts
@@ -472,6 +480,7 @@ class RulerAdapter(FrameworkAdapter):
                     use_fast=True,
                     # Request tokenizer files only — skip model weights
                     local_files_only=False,
+                    token=self._hf_token(),
                 )
                 return True
             if tokenizer_type == "openai":
@@ -520,13 +529,51 @@ class RulerAdapter(FrameworkAdapter):
         """Create a single shared OpenAI-compatible client for the whole job."""
         from openai import OpenAI  # noqa: PLC0415
 
-        api_key = os.getenv("MODEL_API_KEY", "")
-        if not api_key:
+        api_key = (
+            resolve_model_credentials().api_key
+            or os.getenv("MODEL_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+        )
+        if not api_key and self._uses_local_sidecar(model_url):
+            # The SDK requires a nonempty key. The sidecar replaces this
+            # placeholder with ServiceAccount authentication before forwarding.
+            api_key = "local"
+        elif not api_key:
             raise ValueError(
-                "MODEL_API_KEY environment variable is required for API authentication. "
-                "Set it to 'dummy' or 'none' explicitly if the endpoint has no auth."
+                "Model API credentials are required. Configure model.auth.secret_ref "
+                "or MODEL_API_KEY/OPENAI_API_KEY for a direct endpoint."
             )
         return OpenAI(base_url=model_url, api_key=api_key)
+
+    def _uses_local_sidecar(self, model_url: str) -> bool:
+        """Recognize the shared loopback model/callback origin of K8s jobs."""
+        if os.getenv("EVALHUB_MODE") != "k8s":
+            return False
+        callback_url = getattr(getattr(self, "job_spec", None), "callback_url", None)
+        if not callback_url:
+            return False
+        try:
+            model = urlsplit(model_url)
+            callback = urlsplit(callback_url)
+            return (
+                model.scheme in ("http", "https")
+                and model.hostname in ("localhost", "127.0.0.1", "::1")
+                and model.username is None
+                and callback.username is None
+                and (model.scheme, model.hostname, model.port)
+                == (callback.scheme, callback.hostname, callback.port)
+            )
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _hf_token() -> str | None:
+        """Resolve Hub authentication without exposing it in command arguments."""
+        return (
+            read_model_auth_key("hf-token")
+            or os.getenv("HF_TOKEN")
+            or os.getenv("HUGGING_FACE_HUB_TOKEN")
+        )
 
     def _generate_task_data(
         self,
@@ -552,10 +599,6 @@ class RulerAdapter(FrameworkAdapter):
             logger.info(f"Reusing existing dataset: {output_file}")
             return output_file
 
-        task_config = self._load_task_config(task_id)
-        if task_config.get("args", {}).get("type_haystack") == "essay":
-            self._ensure_essay_haystack(timeout=timeout)
-
         prepare_script = self.SCRIPTS_DIR / "data" / "prepare.py"
         pythonpath = os.pathsep.join(
             filter(None, [
@@ -564,7 +607,11 @@ class RulerAdapter(FrameworkAdapter):
                 os.environ.get("PYTHONPATH", ""),
             ])
         )
-        env = {**os.environ, "PYTHONPATH": pythonpath}
+        env = {
+            **os.environ,
+            "PYTHONPATH": pythonpath,
+            "RULER_DATA_DIR": str(data_dir / "assets"),
+        }
 
         cmd = [
             sys.executable,
@@ -580,39 +627,29 @@ class RulerAdapter(FrameworkAdapter):
             "--model_template_type", model_template,
         ]
 
+        hf_token = self._hf_token()
+        if hf_token:
+            env["HF_TOKEN"] = hf_token
+            env["HUGGING_FACE_HUB_TOKEN"] = hf_token
+
         logger.info(f"Generating data: task={task_id} ctx={context_length}")
         result = subprocess.run(
             cmd, capture_output=True, text=True, env=env, timeout=timeout
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"Data generation failed for {task_id}/{context_length}:\n{result.stderr}"
+                f"Data generation failed for {task_id}/{context_length}:\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
         logger.debug(f"Data generation stdout: {result.stdout}")
         return output_file
 
-    def _ensure_essay_haystack(self, timeout: int) -> None:
-        """Download the essay haystack lazily when an essay task needs it."""
-        essay_file = self.SCRIPTS_DIR / "data" / "synthetic" / "json" / "PaulGrahamEssays.json"
-        if essay_file.exists() and essay_file.stat().st_size > 0:
-            return
-
-        downloader = essay_file.parent / "download_paulgraham_essay.py"
-        logger.info("Essay haystack is missing; downloading RULER essay data")
-        result = subprocess.run(
-            [sys.executable, str(downloader)],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+    def _prepare_task_assets(self, tasks: list[str], data_dir: Path, timeout: int) -> None:
+        """Prepare this job's required inputs in one shared writable cache."""
+        prepare_assets(
+            [self._load_task_config(task) for task in tasks],
+            data_dir / "assets", self.SCRIPTS_DIR, timeout,
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                "Failed to download RULER essay haystack. "
-                "The runtime must have network access to GitHub and Paul Graham.\n"
-                f"{result.stderr}"
-            )
-        if not essay_file.exists() or essay_file.stat().st_size == 0:
-            raise RuntimeError("RULER essay downloader completed without creating essay data")
 
     def _run_api_inference(
         self,
@@ -641,6 +678,10 @@ class RulerAdapter(FrameworkAdapter):
 
         Returns:
             List of prediction dicts with 'pred' key added.
+
+        Raises:
+            RuntimeError: An inference call failed after the client's retries.
+                API failures are not converted into scored predictions.
         """
         samples: list[dict] = []
         with open(data_file) as fh:
@@ -652,7 +693,6 @@ class RulerAdapter(FrameworkAdapter):
         predictions: list[dict] = []
         n_samples = len(samples)
         log_interval = max(1, batch_size)
-        failure_count = 0
 
         for i, sample in enumerate(samples):
             try:
@@ -664,28 +704,23 @@ class RulerAdapter(FrameworkAdapter):
                 )
                 pred_text: str = response.choices[0].message.content or ""
             except Exception as exc:
-                # Re-raise auth/connection errors immediately; swallow only per-sample
-                # transient errors (e.g., timeout on a single long prompt).
+                # The shared OpenAI client handles retries. A remaining failure
+                # must fail the job rather than become an empty, scored answer.
                 import openai as _openai  # noqa: PLC0415
-                if isinstance(exc, (_openai.AuthenticationError, _openai.PermissionDeniedError)):
-                    raise RuntimeError(
-                        f"API authentication failed for {model_name}: {exc}. "
-                        "Check MODEL_API_KEY."
-                    ) from exc
-                logger.warning(
-                    f"Inference failed for sample {sample.get('index', '?')}: {exc}"
+
+                detail = type(exc).__name__
+                status_code = getattr(exc, "status_code", None)
+                if status_code is not None:
+                    detail += f" (HTTP {status_code})"
+                error_msg = (
+                    f"Inference failed for {pred_file.stem}, "
+                    f"sample {sample.get('index', '?')} on model {model_name}: {detail}."
                 )
-                pred_text = ""
-                failure_count += 1
-                # Abort early if more than half the samples have failed — a dead
-                # endpoint would otherwise run to completion with a 0.0 score.
-                failure_threshold = max(5, n_samples // 2)
-                if failure_count >= failure_threshold:
-                    raise RuntimeError(
-                        f"{failure_count}/{n_samples} inference calls failed "
-                        f"(threshold={failure_threshold}). "
-                        "Check that model.url is reachable and the model is loaded."
-                    ) from exc
+                if isinstance(exc, (_openai.AuthenticationError, _openai.PermissionDeniedError)):
+                    error_msg += (
+                        " Check model.auth.secret_ref or the model API credential environment."
+                    )
+                raise RuntimeError(error_msg) from exc
 
             predictions.append(
                 {
@@ -713,12 +748,6 @@ class RulerAdapter(FrameworkAdapter):
                             ),
                         )
                     )
-
-        if failure_count > 0 and failure_count == n_samples:
-            raise RuntimeError(
-                f"All {n_samples} inference calls failed. "
-                "Check that model.url is reachable and the model is loaded."
-            )
 
         pred_file.parent.mkdir(parents=True, exist_ok=True)
         with open(pred_file, "w") as fh:
@@ -1083,6 +1112,7 @@ class RulerAdapter(FrameworkAdapter):
         model_name: str,
         evaluation_results: list[EvaluationResult],
         work_dir: Path,
+        raw_results: dict[str, dict[int, list[dict]]],
     ) -> list[Path]:
         # Determine output directory: prefer the SDK-provided path (k8s persistent volume),
         # fall back to $HOME/ruler_<job_id>_results if that path is not writable
@@ -1133,6 +1163,38 @@ class RulerAdapter(FrameworkAdapter):
                 indent=2,
             )
         files.append(results_file)
+
+        # Write diagnostics beside the aggregate files so OCI export includes them
+        # before the temporary predictions directory is removed during cleanup.
+        eval_constants = _load_module_from_path(
+            "ruler_eval_constants",
+            self.SCRIPTS_DIR / "eval" / "synthetic" / "constants.py",
+        )
+        samples_file = output_dir / "samples.jsonl"
+        with samples_file.open("w", encoding="utf-8") as fh:
+            for task_id, ctx_results in raw_results.items():
+                base_task_type = self._load_task_config(task_id)["task"]
+                metric_fn = eval_constants.TASKS[base_task_type]["metric_fn"]
+                for context_length, predictions in ctx_results.items():
+                    for sample in predictions:
+                        reference_matches = [
+                            answer.lower() in sample["pred"].lower()
+                            for answer in sample["outputs"]
+                        ]
+                        row = {
+                            "job_id": job_id,
+                            "benchmark_id": benchmark_id,
+                            "model_name": model_name,
+                            "task_id": task_id,
+                            "context_length": context_length,
+                            **sample,
+                            "metric_name": f"{task_id}.ctx_{context_length}.score",
+                            "scorer": metric_fn.__name__,
+                            "score": metric_fn([sample["pred"]], [sample["outputs"]]) / 100.0,
+                            "reference_matches": reference_matches,
+                        }
+                        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        files.append(samples_file)
 
         logger.info(f"Saved {len(files)} result file(s) to {output_dir}")
         return files

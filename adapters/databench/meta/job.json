@@ -1,0 +1,9 @@
+{
+  "id": "databench-local-smoke",
+  "provider_id": "databench",
+  "benchmark_id": "databench_lite",
+  "benchmark_index": 0,
+  "model": {"url": "http://localhost:8080/v1", "name": "model"},
+  "parameters": {"num_examples": 3, "max_tokens": 2048, "temperature": 0},
+  "callback_url": "http://localhost:8081"
+}

@@ -12,7 +12,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from evalhub.adapter import JobPhase, OCIArtifactResult
+from evalhub.adapter import EvaluationResult, JobPhase, OCIArtifactResult
 from main import InspectAdapter
 from _benchmarks import (
     PETRI_SEED_MAP,
@@ -245,6 +245,48 @@ def test_standard_model_roles_injected(job_spec_path, tmp_path, monkeypatch):
     assert "INSPECT_EVAL_MODEL" in env
 
 
+def test_strong_reject_routes_judge_to_isolated_grader(job_spec_path, tmp_path, monkeypatch):
+    """StrongREJECT uses a separate grader endpoint/key without putting the key in argv."""
+    monkeypatch.setenv("OPENAI_API_KEY", "target-model-key")
+    monkeypatch.setenv("OPENAI_JUDGE_API_KEY", "judge-secret-key")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/strong-reject"
+    adapter.job_spec.model.name = "meta-llama/Llama-3.3-70B-Instruct"
+    adapter.job_spec.model.url = "https://maas.example.test/v1"
+    adapter.job_spec.parameters["grader_model"] = "gpt-4o-mini"
+    adapter.job_spec.parameters["grader_base_url"] = "https://api.openai.com/v1"
+    # A legacy task arg must not keep routing the judge back to the target.
+    adapter.job_spec.parameters["task_args"] = {
+        "judge_llm": "openai/meta-llama/Llama-3.3-70B-Instruct"
+    }
+
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(
+        adapter.job_spec, "standard", "inspect_evals/strong_reject", tmp_path, None, env
+    )
+    roles = _parse_model_roles(cmd)
+
+    assert roles["grader"] == "openai-api/openai_judge/gpt-4o-mini"
+    assert env["OPENAI_BASE_URL"] == "https://maas.example.test/v1"
+    assert env["OPENAI_API_KEY"] == "target-model-key"
+    assert env["OPENAI_JUDGE_BASE_URL"] == "https://api.openai.com/v1"
+    assert env["OPENAI_JUDGE_API_KEY"] == "judge-secret-key"
+    assert "judge_llm=None" in cmd
+    assert "target-model-key" not in cmd
+    assert "judge-secret-key" not in cmd
+
+
+def test_strong_reject_external_grader_requires_secret_env(job_spec_path, monkeypatch):
+    monkeypatch.delenv("OPENAI_JUDGE_API_KEY", raising=False)
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/strong-reject"
+    adapter.job_spec.parameters["grader_model"] = "gpt-4o-mini"
+
+    with pytest.raises(ValueError, match="OPENAI_JUDGE_API_KEY"):
+        adapter._build_env(adapter.job_spec, "standard")
+
+
 def test_standard_no_model_roles_when_absent(job_spec_path, tmp_path, monkeypatch):
     """Standard mode: no --model-role flags when model_roles is not set."""
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
@@ -285,16 +327,61 @@ def test_sample_limit_from_num_examples(job_spec_path, tmp_path, monkeypatch):
     assert cmd[cmd.index("--limit") + 1] == "7"
 
 
-def test_sample_limit_defaults_without_num_examples(job_spec_path, tmp_path, monkeypatch):
-    """--limit defaults to 5 when num_examples is unset (max_samples is ignored)."""
+def _standard_cmd(job_spec_path, tmp_path, monkeypatch, *, num_examples, **params):
+    """Build the standard-mode inspect command for inspect/gsm8k with the given limit inputs."""
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.benchmark_id = "inspect/gsm8k"
-    adapter.job_spec.num_examples = None
-    adapter.job_spec.parameters["max_samples"] = 12
+    adapter.job_spec.num_examples = num_examples
+    adapter.job_spec.parameters.update(params)
     env = adapter._build_env(adapter.job_spec, "standard")
-    cmd = adapter._build_command(adapter.job_spec, "standard", "inspect_evals/gsm8k", tmp_path, None, env)
-    assert "--limit" in cmd
+    return adapter._build_command(adapter.job_spec, "standard", "inspect_evals/gsm8k", tmp_path, None, env)
+
+
+def test_sample_limit_unbounded_without_num_examples(job_spec_path, tmp_path, monkeypatch):
+    """Standard benchmarks run the full dataset when no cap is configured."""
+    cmd = _standard_cmd(job_spec_path, tmp_path, monkeypatch, num_examples=None)
+    assert "--limit" not in cmd
+
+
+def test_sample_limit_legacy_max_samples_alias(job_spec_path, tmp_path, monkeypatch, caplog):
+    """parameters.max_samples still caps samples (deprecated), with a warning."""
+    with caplog.at_level("WARNING"):
+        cmd = _standard_cmd(job_spec_path, tmp_path, monkeypatch, num_examples=None, max_samples=12)
+    assert cmd[cmd.index("--limit") + 1] == "12"
+    assert "max_samples is deprecated" in caplog.text
+
+
+def test_sample_limit_num_examples_wins_over_max_samples(job_spec_path, tmp_path, monkeypatch):
+    """num_examples takes precedence when both it and the legacy max_samples are set."""
+    cmd = _standard_cmd(job_spec_path, tmp_path, monkeypatch, num_examples=3, max_samples=12)
+    assert cmd[cmd.index("--limit") + 1] == "3"
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_sample_limit_rejects_non_positive_num_examples(job_spec_path, tmp_path, monkeypatch, value):
+    """A non-positive num_examples fails fast with an error that names the parameter."""
+    with pytest.raises(ValueError, match="num_examples must be a positive integer"):
+        _standard_cmd(job_spec_path, tmp_path, monkeypatch, num_examples=value)
+
+
+@pytest.mark.parametrize("value", ["abc", 0, -3])
+def test_sample_limit_rejects_malformed_legacy_max_samples(job_spec_path, tmp_path, monkeypatch, value):
+    """A malformed legacy max_samples raises a clear error instead of a bare ValueError."""
+    with pytest.raises(ValueError, match=r"parameters\.max_samples must be a positive integer"):
+        _standard_cmd(job_spec_path, tmp_path, monkeypatch, num_examples=None, max_samples=value)
+
+
+def test_sample_limit_petri_default_cap(job_spec_path, tmp_path, monkeypatch):
+    """Petri keeps a default cap of 5 — its full seed set (170+) is very expensive."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/petri-sycophancy"
+    adapter.job_spec.num_examples = None
+    adapter.job_spec.parameters.pop("max_samples", None)
+    env = adapter._build_env(adapter.job_spec, "petri")
+    cmd = adapter._build_command(adapter.job_spec, "petri", "inspect_petri/audit", tmp_path, None, env)
     assert cmd[cmd.index("--limit") + 1] == "5"
 
 
@@ -657,6 +744,42 @@ def test_standard_results_extracted_correctly(job_spec_path, standard_eval_log):
     assert num == 10
 
 
+def _metric(name: str, value: float) -> EvaluationResult:
+    """Build a float EvaluationResult for overall-score tests."""
+    return EvaluationResult(metric_name=name, metric_value=value, metric_type="float", num_samples=10)
+
+
+def test_standard_overall_score_excludes_stderr(job_spec_path, standard_eval_log):
+    """The overall score of a standard run is the accuracy, not accuracy averaged with stderr."""
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    results, _, _ = adapter._extract_results(standard_eval_log, "inspect/gsm8k", "standard")
+    accuracy = next(r.metric_value for r in results if r.metric_name == "accuracy/accuracy")
+    assert adapter._compute_overall_score(results, "standard") == pytest.approx(accuracy)
+
+
+@pytest.mark.parametrize("stderr_name", [
+    "stderr", "bootstrap_stderr", "std", "var", "simple_python_sterr", "category_stderr",
+])
+def test_overall_score_ignores_dispersion_metrics(job_spec_path, stderr_name):
+    """accuracy 1.0 with a zero-width spread reports 1.0, not 0.5."""
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    results = [_metric("match/accuracy", 1.0), _metric(f"match/{stderr_name}", 0.0)]
+    assert adapter._compute_overall_score(results, "standard") == pytest.approx(1.0)
+
+
+def test_overall_score_still_averages_score_metrics(job_spec_path):
+    """Several genuine score metrics are still averaged; only the spread is dropped."""
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    results = [_metric("a/accuracy", 0.8), _metric("b/accuracy", 0.4), _metric("a/stderr", 0.2)]
+    assert adapter._compute_overall_score(results, "standard") == pytest.approx(0.6)
+
+
+def test_overall_score_none_when_only_dispersion_metrics(job_spec_path):
+    """With nothing but spread metrics there is no meaningful score to report."""
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    assert adapter._compute_overall_score([_metric("match/stderr", 0.1)], "standard") is None
+
+
 def test_eval_awareness_mapped_to_alignment_meta(job_spec_path, petri_eval_log):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     _, caps, _ = adapter._extract_results(petri_eval_log, "inspect/petri-sycophancy", "petri")
@@ -800,8 +923,36 @@ def test_standard_happy_path(monkeypatch, job_spec_path, standard_log_file):
     assert results.eval_card is None
     assert results.additional_info is not None
     assert results.additional_info["mode"] == "standard"
-    assert results.additional_info["zero_shot"] == results.overall_score
+    assert "zero_shot" not in results.additional_info
     assert "alt_prompting" not in results.additional_info
+
+
+@pytest.mark.parametrize(
+    "task_args, expected_zero_shot",
+    [
+        ({"fewshot": 0}, True),
+        ({"few_shot": "0"}, True),
+        ({"few_shots": []}, True),
+        ({"fewshot": 5}, False),
+        ({"fewshot": True}, False),
+        ({"fewshot_shuffle": True}, False),
+        ({}, False),
+    ],
+)
+def test_standard_zero_shot_metadata_requires_confirmed_task_setting(task_args, expected_zero_shot):
+    info = InspectAdapter._build_additional_info(
+        mode="standard",
+        task_spec="inspect_evals/mmlu_pro",
+        inspect_version="0.3.276",
+        overall_score=0.713,
+        eval_status="success",
+        num_samples=10,
+        eval_log={"eval": {"task_args": task_args}},
+    )
+
+    assert ("zero_shot" in info) is expected_zero_shot
+    if expected_zero_shot:
+        assert info["zero_shot"] == 0.713
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,13 @@
+# Accepted, time-boxed exception for the Trivy filesystem scan.
+#
+# CVE-2026-81726 / GHSA-8mgp-746c-j5xp: nltk "model-artifact APIs bypass pathsec".
+# Every released nltk version (<= 3.10.3) is affected and no patched release exists
+# yet, so there is nothing to upgrade to. The advisory covers
+# TransitionParser.train/parse, AveragedPerceptron.save/load,
+# PerceptronTagger.save_to_json and save_maxent_params. Nothing in the Inspect image
+# calls them: inspect-evals uses nltk only for tokenizers, data lookup and BLEU.
+# See adapters/inspect/requirements.txt and README.md ("Updating dependencies").
+#
+# The exception expires on the date below so it is re-evaluated; remove it as soon
+# as a fixed nltk is released and requirements.txt is bumped.
+CVE-2026-81726 exp:2026-12-31

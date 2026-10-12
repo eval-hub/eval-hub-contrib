@@ -6,8 +6,9 @@ USER 0
 WORKDIR /app
 
 # ── Python dependencies ───────────────────────────────────────────────────────
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# constraints.txt pins the transitive tree so rebuilds are reproducible.
+COPY requirements.txt constraints.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt
 
 # ── NLTK data — bundled at build time ────────────────────────────────────────
 #
