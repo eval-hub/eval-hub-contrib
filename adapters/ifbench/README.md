@@ -51,6 +51,12 @@ Evaluates a model endpoint against [IFBench](https://github.com/allenai/IFBench)
 
 ## Running tests locally
 
+The container preinstalls the NLTK resources required by IFBench. Jobs can import
+the adapter and run its checkers offline as an OpenShift-assigned user without
+writing to the Python installation directory. The container smoke test in CI
+checks startup and scoring with network access disabled and a read-only root
+filesystem.
+
 ```sh
 cd adapters/ifbench
 python3 -m venv .venv

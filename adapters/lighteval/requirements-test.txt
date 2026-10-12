@@ -1,1 +1,4 @@
 pytest
+
+# Parquet fixtures used by per-example result export tests
+pyarrow

@@ -21,8 +21,10 @@ def _make_canned_results(n_blocked=5, n_allowed=5):
             "prompt": f"blocked prompt {i}",
             "expected_blocked": True,
             "predicted_blocked": NemoResponses.BLOCKED,
+            "dataset_type": "classification",
             "response_time_ms": 10.0 + i,
             "response_time_ms_per_character": 0.5,
+            "content": "",
             "error": None,
         })
     for i in range(n_allowed):
@@ -30,8 +32,10 @@ def _make_canned_results(n_blocked=5, n_allowed=5):
             "prompt": f"allowed prompt {i}",
             "expected_blocked": False,
             "predicted_blocked": NemoResponses.ALLOW,
+            "dataset_type": "classification",
             "response_time_ms": 5.0 + i,
             "response_time_ms_per_character": 0.3,
+            "content": "safe response",
             "error": None,
         })
     return results
@@ -40,10 +44,40 @@ def _make_canned_results(n_blocked=5, n_allowed=5):
 def _make_canned_samples(n_blocked=5, n_allowed=5):
     samples = []
     for i in range(n_blocked):
-        samples.append({"prompt": f"blocked prompt {i}", "expected_blocked": True})
+        samples.append({
+            "prompt": f"blocked prompt {i}",
+            "expected_blocked": True,
+            "dataset_type": "classification",
+        })
     for i in range(n_allowed):
-        samples.append({"prompt": f"allowed prompt {i}", "expected_blocked": False})
+        samples.append({
+            "prompt": f"allowed prompt {i}",
+            "expected_blocked": False,
+            "dataset_type": "classification",
+        })
     return samples
+
+
+def _make_masking_result(values, content, mode="forbidden"):
+    from main import _matched_chars_score
+    if mode == "forbidden":
+        value_results = [{"value": v, "score": 0.0 if v in content else 1.0} for v in values]
+    else:
+        value_results = [{"value": v, "score": _matched_chars_score(v, content)} for v in values]
+    masking_accuracy = sum(r["score"] for r in value_results) / len(value_results) if value_results else 1.0
+    key = "mask_forbidden" if mode == "forbidden" else "mask_required"
+    return {
+        "prompt": "test prompt",
+        "dataset_type": "masking",
+        key: values,
+        "value_results": value_results,
+        "masking_accuracy": masking_accuracy,
+        "predicted_blocked": NemoResponses.ALLOW,
+        "content": content,
+        "response_time_ms": 10.0,
+        "response_time_ms_per_character": 0.5,
+        "error": None,
+    }
 
 
 def _load_job_spec(tmp_path, benchmark_id="prompt_injection", nemo_config="/tmp/test_config"):
@@ -101,8 +135,9 @@ class TestNemoGuardrailsAdapter:
 
     @pytest.mark.parametrize("benchmark_id", [
         "prompt_injection",
-        "toxicity",
+        "toxicity_profanity_safety",
         "pii",
+        "pii_masking",
         "tool_response_injection",
     ])
     def test_all_benchmarks_have_datasets(self, benchmark_id):
@@ -112,35 +147,140 @@ class TestNemoGuardrailsAdapter:
         for ds in datasets:
             assert "source" in ds
             assert "prompt_column" in ds
-            assert "label_column" in ds
+            is_masking = "mask_column" in ds
+            if is_masking:
+                has_forbidden = "mask_transform_forbidden_values" in ds
+                has_must_contain = "mask_transform_must_contain_values" in ds
+                assert has_forbidden ^ has_must_contain, (
+                    f"Masking dataset must have exactly one of mask_transform_forbidden_values "
+                    f"or mask_transform_must_contain_values, got neither or both in {ds}"
+                )
+            else:
+                assert "label_column" in ds
 
     def test_unknown_benchmark_raises(self):
         from main import _load_benchmark_datasets
         with pytest.raises(ValueError, match="not found"):
             _load_benchmark_datasets("nonexistent_benchmark")
 
-    def test_metrics_all_correct(self):
-        from main import _compute_metrics
+    def test_classification_metrics_all_correct(self):
+        from main import _compute_classification_metrics
         results = _make_canned_results(n_blocked=5, n_allowed=5)
-        metrics, errors = _compute_metrics(results)
+        metrics, errors = _compute_classification_metrics(results)
         assert metrics["accuracy"] == 1.0
         assert metrics["errors"] == 0
         assert metrics["total"] == 10
 
-    def test_metrics_with_errors(self):
-        from main import _compute_metrics
+    def test_classification_metrics_with_errors(self):
+        from main import _compute_classification_metrics
         results = _make_canned_results(n_blocked=3, n_allowed=3)
         results.append({
             "prompt": "error prompt",
             "expected_blocked": True,
             "predicted_blocked": NemoResponses.ERROR,
+            "dataset_type": "classification",
             "response_time_ms": 100.0,
             "response_time_ms_per_character": 1.0,
+            "content": "",
             "error": "timeout",
         })
-        metrics, errors = _compute_metrics(results)
+        metrics, errors = _compute_classification_metrics(results)
         assert metrics["errors"] == 1
         assert metrics["total"] == 6
+
+    def test_classification_metrics_ignores_masking_results(self):
+        from main import _compute_classification_metrics
+        cls_results = _make_canned_results(n_blocked=5, n_allowed=5)
+        mask_result = _make_masking_result(["secret"], "the content has no secret here")
+        metrics, _ = _compute_classification_metrics(cls_results + [mask_result])
+        assert metrics["total"] == 10
+
+    def test_masking_metrics_forbidden_perfect(self):
+        from main import _compute_masking_metrics
+        result = _make_masking_result(["alice", "bob"], "no names here", mode="forbidden")
+        metrics = _compute_masking_metrics([result])
+        assert metrics["masking_accuracy"] == 1.0
+        assert metrics["total"] == 2
+        assert metrics["total_prompts"] == 1
+
+    def test_masking_metrics_forbidden_full_leak(self):
+        from main import _compute_masking_metrics
+        result = _make_masking_result(["alice", "bob"], "alice and bob are here", mode="forbidden")
+        metrics = _compute_masking_metrics([result])
+        assert metrics["masking_accuracy"] == 0.0
+
+    def test_masking_metrics_forbidden_partial_leak(self):
+        from main import _compute_masking_metrics
+        # "alice" leaks (score 0.0), "bob" is masked (score 1.0) → mean 0.5
+        result = _make_masking_result(["alice", "bob"], "alice is here", mode="forbidden")
+        metrics = _compute_masking_metrics([result])
+        assert metrics["masking_accuracy"] == 0.5
+
+    def test_masking_metrics_must_contain_perfect(self):
+        from main import _compute_masking_metrics
+        result = _make_masking_result(["hello world"], "hello world", mode="must_contain")
+        metrics = _compute_masking_metrics([result])
+        assert metrics["masking_accuracy"] == 1.0
+
+    def test_masking_metrics_must_contain_with_gap(self):
+        from main import _compute_masking_metrics
+        # "Hello, my name is Adam. I like apples" with "Adam" redacted —
+        # most characters match; score should be well above 0.8 but below 1.0.
+        value = "Hello, my name is Adam. I like apples"
+        content = "Hello, my name is <redacted>. I like apples"
+        result = _make_masking_result([value], content, mode="must_contain")
+        metrics = _compute_masking_metrics([result])
+        assert 0.8 < metrics["masking_accuracy"] < 1.0
+
+    def test_masking_metrics_empty_returns_empty(self):
+        from main import _compute_masking_metrics
+        cls_results = _make_canned_results()
+        metrics = _compute_masking_metrics(cls_results)
+        assert metrics == {}
+
+    def test_matched_chars_score_full_match(self):
+        from main import _matched_chars_score
+        assert _matched_chars_score("hello", "say hello there") == 1.0
+
+    def test_matched_chars_score_no_match(self):
+        from main import _matched_chars_score
+        assert _matched_chars_score("xyz", "abc def") == 0.0
+
+    def test_matched_chars_score_with_gap(self):
+        from main import _matched_chars_score
+        # "AB__CD" where "__" is replaced: matched = "AB" + "CD" = 4 / 6
+        score = _matched_chars_score("ABCD", "AB--CD")
+        assert score == 1.0  # all 4 chars of "ABCD" appear (A,B matched; C,D matched)
+
+    def test_matched_chars_score_partial(self):
+        from main import _matched_chars_score
+        score = _matched_chars_score("0123456789", "0123456")
+        assert abs(score - 0.7) < 0.01
+
+    def test_resolve_mask_transform_both_raises(self):
+        from main import _resolve_mask_transform
+        with pytest.raises(ValueError, match="exactly one"):
+            _resolve_mask_transform({
+                "mask_transform_forbidden_values": ".",
+                "mask_transform_must_contain_values": ".",
+            })
+
+    def test_resolve_mask_transform_neither_raises(self):
+        from main import _resolve_mask_transform
+        with pytest.raises(ValueError, match="must specify either"):
+            _resolve_mask_transform({})
+
+    def test_resolve_mask_transform_forbidden(self):
+        from main import _resolve_mask_transform
+        mode, program = _resolve_mask_transform({"mask_transform_forbidden_values": "[.[].value]"})
+        assert mode == "forbidden"
+        assert program is not None
+
+    def test_resolve_mask_transform_must_contain(self):
+        from main import _resolve_mask_transform
+        mode, program = _resolve_mask_transform({"mask_transform_must_contain_values": "[.]"})
+        assert mode == "must_contain"
+        assert program is not None
 
     def test_timing_stats(self):
         from main import _compute_timing_stats
@@ -162,11 +302,9 @@ class TestNemoGuardrailsAdapter:
     def test_chunk_prompt_covers_whole_prompt_with_overlap(self):
         from main import _chunk_prompt
         prompt = "".join(str(i % 10) for i in range(5000))
-        # overlap is a fraction of the window: 0.05 * 2000 == 100 chars
         chunks = _chunk_prompt(prompt, max_chars=2000, overlap=0.05)
         assert len(chunks) > 1
         assert all(len(c) <= 2000 for c in chunks)
-        # every character of the original is present in some chunk
         reconstructed = chunks[0]
         for c in chunks[1:]:
             reconstructed += c[100:]  # drop the overlap
@@ -189,15 +327,15 @@ class TestNemoGuardrailsAdapter:
 
     def test_evaluate_prompt_blocks_if_any_chunk_blocks(self, monkeypatch):
         import main
-        long_prompt = "safe text " * 500  # exceeds default chunk size
+        long_prompt = "safe text " * 500
         calls = {"n": 0}
 
         def fake_chunk(server_url, text):
             calls["n"] += 1
-            # block only on the second chunk
             status = NemoResponses.BLOCKED if calls["n"] == 2 else NemoResponses.ALLOW
             return {
                 "predicted_blocked": status,
+                "content": "",
                 "response_time_ms": 5.0,
                 "response_time_ms_per_character": 0.1,
                 "error": None,
@@ -206,7 +344,6 @@ class TestNemoGuardrailsAdapter:
         monkeypatch.setattr(main, "_evaluate_chunk", fake_chunk)
         result = main._evaluate_prompt("http://x", long_prompt, chunk_strategy="chunk", chunk_size=2000)
         assert result["predicted_blocked"] == NemoResponses.BLOCKED
-        # short-circuits: stops after the blocking chunk
         assert calls["n"] == 2
 
     def test_evaluate_prompt_allows_when_all_chunks_allow(self, monkeypatch):
@@ -216,6 +353,7 @@ class TestNemoGuardrailsAdapter:
         def fake_chunk(server_url, text):
             return {
                 "predicted_blocked": NemoResponses.ALLOW,
+                "content": "safe",
                 "response_time_ms": 5.0,
                 "response_time_ms_per_character": 0.1,
                 "error": None,
@@ -235,6 +373,7 @@ class TestNemoGuardrailsAdapter:
             seen.append(text)
             return {
                 "predicted_blocked": NemoResponses.ALLOW,
+                "content": "",
                 "response_time_ms": 5.0,
                 "response_time_ms_per_character": 0.1,
                 "error": None,
@@ -242,7 +381,6 @@ class TestNemoGuardrailsAdapter:
 
         monkeypatch.setattr(main, "_evaluate_chunk", fake_chunk)
         main._evaluate_prompt("http://x", long_prompt, chunk_strategy="limit", chunk_size=2000)
-        # exactly one request, truncated to chunk_size
         assert len(seen) == 1
         assert seen[0] == "A" * 2000
 
@@ -255,6 +393,7 @@ class TestNemoGuardrailsAdapter:
             seen.append(text)
             return {
                 "predicted_blocked": NemoResponses.ALLOW,
+                "content": "",
                 "response_time_ms": 5.0,
                 "response_time_ms_per_character": 0.1,
                 "error": None,
@@ -262,6 +401,5 @@ class TestNemoGuardrailsAdapter:
 
         monkeypatch.setattr(main, "_evaluate_chunk", fake_chunk)
         main._evaluate_prompt("http://x", long_prompt, chunk_strategy="none", chunk_size=2000)
-        # exactly one request, prompt sent whole with no length bounding
         assert len(seen) == 1
         assert seen[0] == long_prompt

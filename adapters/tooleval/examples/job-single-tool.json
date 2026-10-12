@@ -1,0 +1,25 @@
+{
+  "id": "tooleval-single-tool-example",
+  "provider_id": "tooleval",
+  "benchmark_id": "single-tool",
+  "benchmark_index": 0,
+  "model": {
+    "name": "my-model",
+    "url": "http://localhost:8080",
+    "auth": {
+      "secret_ref": "my-model-auth"
+    }
+  },
+  "parameters": {
+    "tool_server_url": "http://toolbench-server.my-tenant.svc:8080",
+    "num_tasks": 3,
+    "instruction": "Use the available tool to echo back the exact message: hello",
+    "category": "Tools",
+    "tool_name": "echo",
+    "api_name": "echo_message",
+    "tool_input": {"message": "hello"},
+    "enable_judge": true,
+    "probe_models": true
+  },
+  "callback_url": "http://localhost:8080"
+}

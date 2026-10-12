@@ -34,6 +34,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import _hf_offline  # noqa: F401 — seeds HF offline env from job spec before other imports
+
 from evalhub.adapter import (
     EnvironmentCardMetadata,
     FrameworkAdapter,
@@ -54,6 +56,7 @@ from _benchmarks import (
 )
 from _bloom import bloom_prepare
 from _execution import build_command, build_env, get_inspect_version, redact_cmd, run_inspect
+from _hf_offline import ensure_test_data_ready_for_offline
 from _results import compute_overall_score, extract_results, parse_log
 from _routing import (
     build_role_spec,
@@ -64,6 +67,52 @@ from _routing import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_FEWSHOT_COUNT_ARGUMENTS = {
+    "fewshot",
+    "few_shot",
+    "num_fewshot",
+    "num_fewshots",
+    "num_shots",
+    "n_shots",
+}
+_FEWSHOT_LIST_ARGUMENTS = {"few_shots", "fewshot_examples", "few_shot_examples"}
+
+
+def _has_confirmed_zero_shot(eval_log: dict[str, Any]) -> bool:
+    """Return true only when the resolved Inspect task args explicitly show zero shots."""
+    eval_spec = eval_log.get("eval")
+    task_args = eval_spec.get("task_args") if isinstance(eval_spec, dict) else None
+    if not isinstance(task_args, dict):
+        return False
+
+    shot_arguments = [
+        (str(name).lower().replace("-", "_"), value)
+        for name, value in task_args.items()
+        if str(name).lower().replace("-", "_")
+        in _FEWSHOT_COUNT_ARGUMENTS | _FEWSHOT_LIST_ARGUMENTS
+    ]
+    if not shot_arguments:
+        return False
+
+    for name, value in shot_arguments:
+        if name in _FEWSHOT_LIST_ARGUMENTS:
+            if not isinstance(value, (list, tuple)) or value:
+                return False
+        elif isinstance(value, bool):
+            if value:
+                return False
+        elif isinstance(value, (int, float)):
+            if value != 0:
+                return False
+        elif isinstance(value, str):
+            if value.strip().lower() not in {"0", "false"}:
+                return False
+        else:
+            return False
+
+    return True
 
 
 class InspectAdapter(FrameworkAdapter):
@@ -102,6 +151,10 @@ class InspectAdapter(FrameworkAdapter):
             )
 
             self._validate_config(config, mode)
+            ensure_test_data_ready_for_offline(
+                config.parameters if isinstance(config.parameters, dict) else {},
+                job_spec_path=os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json"),
+            )
             work_dir = Path(tempfile.mkdtemp(prefix=f"inspect_{mode}_"))
             log_dir = work_dir / "logs"
             log_dir.mkdir()
@@ -132,7 +185,7 @@ class InspectAdapter(FrameworkAdapter):
             )
 
             evaluation_results, _, num_samples = extract_results(eval_log, config.benchmark_id, mode)
-            overall_score = compute_overall_score(evaluation_results, mode)
+            overall_score = compute_overall_score(evaluation_results, mode, config.benchmark_id)
             logger.info(f"Post-processing complete | samples={num_samples} | overall_score={overall_score}")
 
             oci_artifact = None
@@ -161,6 +214,7 @@ class InspectAdapter(FrameworkAdapter):
                 overall_score=overall_score,
                 eval_status=eval_log.get("status"),
                 num_samples=num_samples,
+                eval_log=eval_log,
             )
             self._run_info = additional_info
 
@@ -245,6 +299,8 @@ class InspectAdapter(FrameworkAdapter):
         if mode == "standard" and config.benchmark_id == "inspect/custom":
             if not config.parameters.get("task"):
                 raise ValueError("inspect/custom requires a 'task' parameter.")
+            # replace generic inspect/custom with individual tasks name
+            config.benchmark_id = str(config.parameters.get("task"))
 
         task_args: dict[str, Any] = config.parameters.get("task_args", {})
         if any("dish" in k.lower() for k in task_args):
@@ -282,6 +338,7 @@ class InspectAdapter(FrameworkAdapter):
         overall_score: float | None,
         eval_status: str | None,
         num_samples: int,
+        eval_log: dict[str, Any],
     ) -> dict[str, Any]:
         """Build additional_info delta for EvalHub (not duplicated from request/metrics).
 
@@ -298,8 +355,11 @@ class InspectAdapter(FrameworkAdapter):
         if eval_status is not None:
             info["inspect_status"] = eval_status
 
-        # Standard / Open-Telco tasks are generate-or-MCQ without few-shot demos.
-        if mode == "standard" and overall_score is not None:
+        if (
+            mode == "standard"
+            and overall_score is not None
+            and _has_confirmed_zero_shot(eval_log)
+        ):
             info["zero_shot"] = overall_score
         elif mode in ("petri", "bloom") and overall_score is not None:
             # Multi-turn auditor/target/judge pipelines — not zero-shot MCQ.
@@ -327,8 +387,8 @@ class InspectAdapter(FrameworkAdapter):
     def _extract_results(self, eval_log, benchmark_id, mode):
         return extract_results(eval_log, benchmark_id, mode)
 
-    def _compute_overall_score(self, results, mode):
-        return compute_overall_score(results, mode)
+    def _compute_overall_score(self, results, mode, benchmark_id=None):
+        return compute_overall_score(results, mode, benchmark_id)
 
     def _get_inspect_version(self):
         return get_inspect_version()

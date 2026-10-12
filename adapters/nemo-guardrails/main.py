@@ -1,13 +1,14 @@
 """NeMo Guardrails adapter for EvalHub.
 
 Evaluates NeMo Guardrails configurations against classification datasets.
-Starts a local NeMo Guardrails server, sends prompts to the /v1/guardrail/checks
+Starts a local NeMo Guardrails server, sends prompts to the /v1/checks
 endpoint, and computes accuracy, precision, recall, F1, and latency metrics.
 """
 
 import asyncio
 import atexit
 import csv
+import difflib
 import enum
 import hashlib
 import importlib.metadata
@@ -125,6 +126,38 @@ def _compile_transform(expr: str | None):
     return jq.compile(expr)
 
 
+def _matched_chars_score(value: str, content: str) -> float:
+    """Fraction of value's characters matched (across all matching blocks) in content."""
+    if not value:
+        return 1.0
+    blocks = difflib.SequenceMatcher(None, value, content, autojunk=False).get_matching_blocks()
+    matched = sum(block.size for block in blocks)
+    return matched / len(value)
+
+
+def _resolve_mask_transform(config: dict) -> tuple[str, "jq._Program | None"]:
+    """Validate and compile the masking transform from a dataset config.
+
+    Returns (mode, compiled_program) where mode is 'forbidden' or 'must_contain'.
+    Raises if both or neither transform fields are specified.
+    """
+    has_forbidden = "mask_transform_forbidden_values" in config
+    has_must_contain = "mask_transform_must_contain_values" in config
+    if has_forbidden and has_must_contain:
+        raise ValueError(
+            "Dataset config must specify exactly one of 'mask_transform_forbidden_values' or "
+            "'mask_transform_must_contain_values', not both."
+        )
+    if not has_forbidden and not has_must_contain:
+        raise ValueError(
+            "A masking dataset (with 'mask_column') must specify either "
+            "'mask_transform_forbidden_values' or 'mask_transform_must_contain_values'."
+        )
+    if has_forbidden:
+        return "forbidden", _compile_transform(config["mask_transform_forbidden_values"])
+    return "must_contain", _compile_transform(config["mask_transform_must_contain_values"])
+
+
 def _compile_row_filters(row_filters: list[dict] | None) -> list[tuple[str, "jq._Program"]]:
     if not row_filters:
         return []
@@ -150,6 +183,17 @@ def _map_labels(raw_label, block_labels, pass_labels, transform=None) -> bool | 
 
 
 def _balance_and_limit(samples: list[dict], eval_limit: int | None, seed: int | None = 67) -> list[dict]:
+    if samples and samples[0].get("dataset_type") == "masking":
+        logger.info("  Masking samples: %d", len(samples))
+        if eval_limit is None:
+            return samples
+        rng = random.Random(seed)
+        shuffled = list(samples)
+        rng.shuffle(shuffled)
+        result = shuffled[:eval_limit]
+        logger.info("  After limit (eval_limit=%d, seed=%r): %d total", eval_limit, seed, len(result))
+        return result
+
     blocked = [s for s in samples if s["expected_blocked"]]
     allowed = [s for s in samples if not s["expected_blocked"]]
     logger.info("  Class distribution: %d blocked, %d allowed", len(blocked), len(allowed))
@@ -182,11 +226,30 @@ def _load_huggingface(config: dict) -> list[dict]:
 
     ds = load_dataset(config["hf_name"], name=config.get("subset"), split=split)
     prompt_col = config["prompt_column"]
+    row_filters = _compile_row_filters(config.get("row_filters"))
+
+    if "mask_column" in config:
+        mask_col = config["mask_column"]
+        mask_mode, mask_program = _resolve_mask_transform(config)
+        samples = []
+        for row in ds:
+            if not _passes_row_filters(row, row_filters):
+                continue
+            raw = row[mask_col]
+            values = mask_program.input_value(raw).first() if mask_program else raw
+            if not isinstance(values, list):
+                values = [str(values)]
+            else:
+                values = [str(v) for v in values]
+            sample = {"prompt": str(row[prompt_col]), "dataset_type": "masking"}
+            sample["mask_forbidden" if mask_mode == "forbidden" else "mask_required"] = values
+            samples.append(sample)
+        return samples
+
     label_col = config["label_column"]
     block_labels = config["block_labels"]
     pass_labels = config["pass_labels"]
     transform = _compile_transform(config.get("label_transform"))
-    row_filters = _compile_row_filters(config.get("row_filters"))
 
     samples = []
     for row in ds:
@@ -198,6 +261,7 @@ def _load_huggingface(config: dict) -> list[dict]:
         samples.append({
             "prompt": str(row[prompt_col]),
             "expected_blocked": expected,
+            "dataset_type": "classification",
         })
     return samples
 
@@ -211,12 +275,35 @@ def _load_csv(config: dict) -> list[dict]:
         raise FileNotFoundError(f"Dataset file not found: {path}")
 
     prompt_col = config["prompt_column"]
+    row_filters = _compile_row_filters(config.get("row_filters"))
+    download_limit = config.get("download_limit")
+
+    if "mask_column" in config:
+        mask_col = config["mask_column"]
+        mask_mode, mask_program = _resolve_mask_transform(config)
+        samples = []
+        with open(path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for i, row in enumerate(reader):
+                if download_limit and i >= download_limit:
+                    break
+                if not _passes_row_filters(row, row_filters):
+                    continue
+                raw = row[mask_col]
+                values = mask_program.input_value(raw).first() if mask_program else raw
+                if not isinstance(values, list):
+                    values = [str(values)]
+                else:
+                    values = [str(v) for v in values]
+                sample = {"prompt": row[prompt_col], "dataset_type": "masking"}
+                sample["mask_forbidden" if mask_mode == "forbidden" else "mask_required"] = values
+                samples.append(sample)
+        return samples
+
     label_col = config["label_column"]
     block_labels = config["block_labels"]
     pass_labels = config["pass_labels"]
     transform = _compile_transform(config.get("label_transform"))
-    row_filters = _compile_row_filters(config.get("row_filters"))
-    download_limit = config.get("download_limit")
 
     samples = []
     with open(path, newline="", encoding="utf-8") as f:
@@ -232,6 +319,7 @@ def _load_csv(config: dict) -> list[dict]:
             samples.append({
                 "prompt": row[prompt_col],
                 "expected_blocked": expected,
+                "dataset_type": "classification",
             })
     return samples
 
@@ -358,7 +446,7 @@ def _start_server(
 
 
 def warmup_server(port: int, attempts: int = 30, timeout: int = 15) -> None:
-    url = f"http://localhost:{port}/v1/guardrail/checks"
+    url = f"http://localhost:{port}/v1/checks"
     payload = {
         "model": "dummy",
         "messages": [{"role": "user", "content": "hello"}],
@@ -421,7 +509,7 @@ def managed_server(config_path: str, port: int = 9999,
 # ---------------------------------------------------------------------------
 
 class NemoResponses(enum.Enum):
-    ALLOW = "success"
+    ALLOW = "passed"
     BLOCKED = "blocked"
     MODIFIED = "modified"
     ERROR = "error"
@@ -476,7 +564,7 @@ def _evaluate_chunk(server_url: str, text: str) -> dict:
     }
     t0 = time.perf_counter()
     try:
-        r = requests.post(f"{server_url}/v1/guardrail/checks", json=payload, timeout=120)
+        r = requests.post(f"{server_url}/v1/checks", json=payload, timeout=120)
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
         ms_per_char = elapsed_ms / len(text) if text else None
@@ -488,14 +576,22 @@ def _evaluate_chunk(server_url: str, text: str) -> dict:
                 detail = r.text[:500]
             return {
                 "predicted_blocked": NemoResponses.ERROR,
+                "content": "",
                 "response_time_ms": round(elapsed_ms, 1),
                 "response_time_ms_per_character": ms_per_char,
                 "error": f"HTTP {r.status_code}: {detail}",
             }
 
         data = r.json()
+        status = NemoResponses(data.get("status"))
+        if status == NemoResponses.ALLOW:
+            # an allowed message does not return any modified content
+            content = text
+        else:
+            content = data.get("content")
         return {
-            "predicted_blocked": NemoResponses(data.get("status")),
+            "predicted_blocked": status,
+            "content": content,
             "response_time_ms": round(elapsed_ms, 1),
             "response_time_ms_per_character": ms_per_char,
             "error": None,
@@ -504,6 +600,7 @@ def _evaluate_chunk(server_url: str, text: str) -> dict:
         elapsed_ms = (time.perf_counter() - t0) * 1000
         return {
             "predicted_blocked": NemoResponses.ERROR,
+            "content": "",
             "response_time_ms": round(elapsed_ms, 1),
             "response_time_ms_per_character": elapsed_ms / len(text) if text else None,
             "error": str(e),
@@ -534,17 +631,21 @@ def _evaluate_prompt(
         text = prompt[:chunk_size] if chunk_size > 0 else prompt
         return _evaluate_chunk(server_url, text)
 
+
     chunks = _chunk_prompt(prompt, chunk_size, chunk_overlap)
     if len(chunks) == 1:
         return _evaluate_chunk(server_url, prompt)
 
     total_ms = 0.0
     errors: list[str] = []
+    cumulative_content = []
     final = NemoResponses.ALLOW
     for chunk in chunks:
         res = _evaluate_chunk(server_url, chunk)
         total_ms += res["response_time_ms"]
+
         pred = res["predicted_blocked"]
+        cumulative_content.append(res["content"])
         if res["error"]:
             errors.append(res["error"])
         if pred == NemoResponses.BLOCKED:
@@ -558,6 +659,7 @@ def _evaluate_prompt(
 
     return {
         "predicted_blocked": final,
+        "content": cumulative_content,
         "response_time_ms": round(total_ms, 1),
         "response_time_ms_per_character": round(total_ms / len(prompt), 4) if prompt else None,
         "error": "; ".join(errors) if final == NemoResponses.ERROR and errors else None,
@@ -588,14 +690,51 @@ def run_evaluation(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     chunk_overlap: float = DEFAULT_CHUNK_OVERLAP,
 ) -> list[dict]:
+    def _annotate_result(result: dict, sample: dict) -> dict:
+        result["prompt"] = sample["prompt"]
+        if sample.get("dataset_type") == "masking":
+            result["dataset_type"] = "masking"
+            if not result["error"]:
+                content = result.get("content", "")
+                if isinstance(content, list):
+                    content = " ".join(str(c) for c in content)
+                if "mask_forbidden" in sample:
+                    result["mask_forbidden"] = sample["mask_forbidden"]
+                    result["value_results"] = [
+                        {"value": v, "score": 0.0 if v in content else 1.0}
+                        for v in sample["mask_forbidden"]
+                    ]
+                else:
+                    result["mask_required"] = sample["mask_required"]
+                    result["value_results"] = [
+                        {"value": v, "score": _matched_chars_score(v, content)}
+                        for v in sample["mask_required"]
+                    ]
+            else:
+                if "mask_forbidden" in sample:
+                    result["mask_forbidden"] = sample["mask_forbidden"]
+                    result["value_results"] = [
+                        {"value": v, "score": 0.0} for v in sample["mask_forbidden"]
+                    ]
+                else:
+                    result["mask_required"] = sample["mask_required"]
+                    result["value_results"] = [
+                        {"value": v, "score": 0.0} for v in sample["mask_required"]
+                    ]
+            vr = result["value_results"]
+            result["masking_accuracy"] = sum(r["score"] for r in vr) / len(vr) if vr else 1.0
+        else:
+            result["expected_blocked"] = sample["expected_blocked"]
+            result["dataset_type"] = "classification"
+        return result
+
     if workers <= 1:
         results = []
         errors = 0
         pbar = None if verbose else tqdm(samples, desc="Evaluating", unit="sample", dynamic_ncols=True)
         for i, sample in enumerate(samples):
             result = _evaluate_prompt(server_url, sample["prompt"], chunk_strategy, chunk_size, chunk_overlap)
-            result["prompt"] = sample["prompt"]
-            result["expected_blocked"] = sample["expected_blocked"]
+            _annotate_result(result, sample)
             results.append(result)
             if result["error"]:
                 errors += 1
@@ -618,8 +757,7 @@ def run_evaluation(
         async def _process(i, sample):
             nonlocal errors
             result = await _evaluate_prompt_async(server_url, sample["prompt"], sem, chunk_strategy, chunk_size, chunk_overlap)
-            result["prompt"] = sample["prompt"]
-            result["expected_blocked"] = sample["expected_blocked"]
+            _annotate_result(result, sample)
             results[i] = result
             if result["error"]:
                 errors += 1
@@ -644,46 +782,97 @@ def _color(code: str, text: str, no_color: bool) -> str:
 
 
 def _print_result(i: int, total: int, sample: dict, result: dict, no_color: bool = False) -> None:
-    expected_blocked = sample["expected_blocked"]
-    predicted = result["predicted_blocked"]
-    expected_str = NemoResponses.BLOCKED.value if expected_blocked else NemoResponses.ALLOW.value
-    predicted_str = predicted.value
-
-    is_error = predicted == NemoResponses.ERROR
-    is_correct = (
-        (expected_blocked and predicted != NemoResponses.ALLOW)
-        or (not expected_blocked and predicted == NemoResponses.ALLOW)
-    )
-
-    if is_error:
-        marker = _color("33", "x ERR        ", no_color)
-    elif is_correct:
-        marker = "v            "
-    elif expected_blocked:
-        marker = _color("31", "x False Neg  ", no_color)
-    else:
-        marker = _color("35", "x False Pos  ", no_color)
-
     idx = f"[{i + 1}/{total}]"
     per_char = result.get("response_time_ms_per_character")
     per_char_str = f"{per_char:.2f}ms/char" if per_char is not None else "n/a"
-    line = f"  {idx:>10s} {marker} expected={expected_str:5s} got={predicted_str:8s} | {result['response_time_ms']:>5.0f}ms ({per_char_str})"
-    line += f" | {repr(sample['prompt'])}"
+
+    if sample.get("dataset_type") == "masking":
+        is_error = bool(result["error"])
+        masking_accuracy = result.get("masking_accuracy", 0.0)
+        mode = "forbidden" if "mask_forbidden" in sample else "must_contain"
+        if is_error:
+            marker = _color("33", "x ERR        ", no_color)
+        elif masking_accuracy == 1.0:
+            marker = "v            "
+        else:
+            marker = _color("31", "x Mask Miss  ", no_color)
+
+        content = result.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(str(c) for c in content)
+
+        line = (
+            f"  {idx:>10s} {marker} mode={mode} masking_accuracy={masking_accuracy:.4f}"
+            f" | {result['response_time_ms']:>5.0f}ms ({per_char_str})"
+            f" | {repr(sample['prompt'])}"
+            f"\n{'':>20s}content: {repr(content)}"
+        )
+        if not is_error:
+            partial = [(vr["value"], vr["score"]) for vr in result.get("value_results", []) if vr["score"] < 1.0]
+            if partial:
+                label = "leaked" if mode == "forbidden" else "missing"
+                line += f"\n{'':>20s}{label}: " + ", ".join(f"{repr(v)}={s:.2f}" for v, s in partial)
+    else:
+        expected_blocked = sample["expected_blocked"]
+        predicted = result["predicted_blocked"]
+        expected_str = NemoResponses.BLOCKED.value if expected_blocked else NemoResponses.ALLOW.value
+        predicted_str = predicted.value
+
+        is_error = predicted == NemoResponses.ERROR
+        is_correct = (
+            (expected_blocked and predicted != NemoResponses.ALLOW)
+            or (not expected_blocked and predicted == NemoResponses.ALLOW)
+        )
+
+        if is_error:
+            marker = _color("33", "x ERR        ", no_color)
+        elif is_correct:
+            marker = "v            "
+        elif expected_blocked:
+            marker = _color("31", "x False Neg  ", no_color)
+        else:
+            marker = _color("35", "x False Pos  ", no_color)
+
+        line = (
+            f"  {idx:>10s} {marker} expected={expected_str:5s} got={predicted_str:8s}"
+            f" | {result['response_time_ms']:>5.0f}ms ({per_char_str})"
+            f" | {repr(sample['prompt'])}"
+        )
+
     if result["error"]:
         line += f"\n{'':>20s}ERROR: {result['error'][:200]}"
     print(line)
+    print()
 
 
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
 
-def _compute_metrics(results: list[dict]) -> tuple[dict, list]:
+def _compute_masking_metrics(results: list[dict]) -> dict:
+    masking = [r for r in results if r.get("dataset_type") == "masking"]
+    if not masking:
+        return {}
+    errors = [r for r in masking if r.get("error")]
+    evaluated = [r for r in masking if not r.get("error")]
+    value_results = [vr for r in evaluated for vr in r.get("value_results", [])]
+    total_predictions = len(value_results)
+    mean_score = sum(vr["score"] for vr in value_results) / total_predictions if total_predictions else 1.0
+    return {
+        "total": total_predictions,
+        "total_prompts": len(evaluated),
+        "errors": len(errors),
+        "masking_accuracy": round(mean_score, 4),
+    }
+
+
+def _compute_classification_metrics(results: list[dict]) -> tuple[dict, list]:
+    classification = [r for r in results if r.get("dataset_type") != "masking"]
     y_true = []
     y_pred = []
     others = []
 
-    for r in results:
+    for r in classification:
         expected = r["expected_blocked"]
         actual = r["predicted_blocked"]
         if actual == NemoResponses.ERROR:
@@ -854,34 +1043,69 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
 
         logger.info("Evaluation finished in %.1fs, processing %d results", duration, len(results))
 
-        metrics, _ = _compute_metrics(results)
+        cls_metrics, _ = _compute_classification_metrics(results)
+        mask_metrics = _compute_masking_metrics(results)
         timing = _compute_timing_stats(results)
 
+        cls_total = cls_metrics["total"]
+        mask_total = mask_metrics.get("total", 0)
+        mask_prompts = mask_metrics.get("total_prompts", 0)
+        total_evaluated = cls_total + mask_total
+        total_prompts_evaluated = cls_total + mask_prompts
+        total_errors = cls_metrics["errors"] + mask_metrics.get("errors", 0)
+
+        if cls_total and mask_total:
+            overall_score = round(
+                (cls_metrics["accuracy"] * cls_total + mask_metrics["masking_accuracy"] * mask_total)
+                / total_evaluated,
+                4,
+            )
+        elif mask_total:
+            overall_score = mask_metrics["masking_accuracy"]
+        else:
+            overall_score = cls_metrics["accuracy"]
+
         logger.info(
-            "Metrics: total=%d, errors=%d, accuracy=%.4f",
-            metrics["total"], metrics["errors"], metrics["accuracy"],
+            "Classification: total=%d, errors=%d, accuracy=%.4f",
+            cls_total, cls_metrics["errors"], cls_metrics["accuracy"],
         )
+        if mask_metrics:
+            logger.info(
+                "Masking: predictions=%d (prompts=%d), errors=%d, score=%.4f",
+                mask_total, mask_metrics["total_prompts"], mask_metrics["errors"],
+                mask_metrics["masking_accuracy"],
+            )
 
-        eval_results = [
-            EvaluationResult(metric_name="accuracy", metric_value=metrics["accuracy"]),
-        ]
+        eval_results = []
 
-        cr = metrics.get("classification_report", {})
-        for label in ["blocked", "allowed"]:
-            if label in cr:
-                for metric_key in ["precision", "recall", "f1"]:
-                    eval_results.append(
-                        EvaluationResult(
-                            metric_name=f"{label}_{metric_key}",
-                            metric_value=cr[label][metric_key],
+        if cls_metrics["total"]:
+            eval_results.append(
+                EvaluationResult(metric_name="accuracy", metric_value=cls_metrics["accuracy"])
+            )
+            cr = cls_metrics.get("classification_report", {})
+            for label in ["blocked", "allowed"]:
+                if label in cr:
+                    for metric_key in ["precision", "recall", "f1"]:
+                        eval_results.append(
+                            EvaluationResult(
+                                metric_name=f"{label}_{metric_key}",
+                                metric_value=cr[label][metric_key],
+                            )
                         )
-                    )
+
+        if mask_metrics.get("total"):
+            eval_results.append(
+                EvaluationResult(
+                    metric_name="masking_accuracy",
+                    metric_value=mask_metrics["masking_accuracy"],
+                )
+            )
 
         eval_results.extend([
             EvaluationResult(metric_name="mean_latency_ms", metric_value=timing["mean_ms"]),
             EvaluationResult(metric_name="median_latency_ms", metric_value=timing["median_ms"]),
             EvaluationResult(metric_name="p95_latency_ms", metric_value=timing["p95_ms"]),
-            EvaluationResult(metric_name="errors", metric_value=float(metrics["errors"])),
+            EvaluationResult(metric_name="errors", metric_value=float(total_errors)),
         ])
 
         callbacks.report_status(
@@ -894,8 +1118,8 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
             benchmark_index=config.benchmark_index,
             model_name=config.model.name if config.model else "nemo-guardrails",
             results=eval_results,
-            overall_score=metrics["accuracy"],
-            num_examples_evaluated=metrics["total"],
+            overall_score=overall_score,
+            num_examples_evaluated=total_prompts_evaluated,
             duration_seconds=duration,
             completed_at=datetime.now(UTC),
             evaluation_metadata={
@@ -907,8 +1131,9 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
                 "nemo_config": nemo_config_name,
                 "datasets": [dc.get("name", dc.get("hf_name", "unknown")) for dc in dataset_configs],
                 "workers": workers,
-                "errors": metrics["errors"],
-                "confusion_matrix": metrics.get("confusion_matrix", {}),
+                "errors": total_errors,
+                "confusion_matrix": cls_metrics.get("confusion_matrix", {}),
+                "masking": mask_metrics or None,
                 "timing": timing,
                 "parameters": params,
             },

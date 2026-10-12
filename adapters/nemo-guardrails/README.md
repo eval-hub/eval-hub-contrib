@@ -1,13 +1,54 @@
 # NeMo Guardrails Adapter
 
-Evaluates [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) configurations against classification datasets. The adapter starts a local NeMo Guardrails server, sends prompts to the `/v1/guardrail/checks` endpoint, and computes accuracy, precision, recall, F1, and latency metrics.
+Evaluates [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) configurations against labeled datasets. The adapter starts a local NeMo Guardrails server, sends prompts to the `/v1/checks` endpoint, and computes accuracy, precision, recall, F1, masking score, and latency metrics.
 
 ## Benchmarks
 
 | ID | Name | Datasets | Category |
 |----|------|----------|----------|
 | `prompt_injection` | Prompt Injection Detection | neuralchemy, deepset, jackhhao | safety |
-| `toxicity` | Toxicity and Profanity | Paul/hatecheck, Intuit toxicity | safety |
+| `toxicity_profanity_safety` | Toxicity and Profanity | Paul/hatecheck, Intuit toxicity | safety |
+| `pii` | Personally Identifiable Information | ai4privacy (classification) | safety |
+| `pii_masking` | PII Masking Quality | ai4privacy (masking score) | safety |
+| `tool_response_injection` | Tool Response Injection | rgeada/tool_response_injections | safety |
+
+## Dataset Types
+
+The adapter supports two dataset modes, selected per dataset entry in `provider.yaml`.
+
+### Classification datasets
+
+The standard mode. Each sample has a prompt and an expected `blocked` or `allowed` label. The adapter checks whether NeMo's guardrail decision matches the label.
+
+Required fields: `label_column`, `block_labels`, `pass_labels`.
+
+Metrics produced: `accuracy`, `blocked_precision`, `blocked_recall`, `blocked_f1`, `allowed_precision`, `allowed_recall`, `allowed_f1`.
+
+### Masking datasets
+
+Used when the guardrail is expected to redact or suppress specific values from its response. Each sample has a prompt and a set of values to check against the response content. Two sub-modes:
+
+#### `mask_transform_forbidden_values`
+
+The transform returns a list of values that **must not** appear in the response content. Each value is scored 1.0 (absent) or 0.0 (present). The per-value score contributes to the overall `masking_accuracy`.
+
+```yaml
+mask_column: privacy_mask
+mask_transform_forbidden_values: '[.[].value]'
+```
+
+#### `mask_transform_must_contain_values`
+
+The transform returns a list of values that **must** appear in the response content (e.g. replacement tags like `<PERSON>`). Each value is scored as the fraction of its characters matched in the content using `difflib.SequenceMatcher`, which handles gaps caused by partial redaction. Score of 1.0 means the value is fully present.
+
+```yaml
+mask_column: any_column
+mask_transform_must_contain_values: '["<DATE_TIME>", "<PERSON>", "<EMAIL>"]'
+```
+
+The two fields are mutually exclusive. A dataset with `mask_column` must specify exactly one.
+
+Metrics produced: `masking_accuracy` (mean score across all individual value checks across all prompts).
 
 ## Parameters
 
@@ -18,7 +59,7 @@ Evaluates [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) configura
 | `server_host` | `localhost` | Host for the NeMo Guardrails server |
 | `startup_timeout` | `120` | Seconds to wait for server startup |
 | `workers` | `1` | Concurrent evaluation workers |
-| `verbose` | `false` | Print each prompt, ground-truth label, and NeMo decision |
+| `verbose` | `false` | Print each prompt, ground-truth label, NeMo decision, response content, and per-value masking scores |
 | `sample_seed` | `67` | Seed for shuffling/subsampling datasets when a benchmark's `eval_limit` is set; a dataset entry can override it with its own `seed` field |
 | `chunk_strategy` | `chunk` | How to handle prompts longer than `chunk_size`. `chunk` splits into overlapping windows and scans the whole payload (blocked if any window trips); `limit` truncates to the first window and evaluates only that; `none` sends each prompt whole with no length bounding |
 | `chunk_size` | `2000` | Maximum characters per window. Ignored when `chunk_strategy` is `none` |
@@ -96,7 +137,9 @@ tail -f $NEMO_CONFIG/../server.log
 evalhub eval results <JOB_ID>
 ```
 
-The results include accuracy, precision, recall, F1 (for both blocked and allowed classes), and latency statistics (mean and p95).
+Classification benchmarks report accuracy, precision, recall, F1 (for both blocked and allowed classes), and latency statistics (mean and p95).
+
+Masking benchmarks report `masking_accuracy` (mean score across all individual value checks) and latency statistics.
 
 ## Running Tests
 

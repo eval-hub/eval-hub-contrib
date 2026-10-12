@@ -86,3 +86,11 @@ EVALHUB_JOB_SPEC_PATH=meta/job.json python main.py
 pip install -r requirements.txt -r requirements-test.txt
 pytest tests/ -m integration
 ```
+
+### Internal HTTPS endpoints
+
+The adapter adds the mounted OpenShift service CA at
+`/etc/pki/ca-trust/source/anchors/service-ca.crt` to the trust configuration of
+its OpenAI clients, including embedding and judge clients. The existing HTTPX
+trust configuration (`SSL_CERT_FILE`, `SSL_CERT_DIR`, or the default CA bundle)
+is preserved. Certificate and hostname verification remain enabled.

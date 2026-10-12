@@ -22,6 +22,8 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [WildGuard](https://arxiv.org/abs/2406.18495) | `quay.io/evalhub/community-wildguard:latest` | ✓ | AllenAI safety classification benchmark — evaluates a model's ability to classify prompt+response pairs as safe or unsafe, reporting accuracy and per-class recall |
 | [IFBench](https://arxiv.org/abs/2507.02833) | `quay.io/evalhub/community-ifbench:latest` | ✓ | AllenAI precise instruction-following benchmark — 58 OOD verifiable constraints with programmatic scoring (prompt-level loose accuracy) |
 | [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) | `quay.io/eval-hub/community-nemo-guardrails:latest` | ✓ | Safety rail evaluation — prompt injection and toxicity detection benchmarks |
+| [ToolEval](https://github.com/OpenBMB/ToolBench) | `quay.io/evalhub/community-tooleval:latest` | ✓ | Tool-use sequencing / multi-step planning (tool server image separate) |
+| [FollowBench](https://github.com/YJiangcm/FollowBench) | `quay.io/evalhub/community-followbench:latest` | ✓ | Multi-level instruction-following benchmark with HSR, SSR, and CSL metrics |
 
 ## Inspect AI Adapter
 
@@ -234,6 +236,29 @@ make push-ragas REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-swebench REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-nemo-guardrails REGISTRY=quay.io/your-org VERSION=v1.0.0
 ```
+
+## Publishing a Versioned Framework Image
+
+Merges to `main` automatically publish a `latest` image for adapters changed by the merge. Deployments should use a versioned image tag instead of `latest`.
+To publish a versioned image for a framework:
+
+1. Confirm the required adapter change has merged to `main` and that its `main` image build succeeded.
+2. Create a `v*` release branch from the intended `main` commit, for example:
+
+   ```bash
+   git fetch origin
+   git switch main
+   git pull --ff-only origin main
+   git switch -c v0.5.3
+   git push origin v0.5.3
+   ```
+
+3. In GitHub Actions, open **Build and push adapter images**. In **Use workflow from**, click **Run workflow** and enter the adapter directory name (for example, `ragas`) in the `adapter` field, and select the release branch from above (for example, `v0.5.3`).
+The workflow must run from the release branch for the published tag to be `v0.5.3` rather than `latest`.
+4. Wait for both the build and push steps to complete, then verify the resulting `quay.io/evalhub/community-<adapter>:vX.Y.Z` tag in Quay.
+5. Update the consuming deployment configuration, such as the TrustyAI Operator image parameter, to the versioned tag (or its immutable digest), and validate an evaluation job using that image.
+
+The workflow detects changed adapters for normal `main` pushes. A newly created release branch normally has no adapter-file diff of its own, so the explicit manual workflow run and adapter selection in step 3 are required to publish the versioned tag.
 
 ## Contributing
 

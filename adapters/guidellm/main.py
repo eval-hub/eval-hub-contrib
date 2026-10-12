@@ -616,6 +616,12 @@ def main() -> None:
         # Run benchmark job
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
 
+        # Persist benchmark metrics in MLflow before reporting the run ID.
+        run_id = callbacks.mlflow.save(results, adapter.job_spec)
+        if run_id:
+            results.mlflow_run_id = run_id
+            logger.info("MLflow run created: %s", run_id)
+
         # Report results to service
         callbacks.report_results(results)
 

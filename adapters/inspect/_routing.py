@@ -41,6 +41,18 @@ def route_model(model_name: str, client: str) -> str:
     return f"{client}/{model_name}"
 
 
+def grader_model_spec(model_name: str) -> str:
+    """Build an OpenAI-compatible grader model using isolated credentials.
+
+    Inspect's ``openai-api`` provider derives its credential and endpoint
+    environment variables from the provider name. Using a dedicated provider
+    namespace keeps the grader's OpenAI key/base URL separate from the target's
+    global ``OPENAI_API_KEY`` and ``OPENAI_BASE_URL`` without embedding secrets
+    in CLI arguments.
+    """
+    return f"openai-api/openai_judge/{model_name}"
+
+
 def build_role_spec(
     model_name: str,
     global_env: dict[str, str],
