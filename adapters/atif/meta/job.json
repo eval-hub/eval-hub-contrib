@@ -1,6 +1,7 @@
 {
   "id": "test-atif-job",
   "provider_id": "atif",
+  "experiment_name": "atif-trajectories",
   "benchmark_id": "atif_trajectory_default",
   "benchmark_index": 0,
   "model": {

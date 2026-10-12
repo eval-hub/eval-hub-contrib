@@ -1,460 +1,289 @@
-# ATIF EvalHub Adapter
+# ATIF EvalHub adapter
 
-The ATIF adapter evaluates pre-recorded [Agent Trajectory Interchange Format
-(ATIF)](https://github.com/agent-trajectory/atif) trajectories with an
-OpenAI-compatible language-model judge. It is an EvalHub provider that loads
-ATIF JSON files, derives evaluation criteria, scores trajectory steps, and
-publishes aggregate scores and failure-categorization metadata.
+Scores **already-recorded** [ATIF](https://github.com/agent-trajectory/atif)
+trajectories with an OpenAI-compatible judge. It never reruns an agent, executes
+trajectory tools, or substitutes for a benchmark's verifier.
 
-This adapter supports local files and mounted directories. It provides
-auto-scoring, adapter-local custom rubrics, and a file-backed
-benchmark/reference flow. Detailed training-selection results are stored in
-MLflow rather than returned through the EvalHub API.
+## Execution contract
 
-## How it works
+The SDK entry point is `run_benchmark_job(config, callbacks) -> JobResults`.
+`config.model` is the judge. **An `experiment_name` and the SDK MLflow callback
+are required**; missing configuration fails before judge work. A failed upload
+or a save returning no run ID fails the job rather than dropping detailed scores.
+The sample [`meta/job.json`](meta/job.json) contains an experiment name; configure
+the MLflow backend as documented by the SDK before a real run.
 
-For each EvalHub job, the adapter:
+1. Discover JSON files under the mounted input path.
+2. Identify and validate ATIF candidates, recording accepted/ignored/invalid files.
+3. Resolve per-task criteria and score interactions with bounded context.
+4. Score embedded descendants up to the configured depth; retain explicit failure
+   and unscored records, and aggregate successful scores.
+5. Persist versioned details, source-addressable training selections, and provenance.
+6. Return compact metrics and an artifact index through the SDK's existing generic
+   `artifacts` callback field, together with the MLflow run ID and Environment Card.
 
-1. Reads the job parameters and validates the configured thresholds.
-2. Discovers one JSON file or recursively discovers JSON files in a directory.
-3. Parses each file with the ATIF models from `eval-hub-sdk`.
-4. Validates the ATIF schema version, duplicate trajectory IDs, file size,
-   collection size, and step limits.
-5. Loads a named local reference rubric, loads a validated custom rubric, or
-   asks the runtime-sidecar judge to derive criteria from the first trajectory.
-6. Scores every step in every trajectory, including embedded subagent
-   trajectories, concurrently within the configured judge limit.
-7. Requests a failure category for steps whose score is below
-   `failure_threshold`.
-8. Aggregates step scores into a trajectory score and then an overall score.
-9. Optionally marks trajectories as training-eligible when their score meets
-   `training_threshold`.
-10. Uploads detailed training-selection results to MLflow when configured.
-11. Returns compact EvalHub metrics and the MLflow run ID.
+This adapter does **not** add the server/SDK `atif_trajectory` input discriminator
+or implement report UI browsing/filtering. Generic S3/PVC/Git mounting belongs to
+EvalHub. The artifact index enables a consumer to retrieve MLflow details; server
+storage, tenant-authorized retrieval, and UI support still need end-to-end testing.
 
-In Kubernetes, the adapter calls the judge through the runtime sidecar at:
+## Inputs and provenance
 
-```text
-http://localhost:8080/v1/chat/completions
-```
+`trajectory_path` defaults to `/test_data`. It accepts one JSON file or a directory
+recursively scanned in deterministic order. `trajectory.json` and `*.atif.json` are
+explicit candidates; other JSON objects with ATIF-like fields (`schema_version`,
+`atif_schema_version`, `agent`, or `steps`) are also candidates. Unrelated JSON in
+collections is ignored. Malformed JSON is recorded as invalid rather than guessed
+to be unrelated. A single explicitly supplied file is always validated.
 
-The judge receives JSON in the OpenAI chat message content. `JobSpec.model.url`
-and `JobSpec.model.name` are the authoritative judge configuration. The sidecar
-routes the local proxy request to that URL and resolves `model.auth.secret_ref`.
-The adapter sends only the reference token (`Bearer api-key:ref`) in Kubernetes;
-it never sends a raw mounted credential. Set `EVALHUB_JUDGE_PROXY_URL` only when
-the sidecar uses a non-default local address.
+The default `invalid_input_policy=skip_invalid` skips invalid candidates and records
+per-file outcomes. `fail_fast` aborts instead. No usable input always fails. Limits
+on total collection bytes and accepted steps are fatal, independently of the
+invalid-input policy. Discovery and per-file size are also bounded. Symlink paths
+and non-regular files are rejected; rubric files follow the same policy.
 
-For local or disconnected contract tests, the adapter uses `model.url` directly
-and accepts an OpenAI-compatible `/v1/chat/completions` endpoint. If the URL is
-HTTPS and the resolved local credential directory contains `ca_cert`, that CA
-file is used for TLS verification. In Kubernetes, TLS termination and upstream
-certificate handling belong to the sidecar. No external network access is
-required when `model.url` points to an on-cluster service.
+Schema versions are validated by the pinned SDK (`ATIF-v1.0`–`ATIF-v1.8`). This is
+not certification of every producer/version combination. `schema_version` must be
+explicit, including in embedded nodes. `atif_schema_version` is accepted as a
+root alias only if it agrees with the canonical field. Sequential step IDs,
+embedded references, and trajectory identity uniqueness are SDK-validated.
+Duplicate non-null IDs across accepted trees are invalid.
 
-## Input format
+Producer trajectory IDs are preserved. ID-less roots receive a stable
+source-qualified SHA-256 evaluation ID. Each node records the original producer
+ID, input SHA-256, local path, source URI, and a JSON Pointer selector (empty for a
+root; e.g. `/subagent_trajectories/0` for an embedded child).
 
-`trajectory_path` may point to:
+When `TEST_DATA_S3_BUCKET`/`TEST_DATA_S3_KEY` are available and files are under
+`/test_data`, source URIs are reconstructed using the generic init's layout,
+including its single-object basename rule. Otherwise they remain local paths.
+**This fallback is not a substitute for an init-produced per-object provenance
+manifest.** Ambiguous object/prefix layouts still require the cross-repository
+source-manifest contract. Local paths are not automatically downloadable URLs.
 
-- a single `.json` ATIF trajectory file; or
-- a directory, in which case all `*.json` files are discovered recursively in
-  deterministic path order.
+## Judge routing and authentication
 
-The adapter uses the SDK's `Trajectory` model for validation. It currently
-accepts the schema versions exposed by the installed SDK, including
-`ATIF-v1.0` through `ATIF-v1.8` in the validated environment.
+- **Kubernetes:** use the runtime sidecar (`http://localhost:8080` by default,
+  overridden by `EVALHUB_JUDGE_PROXY_URL`). With `model.auth` configured, send only
+  `Bearer api-key:ref`. The adapter does not read cluster credential files. The
+  sidecar owns upstream authentication and TLS.
+- **Local:** use the invocation's `model.url` directly. `model.auth.secret_ref` must
+  be an absolute `file:///` directory URL containing `api-key` and optionally
+  `ca_cert`. Send the actual local key; verify HTTPS using that CA or system trust.
+  Do not put credentials in the job spec, input, image, or source control. A
+  different on-disk JobSpec is never used to discover credentials.
 
-The canonical ATIF field is `schema_version`. For compatibility with the
-adapter ticket contract, `atif_schema_version` is also accepted as an alias;
-if both fields are present, they must agree.
+One asynchronous HTTP client is reused for the scoring phase. A fixed worker set
+bounds root concurrency; each tree's steps and children are scored sequentially.
+HTTP 429/5xx and transport/timeouts are retried with exponential backoff. Other
+HTTP failures and invalid score responses are not retried. Request budgets count
+attempts, including derivation, categorization, and retries. The scoring deadline
+cancels outstanding workers and closes the client.
 
-Each trajectory must contain valid ATIF data. Duplicate non-null
-`trajectory_id` values across files are rejected. Empty collections, malformed
-JSON, unsupported schema versions, oversized files, and trajectories exceeding
-the step limit fail the job during loading.
+## Scoring modes
 
-The default path is `/test_data/trajectory.json`, which is suitable for a
-mounted EvalHub test-data volume. For local execution, provide a path relative
-to the adapter's working directory or an absolute path.
+### Auto
 
-## Parameters
+Task resolution prefers non-empty `extra.task_instruction`, then the first
+textual `source=user` frame (including text blocks). This handles the checked-in
+real Harbor Terminus fixture. It does not infer a task from arbitrary tool output.
+If neither exists, auto mode fails that node; use explicit metadata or an explicit
+rubric. In multi-task user conversations the first user frame is only the initial
+task; subsequent messages remain history.
 
-Parameters are supplied through the EvalHub job's generic `parameters` object.
+Criteria are derived once **per distinct task within a job**, keyed by task and
+prompt-template hash. Each derivation must have 1–32 uniquely named criteria with
+positive finite weights. For compatibility, a missing description uses the
+criterion name; invalid JSON or invalid criteria never cause a generic fallback.
+Exact normalized criteria, criteria/task hashes, prompt version, benchmark
+registry version when applicable, and judge model/settings are persisted.
 
-| Parameter | Type | Default | Description |
-| --- | --- | ---: | --- |
-| `trajectory_path` | string | `/test_data/trajectory.json` | Single ATIF JSON file or directory containing ATIF JSON files. |
-| `scoring_mode` | string | `auto` | `auto` derives criteria; `benchmark` uses a built-in benchmark rubric; `reference` uses a local registry; `custom` uses `provider_params.rubric`. |
-| `benchmark_name` | string | unset | Built-in benchmark name required by `benchmark` mode. |
-| `reference_registry_path` | string | unset | JSON registry path required for `reference` mode. |
-| `reference_rubric` | string | `default` | Named rubric selected from the registry. |
-| `provider_params.rubric` | object/string | unset | Canonical inline rubric object or YAML/JSON document required for `custom` mode. Maximum size is 16 KiB for document strings. |
-| `custom_rubric` | object/string | unset | Backward-compatible alias for `provider_params.rubric`. |
-| `custom_rubric_path` | string | unset | Backward-compatible mounted YAML or JSON rubric path. Maximum size is 16 KiB. |
-| `concurrency_limit` | integer | `10` | Maximum number of top-level trajectories scored concurrently. Values below 1 are clamped to one for scoring. |
-| `max_file_bytes` | integer | `10485760` | Maximum size of an individual input file in bytes. Must be positive. |
-| `max_trajectory_files` | integer | `10000` | Maximum number of discovered JSON files. Must be positive. |
-| `max_steps_per_trajectory` | integer | `500` | Maximum number of steps in each trajectory node, including nested subagent nodes. The complete trajectory tree is additionally limited by `max_total_steps`. |
-| `max_subagent_depth` | integer | `3` | Maximum embedded-subagent depth below a root trajectory. At the limit, child trajectories are scored without further descent. |
-| `max_total_steps` | integer | `10000` | Maximum number of steps in one complete trajectory tree. |
-| `subagent_aggregation` | string | `flat` | `flat` averages every scored trajectory, `hierarchical` averages each parent with its descendants, and `separate` reports only root scores in the overall aggregate while retaining nested results. |
-| `failure_threshold` | float | `0.5` | Scores strictly below this value are treated as detectable failures and sent for categorization. Must be in `[0, 1]`. |
-| `completion_threshold` | float | `0.5` | Scores at or above this value mark a trajectory as passed. Must be in `[0, 1]`. |
-| `training_threshold` | float | unset | Optional score threshold for training eligibility. A trajectory is eligible when its aggregate score is greater than or equal to this value. Must be in `[0, 1]`. |
-| `judge_timeout_seconds` | float | `30` | Per-request HTTP timeout. Timeout failures are retried up to `judge_max_attempts` times. |
-| `judge_max_attempts` | integer | `3` | Maximum HTTP attempts per judge request, including the first attempt. 429, 5xx, and transport/timeout failures are retried. |
-| `judge_initial_backoff_seconds` | float | `0.5` | Initial exponential backoff for retryable judge failures. |
-| `max_judge_requests` | integer | unset | Optional job-wide cap on HTTP attempts, including retries. Exceeding it fails the current trajectory. |
-| `partial_result_policy` | string | `fail_fast` | `fail_fast` aborts on the first scoring failure; `skip_failed_trajectory` retains failure metadata and aggregates successful trajectories only. |
+### Benchmark and reference
 
-The adapter rejects an explicitly supplied invalid threshold before loading
-input. If `training_threshold` is omitted, `training_eligible` is `null` for
-each trajectory and the training manifest is empty.
+`scoring_mode=benchmark` requires `benchmark_name`:
+`swe-bench-lite`, `terminal-bench`, or `humaneval`. These are built-in assessment
+rubrics, **not benchmark execution or verifier-equivalent correctness claims**.
+Domain-owner approval and real-judge quality measurement remain release gates.
 
-### Example parameters
+`scoring_mode=reference` requires a local `reference_registry_path`:
 
 ```json
-{
-  "trajectory_path": "/test_data/atif",
-  "concurrency_limit": 4,
-  "max_file_bytes": 10485760,
-  "max_trajectory_files": 1000,
-  "max_steps_per_trajectory": 500,
-  "failure_threshold": 0.5,
-  "completion_threshold": 0.5,
-  "training_threshold": 0.8
-}
+{"rubrics": {"default": {
+  "criteria": [{"name": "correctness", "description": "Matches the reference", "weight": 1}],
+  "references": {"default": {"answer": "Expected answer"}}
+}}}
 ```
 
-## Scoring behavior
+`reference_rubric` selects the rubric. Reference selection uses
+`extra.reference_id`, then `trajectory_id`, then the optional `default` reference.
+Missing references fail explicitly.
 
-### Custom scoring
+### Custom
 
-Set `scoring_mode` to `custom` and provide `provider_params.rubric`. The rubric
-may be an object or a YAML/JSON document string. A rubric contains named criteria with descriptions and
-positive weights:
-
-```json
-{
-  "name": "answer_quality",
-  "aggregation": "weighted_mean",
-  "criteria": [
-    {"name": "correctness", "description": "Matches the expected result", "weight": 2},
-    {"name": "clarity", "description": "Is concise and understandable", "weight": 1}
-  ]
-}
-```
-
-For example, the same rubric can be supplied as YAML:
+`scoring_mode=custom` requires `provider_params.rubric`, an object or safe YAML/JSON
+document. Legacy `custom_rubric` and `custom_rubric_path` also work. Supply exactly
+one source. All forms are limited to 16 KiB; file reads are bounded before parsing.
 
 ```yaml
 name: answer_quality
 aggregation: weighted_mean
 criteria:
   - name: correctness
-    description: Matches the expected result
+    description: Addresses the requested task
     weight: 2
   - name: clarity
-    description: Is concise and understandable
+    description: Explains the result clearly
     weight: 1
 ```
 
-The older `custom_rubric` and `custom_rubric_path` parameters remain accepted.
-Only one rubric source may be supplied. Rubrics are parsed and fully validated
-when the job starts, before trajectory loading or judge calls.
+Criteria have unique non-empty names/descriptions (up to 2,000 characters each)
+and positive finite weights. The judge returns `{"scores": {"correctness": 0.9,
+"clarity": 0.8}}`; the adapter validates the exact criterion set and computes
+`weighted_mean`, `mean`, or `minimum` locally.
 
-The supported aggregation modes are `weighted_mean`, `mean`, and `minimum`.
-The rubric must contain 1–32 unique criteria, each with a non-empty name and
-description. Criterion names and descriptions are limited to 2,000 characters;
-the complete rubric is limited to 16 KiB.
+### Context, scores, and aggregation
 
-For every step, the judge must return exactly one score in `[0, 1]` for every
-criterion:
+Every scoring/categorization request carries the task, tool definitions, current
+step, recent prior interactions/observations, and available parent delegation
+evidence. A dedicated system instruction treats all trajectory/rubric/reference
+content as untrusted evidence. This reduces instruction confusion; it is **not a
+proof of prompt-injection immunity**.
 
-```json
-{"scores": {"correctness": 0.9, "clarity": 0.8}}
-```
+Context projection omits top-level step metrics, token arrays, and arbitrary
+producer extras. Image/audio references are replaced by explicit omitted markers;
+this is text-based evaluation, not multimodal judging. Half of `max_context_bytes` is allocated to context/current-step
+evidence. Oldest history is dropped first and the omitted count is retained per
+scored step. Oversized required task/current-step/delegation evidence or a complete
+request over the limit fails explicitly; it is not silently clipped and scored.
 
-The adapter validates every score and computes the aggregate locally. Missing,
-extra, malformed, non-finite, or out-of-range criterion scores fail the job
-closed. The rubric and trajectory are sent as structured JSON data, and the
-judge is explicitly instructed to treat them as data rather than executable
-instructions.
+For backward compatibility, **all recorded frames (including user/system frames)
+are scored** and participate in denominators. This choice is recorded as
+`atif_scored_frames=all`; changing to agent-only scoring requires a versioned
+contract change. Genuine zero scores are valid; malformed, boolean, non-finite,
+missing, or out-of-range scores are protocol failures, not low-quality scores.
 
-### Benchmark/reference scoring
+A node's own score is its mean step score. Its subtree aggregate is weighted by
+scored step counts: `(own_mean * own_steps + sum(child_aggregate * child_steps)) /
+(own_steps + sum(child_steps))`. Root depth is zero. Nodes beyond
+`max_subagent_depth` remain explicitly unscored; required failed/omitted children
+make ancestors `complete=false`. The all-failed-root case always fails the job.
+`partial_result_policy=skip_failed_trajectory` otherwise retains failed nodes and
+allows successful roots to contribute. Repeated agent names are not cycles.
 
-Set `scoring_mode` to `benchmark` and provide a registered `benchmark_name` to
-use the built-in benchmark rubric:
+Collection `atif_overall_score` depends on `subagent_aggregation`:
 
-```json
-{
-  "scoring_mode": "benchmark",
-  "benchmark_name": "swe-bench-lite"
-}
-```
-
-The initial built-in registry contains `swe-bench-lite`, `terminal-bench`, and
-`humaneval`. It supplies stable scoring criteria for an existing ATIF
-trajectory; it does not download data, execute the benchmark, or rerun the
-agent. The registry version and selected benchmark are included in result
-metadata.
-
-For user-managed rubrics, set `scoring_mode` to `reference` and provide
-`reference_registry_path` and a `reference_rubric`. The registry is adapter-local, so it can be mounted with
-benchmark data or baked into the adapter image without a server change. Its
-minimum shape is:
-
-```json
-{
-  "version": 1,
-  "rubrics": {
-    "answer_quality": {
-      "criteria": [
-        {"name": "correctness", "description": "Matches the expected result", "weight": 1.0}
-      ],
-      "references": {
-        "trajectory-id": {"answer": "Expected answer"},
-        "default": {"answer": "Fallback reference"}
-      }
-    }
-  }
-}
-```
-
-Criteria names must be unique, and weights must be finite positive numbers.
-Each rubric must contain at least one criterion and one reference fixture. The
-adapter selects a fixture using `extra.reference_id`, then `trajectory_id`,
-then the optional `default` fixture. Missing fixtures fail the job rather than
-silently falling back to auto scoring. The selected rubric and reference are
-included in each judge request; score validation, failure categorization,
-training eligibility, and aggregate metrics remain the same as auto scoring.
-
-### Criteria derivation
-
-The adapter sends the first trajectory's `extra.task_instruction` to the
-judge and asks for concise JSON criteria. If that response is not valid JSON,
-the adapter uses a fallback criterion named `default` with weight `1.0`.
-
-### Step scoring
-
-Each top-level step is sent to the judge with the derived criteria. The judge
-must return JSON containing a numeric `score` in the inclusive range `[0, 1]`.
-Scores must be finite; booleans, missing values, non-numeric values, malformed
-JSON, and out-of-range values are rejected.
-
-A genuine score of `0.0` is valid. Invalid score responses raise
-`JudgeResponseError` and fail the evaluation rather than being silently
-converted to zero.
-
-The trajectory score is the arithmetic mean of its top-level step scores. An
-empty `steps` list currently produces a score of `0.0`; this behavior remains
-part of the proof-of-concept contract and should be distinguished from a judge
-protocol failure.
+- `flat`: mean of each scored node's own mean (not a global step-weighted mean).
+- `hierarchical`: mean of root subtree aggregates.
+- `separate`: mean of root own scores; descendants remain in detail artifacts.
 
 ### Failure categorization
 
-When a step receives a valid score below `failure_threshold`, it is a
-detectable agent-behavior failure and the adapter makes a second judge request
-for a category. A score at or above the threshold is not sent for
-categorization. Supported categories are:
+Steps below `failure_threshold` receive one of `tool_selection_failure`,
+`context_loss`, `policy_boundary_violation`, `reasoning_failure`, or `none`.
+Invalid responses are `uncategorized`; transport failures have
+`categorization_status=judge_error`. Raw malformed responses and raw exception
+messages are not persisted in score results. Responses are capped at 64 KiB and
+retained rationales at 2,000 characters. Valid judge rationales may contain
+sensitive evidence and still require normal artifact access/retention controls.
 
-- `tool_selection_failure`
-- `context_loss`
-- `policy_boundary_violation`
-- `reasoning_failure`
-- `none`
+`atif_failure_categorization_rate` measures the fraction of low-scoring trajectories
+for which **every** low-scoring step receives an actionable category. `none` is a
+valid abstention, not actionable coverage. The no-detected-failures convention is
+1.0. This proxy metric does not establish ground-truth detection or category
+accuracy. `tests/test_failure_categorization_contract.py` is a mocked request
+contract test, **not** the strategy's two-real-judge ≥90% acceptance demonstration.
 
-Each categorized step includes `category`, a `[0, 1]` `confidence`, a
-`rationale`, and `categorization_status: categorized`. Invalid or incomplete
-categorization responses are retained as `uncategorized` with the raw response
-in the step metadata and `categorization_status: uncategorized`. If the
-categorization judge is unavailable after retries, the step is retained as
-`uncategorized` with `categorization_status: judge_error`; transport details
-are logged but are not copied into result metadata. Categorization rate
-is calculated over trajectories containing detectable failures: a trajectory
-counts as fully categorized only when all of its detectable failures receive a
-valid category response, including `none` when the judge finds no actionable
-failure.
+## Results, training, and retrieval
 
-The fixed acceptance corpus is in `tests/fixtures/failure_corpus/`. The
-repeatable offline acceptance test
-`tests/test_failure_categorization_acceptance.py` runs it through the adapter
-with two deterministic judge profiles representing an open model
-(`llama-3.1-8b-instruct`) and a proprietary model (`gpt-4.1`). Both profiles
-must achieve at least 90% categorization coverage and category accuracy. Run:
+Detailed result schema version **2** adds explicit completeness, node relationships,
+source selectors, criteria provenance, and loading diagnostics. Without a training
+threshold, retrieve `atif/evaluation_results.json` from the returned MLflow run.
+With a threshold, retrieve:
 
-```sh
-PYTHONPATH=. pytest -q tests/test_failure_categorization_acceptance.py
-```
+- `atif/report.json` — job metadata, Environment Card, summaries, and cohort paths;
+- `atif/training/eligible_trajectories.json`;
+- `atif/training/ineligible_trajectories.json`.
 
-### Nested subagent scoring
+Cohorts are **flat and disjoint**: records contain parent/child IDs, not embedded
+copies of nodes in the other cohort. Eligibility requires complete subtree scoring
+and `aggregate_score >= training_threshold`. A node passes only if complete and
+above `completion_threshold`. No threshold means eligibility is unspecified.
+These are score-based selections, not claims about privacy, licensing, or training
+suitability.
 
-Embedded `subagent_trajectories` are scored recursively and retained under
-their parent in `evaluation_metadata["atif_trajectories"]`. Each trajectory has
-its own `score`; parents also expose `aggregate_score`. Parent aggregates use
-the trajectory step counts as weights, including recursively aggregated child
-scores. Nested trajectory IDs must be unique across the complete input
-collection. The depth and total-step limits prevent unbounded work. Repeated
-ancestor agent identities are logged as circular delegations and scored in
-isolation without further descent.
+Manifest entries contain `source_uri`, `trajectory_id`, `selector`, and `sha256`.
+Selections are **node-level**, not permission to export entire source files or
+embedded subtrees. An eligible root may contain an ineligible descendant. A
+consumer must resolve the selector, exclude separately selected descendants from
+the node export, and verify the hash. `source_paths` is informational only.
 
-The default `flat` mode includes root and nested scores in the overall mean.
-`hierarchical` rolls each child aggregate into its parent before calculating
-the root-level mean. `separate` keeps nested scores available as diagnostics
-but calculates the overall score from roots only. Failure and categorization
-diagnostics include all scored trajectories.
+The completion event's `artifacts["evalhub.atif_report"]` carries the schema version,
+MLflow run ID, artifact paths, scored/eligible counts, completeness, and selection
+unit. Details/manifests stay out of the completion event. The adapter passes full
+summaries to SDK persistence before compaction so searchable MLflow eligible
+counts include embedded nodes correctly. A generic index is not a finished UI.
 
-### Retries and errors
+The Environment Card summarizes common schema, agent/version, model, and tool
+counts. Mixed collections use null for non-common fields and mark `heterogeneous`.
+Agent version is never mislabeled as model version. Per-node metadata/provenance
+is retained in artifacts; duplicate full raw trajectories are not stored by default.
 
-HTTP 429 and 5xx responses, timeouts, and transport failures are retried up to
-`judge_max_attempts` with exponential backoff. Other HTTP errors, invalid score
-responses, and input validation errors fail the job under the default
-`fail_fast` policy. With `skip_failed_trajectory`, failed trajectories are
-retained in `atif_trajectories` with `status=failed`, error type/message, and
-are excluded from aggregate metrics; successful trajectories still complete.
-The request cap counts every HTTP attempt, including retries. A transport
-failure during separate categorization is isolated to that step and reported
-as `judge_error`.
+## Parameters
 
-## Results
+All options live in `JobSpec.parameters`; see [`provider.yaml`](provider.yaml).
 
-### Judge observability
-
-When EvalHub OpenTelemetry metrics are enabled, the adapter records the
-following job-labelled metrics through the SDK telemetry provider:
-
-| Metric | Type | Meaning |
+| Parameter | Default | Meaning |
 | --- | --- | --- |
-| `atif.judge.call.latency` | Histogram (ms) | Latency of every judge HTTP attempt. |
-| `atif.judge.call.count` | Counter | Total judge HTTP attempts, including retries. |
-| `atif.judge.call.success` | Counter | Attempts returning a non-error HTTP response. |
-| `atif.judge.call.errors` | Counter | HTTP, timeout, and transport-error attempts. |
-| `atif.judge.token.count` | Counter | Prompt and completion tokens from response `usage`. |
+| `trajectory_path` | `/test_data` | File or mounted collection directory |
+| `scoring_mode` | `auto` | `auto`, `benchmark`, `reference`, `custom` |
+| `benchmark_name` | unset | Required in benchmark mode |
+| `reference_registry_path` / `reference_rubric` | unset / `default` | Reference configuration |
+| `provider_params.rubric` | unset | Custom object or YAML/JSON; legacy aliases above |
+| `concurrency_limit` | 10 | Positive maximum concurrent root workers |
+| `max_file_bytes` | 10485760 | Per-file byte limit |
+| `max_trajectory_files` | 10000 | Discovery file limit |
+| `max_collection_bytes` | 67108864 | Collection-wide byte budget |
+| `max_steps_per_trajectory` | 500 | Per-node step limit |
+| `max_total_steps` | 10000 | Collection-wide accepted-tree step budget |
+| `invalid_input_policy` | `skip_invalid` | Or `fail_fast` |
+| `max_subagent_depth` | 3 | Root is depth 0 |
+| `subagent_aggregation` | `flat` | Or `hierarchical`, `separate` |
+| `partial_result_policy` | `fail_fast` | Or `skip_failed_trajectory` |
+| `failure_threshold` / `completion_threshold` | 0.5 / 0.5 | Inclusive completion, strict failure threshold |
+| `training_threshold` | unset | Optional complete-node selection threshold |
+| `max_context_bytes` | 65536 | Complete serialized judge request bound (minimum 1024) |
+| `judge_timeout_seconds` | 30 | Per-attempt HTTP timeout |
+| `judge_max_attempts` | 3 | 1–10 attempts per request |
+| `judge_initial_backoff_seconds` | 0.5 | Nonnegative initial exponential backoff |
+| `max_judge_requests` | unset | Optional job-wide HTTP attempt budget |
+| `job_timeout_seconds` | 3600 | Deadline for scoring, including derivation/retries |
 
-All metrics include `evalhub.job_id` and `atif.scoring_mode`; error points also
-include a bounded `error.type` and HTTP response status where available. The
-result metadata includes the corresponding per-job counts and token totals.
-After the first trajectory completes, the adapter logs an estimated remaining
-time based on the first trajectory's elapsed scoring time.
+## Observability, build, and tests
 
-The adapter returns the following `EvaluationResult` metrics:
+OTel exports `atif.judge.call.{latency,count,success,errors}`,
+`atif.judge.protocol.errors`, and input/output `atif.judge.token.count`.
+HTTP success and valid protocol responses are deliberately separate signals.
+The old root-count ETA was removed because it ignored nested work/concurrency.
 
-| Metric | Meaning |
-| --- | --- |
-| `atif_overall_score` | Mean score across all loaded trajectories. |
-| `atif_trajectory_count` | Number of scored trajectories. |
-| `atif_failure_categorization_rate` | Fraction of trajectories with detectable failures for which every detectable failure was categorized; `1.0` when no detectable failures exist. |
-
-The EvalHub `overall_score` is set to `atif_overall_score`, and
-`num_examples_evaluated` is the number of loaded trajectories.
-
-## Evaluation metadata
-
-`evaluation_metadata` includes:
-
-```text
-atif_trajectories
-atif_trajectory_metadata
-atif_scoring_mode
-atif_failure_threshold
-atif_detectable_failure_count
-atif_categorized_failure_count
-atif_uncategorized_failure_count
-atif_categorization_judge_error_count
-atif_detectable_failure_trajectory_count
-atif_categorized_failure_trajectory_count
-atif_failure_categorization_rate
-atif_training_threshold
-atif_training_manifest
-```
-
-Each entry in `atif_trajectories` contains the trajectory ID, local source
-path, aggregate score, completion threshold, `passed` status, step count, per-step results, detectable-failure count,
-categorized-failure count, uncategorized-failure count,
-categorization-judge-error count, and `training_eligible`. Each step result
-contains its trajectory ID, zero-based step index, step ID, and score. When a
-step contains tool calls, it also contains `tool_name` (the first callable) and
-`tool_names` (all distinct callables). Detectable failures additionally contain
-`category`, `confidence`, `rationale`, and `categorization_status`; malformed
-responses also contain `raw_judge_response`.
-
-The detailed result is JSON serializable through the SDK `JobResults` model
-(`model_dump(mode="json")`). A trajectory passes when its aggregate score is
-greater than or equal to `completion_threshold`; this status is independent of
-failure categorization and training eligibility.
-
-When `training_threshold` is set, trajectories are classified using
-`aggregate_score >= training_threshold`. When MLflow is configured, the adapter
-uploads two JSON artifacts in the same run:
-
-- `atif/training/eligible_trajectories.json`
-- `atif/training/ineligible_trajectories.json`
-
-The artifacts contain detailed trajectory and step results, eligibility,
-threshold, counts, and source paths. For S3-backed test data, source paths are
-reported as their original `s3://` URIs; local and PVC inputs retain their
-filesystem paths. Failed trajectories are included in the ineligible artifact.
-The EvalHub completion event contains only aggregate
-metrics and the MLflow run ID; it does not contain the detailed trajectory tree
-or training manifest. MLflow also records the threshold and cohort counts as
-searchable run parameters. Without a threshold, the adapter preserves the
-single `atif/evaluation_results.json` artifact behavior.
-
-`atif_trajectory_metadata` contains the parsed schema version, trajectory and
-session identity, task instruction, agent name/version, model, tool-definition
-count, and the original steps including tool calls, observations, and reasoning
-traces. The same identity is emitted in the typed SDK Environment Card under
-`env_card.custom`.
-
-## Provider and container
-
-The provider ID is `atif`, and the default benchmark ID is
-`atif_trajectory_default`. The provider manifest is in [`provider.yaml`](provider.yaml).
-The adapter image is built from [`Containerfile`](Containerfile) and runs
-`python main.py` as a non-root user.
-
-The provider's benchmark pass criterion is an `atif_overall_score` of at least
-`0.5`. This benchmark criterion is separate from `failure_threshold` and
-`training_threshold`:
-
-- `failure_threshold` controls failure categorization.
-- `training_threshold` controls training eligibility metadata.
-- The benchmark pass criterion controls the benchmark's pass/fail evaluation.
-
-## Local development and tests
-
-From this adapter directory, install the runtime and test requirements, then
-run the tests:
+From the repository root:
 
 ```sh
-pip install -r requirements.txt -r requirements-test.txt
-PYTHONPATH=. pytest -q tests
+make test-atif
+make smoke-atif REGISTRY=localhost VERSION=dev  # build + non-root, no-network smoke
+make lock-atif                                 # regenerate Python 3.12 dependency pins
 ```
 
-The test suite covers ATIF parsing and limits, supported schema versions,
-duplicate IDs, malformed input, score validation, genuine zero scores,
-failure categorization, 429 retries, training eligibility, and invalid
-training thresholds. Benchmark-mode tests cover built-in rubric lookup,
-dispatch, unknown names, missing names, validation, and reproducibility;
-reference-mode tests cover rubric selection, reference injection into judge
-prompts, and missing-fixture failures.
-Proxy contract tests additionally cover Kubernetes credential indirection,
-configured model routing, and local HTTPS endpoints with optional CA bundles.
+The container includes every application module and tests installed-image imports,
+JobSpec parsing, scoring, and artifact construction without host mounts. The smoke
+judge/backend are mocked; this is not a live inference or upload test. PR CI runs
+unit/contract tests and the container smoke. Python runtime dependencies are pinned
+in `requirements.lock`; the SDK uses an immutable public HTTPS Git commit rather
+than an SSH development branch. **That integration commit is not an approved SDK
+release.** The UBI base tag/build toolchain also need release-managed provenance.
 
-## Current limitations
-
-- Input is local or mounted filesystem data; S3 discovery and download are
-  owned by a downstream EvalHub input contract.
-- Benchmark rubrics are currently adapter-local and built in; server-managed
-  benchmark catalogs and Harbor verifier execution are not implemented.
-- Nested `subagent_trajectories` are scored recursively with configurable depth,
-  total-step, duplicate-ID, and aggregation controls.
-- Partial results are supported through `partial_result_policy`, but resume and
-  checkpointing are not implemented.
-- Per-step judge diagnostics are limited; full structured redacted diagnostics
-  and typed result fields require additional work.
-- Training eligibility is exposed through the typed SDK trajectory summaries and
-  detailed MLflow artifacts; the completion API intentionally carries only the
-  MLflow run ID and aggregate metrics.
-- Production image promotion, dependency onboarding, and release management
-  are outside this adapter directory.
+Inputs and results are retained in memory under collection budgets, not streamed
+or sharded. Large-collection memory/throughput sizing, real-judge categorization,
+MLflow upload/download and tenant tests, disconnected sidecar tests, report UX,
+server/SDK input/provenance agreement, and release/dependency promotion remain
+separate acceptance gates. Do not mark the full strategy delivered based solely
+on these mocked tests.

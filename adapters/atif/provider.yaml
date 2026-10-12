@@ -35,7 +35,8 @@ benchmarks:
 parameters:
   - name: trajectory_path
     type: string
-    description: Path to the ATIF trajectory file or directory to evaluate.
+    default: /test_data
+    description: Path to an ATIF file or mixed producer directory. Requires job experiment_name for durable MLflow artifacts.
   - name: scoring_mode
     type: string
     default: auto
@@ -71,6 +72,22 @@ parameters:
     type: integer
     default: 10000
     description: Maximum number of ATIF JSON files in the input collection
+  - name: max_collection_bytes
+    type: integer
+    default: 67108864
+    description: Collection-wide input byte budget, including ignored and invalid files.
+  - name: max_total_steps
+    type: integer
+    default: 10000
+    description: Maximum steps across all accepted roots and embedded descendants.
+  - name: max_context_bytes
+    type: integer
+    default: 65536
+    description: Maximum serialized judge request bytes; history gets half this budget and drops oldest frames first.
+  - name: invalid_input_policy
+    type: string
+    default: skip_invalid
+    description: skip_invalid records invalid candidates and continues; fail_fast aborts. No valid inputs always fails.
   - name: max_steps_per_trajectory
     type: integer
     default: 500
@@ -78,7 +95,7 @@ parameters:
   - name: max_subagent_depth
     type: integer
     default: 3
-    description: Maximum recursive subagent depth; trajectories at the limit are scored without further descent
+    description: Root depth is zero; descendants beyond this depth are explicitly unscored and make ancestors incomplete.
   - name: subagent_aggregation
     type: string
     default: flat
@@ -89,11 +106,15 @@ parameters:
     description: Scores below this threshold trigger failure categorization
   - name: training_threshold
     type: float
-    description: Optional score threshold for marking trajectories training-eligible
+    description: Optional aggregate score threshold for complete node-level training selections. Embedded nodes require manifest JSON Pointer selectors; this does not qualify whole source files.
   - name: completion_threshold
     type: float
     default: 0.5
     description: Score threshold at or above which a trajectory is marked passed
+  - name: job_timeout_seconds
+    type: float
+    default: 3600
+    description: Deadline for the complete scoring phase, including rubric derivation and retries.
   - name: judge_timeout_seconds
     type: float
     default: 30

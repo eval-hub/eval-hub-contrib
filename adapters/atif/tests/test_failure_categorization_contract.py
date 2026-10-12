@@ -1,4 +1,4 @@
-"""Repeatable offline acceptance test for the ATIF failure taxonomy."""
+"""Offline request/response contract tests, not empirical judge-quality acceptance."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from main import ATIFAdapter
-
 
 CORPUS_DIR = Path(__file__).parent / "fixtures" / "failure_corpus"
 JOB_SPEC_PATH = Path(__file__).resolve().parent.parent / "meta" / "job.json"
@@ -26,7 +25,7 @@ def _load_cases() -> list[dict[str, Any]]:
     return cases
 
 
-def test_failure_categorization_acceptance_corpus() -> None:
+def test_failure_categorization_request_contract_on_labelled_corpus() -> None:
     cases = _load_cases()
     assert len(cases) >= 8
     adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
@@ -64,6 +63,7 @@ def test_failure_categorization_acceptance_corpus() -> None:
         assert payload["score"] == 0.2
         assert set(payload["allowed_categories"]) == expected_categories
         assert payload["request"].startswith("Classify this low-scoring agent step.")
-        assert "Return only JSON with category, confidence, and rationale" in payload[
-            "request"
-        ]
+        assert (
+            "Return only JSON with category, confidence, and rationale"
+            in payload["request"]
+        )

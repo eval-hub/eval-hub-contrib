@@ -1,0 +1,29 @@
+name: Test ATIF
+
+on:
+  push:
+    branches: [main]
+    paths: ['adapters/atif/**', '.github/workflows/test-atif.yml', 'Makefile']
+  pull_request:
+    paths: ['adapters/atif/**', '.github/workflows/test-atif.yml', 'Makefile']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: make test-atif
+      - name: Lint and formatting
+        run: |
+          uv tool run ruff==0.16.9 check adapters/atif
+          uv tool run ruff==0.16.9 format --check adapters/atif
+      - name: Build and smoke test packaged adapter without host mounts or network
+        run: make smoke-atif BUILD_TOOL=docker REGISTRY=localhost VERSION=test
