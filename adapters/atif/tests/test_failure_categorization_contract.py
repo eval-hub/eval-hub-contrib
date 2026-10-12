@@ -67,6 +67,7 @@ def test_failure_categorization_request_contract_on_labelled_corpus() -> None:
             "Return only JSON with category, confidence, and rationale"
             in payload["request"]
         )
+        assert "do not wrap it in markdown code fences" in payload["request"]
 
 
 def test_failure_categorization_accepts_fenced_judge_response() -> None:

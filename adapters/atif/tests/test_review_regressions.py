@@ -157,6 +157,7 @@ def test_system_instruction_and_request_budget(adapter):
         body = json.loads(route.calls[0].request.content)
         assert [m["role"] for m in body["messages"]] == ["system", "user"]
         assert "untrusted" in body["messages"][0]["content"]
+        assert "no markdown code fences" in body["messages"][0]["content"]
         adapter._max_context_bytes = 1024
         with pytest.raises(JudgeResponseError, match="max_context_bytes"):
             asyncio.run(adapter._judge_call({"step": "x" * 2000}))
