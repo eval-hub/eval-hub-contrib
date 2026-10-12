@@ -24,7 +24,7 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) | `quay.io/eval-hub/community-nemo-guardrails:latest` | ✓ | Safety rail evaluation — prompt injection and toxicity detection benchmarks |
 | [ToolEval](https://github.com/OpenBMB/ToolBench) | `quay.io/evalhub/community-tooleval:latest` | ✓ | Tool-use sequencing / multi-step planning (tool server image separate) |
 | [FollowBench](https://github.com/YJiangcm/FollowBench) | `quay.io/evalhub/community-followbench:latest` | ✓ | Multi-level instruction-following benchmark with HSR, SSR, and CSL metrics |
-| [promptfoo](https://github.com/promptfoo/promptfoo) | `quay.io/evalhub/community-promptfoo:latest` | ✓ | Assertion-based prompt regression testing (`promptfoo-eval`) and adversarial red-team scanning (`promptfoo-redteam`) — 170+ OWASP LLM Top 10 plugins plus industry-vertical compliance packs (financial, medical, insurance, telecom, and more) |
+| [promptfoo](https://github.com/promptfoo/promptfoo) | `quay.io/evalhub/community-promptfoo:latest` | ✓ | Assertion-based prompt regression testing (`promptfoo-eval`) and adversarial red-team scanning (`promptfoo-redteam`) — 155 plugins covering the OWASP LLM Top 10 plus industry-vertical compliance packs (financial, medical, insurance, telecom, and more) |
 
 ## Inspect AI Adapter
 
@@ -161,9 +161,9 @@ The promptfoo adapter integrates [promptfoo](https://github.com/promptfoo/prompt
 **2 benchmarks:**
 
 - **`promptfoo-eval`** — assertion-based prompt/model regression testing. Loads prompts and assertions from CSV, JSONL, or JSON; scores each test case against configurable assertion types (`contains`, `llm-rubric`, `javascript`, and more) and reports overall pass rate.
-- **`promptfoo-redteam`** — adversarial red-team scanning using promptfoo's plugin catalog (170+ plugins as of promptfoo 0.123.1). Plugins are mapped to the OWASP LLM Top 10 and extend into RAG-specific attacks (`rag-poisoning`, `rag-document-exfiltration`, `rag-source-attribution`), API/access-control attacks (`bola`, `bfla`, `rbac`, `debug-access`), MCP-specific attacks (`mcp`), and industry-vertical compliance packs (financial, medical, insurance, telecom, real estate, pharmacy, e-commerce, coding-agent) that complement rather than duplicate Garak's probe set.
+- **`promptfoo-redteam`** — adversarial red-team scanning using promptfoo's plugin catalog (155 plugins as of promptfoo 0.123.1). Plugins are mapped to the OWASP LLM Top 10 and extend into RAG-specific attacks (`rag-poisoning`, `rag-document-exfiltration`, `rag-source-attribution`), API/access-control attacks (`bola`, `bfla`, `rbac`, `debug-access`), MCP-specific attacks (`mcp`), and industry-vertical compliance packs (financial, medical, insurance, telecom, real estate, pharmacy, e-commerce, coding-agent) that complement rather than duplicate Garak's probe set.
 
-**Three model roles for red-team runs** — the target model (under test), a generation model (produces adversarial inputs), and a grading model (scores whether each attack succeeded) can each use a different endpoint with a different credential.
+**Two model roles for red-team runs** — the target model (under test) and a shared generation and grading model (produces the adversarial inputs and scores whether each attack succeeded). The shared model can use a different endpoint and credential from the target: `generation_provider` selects it, and `generation_provider_url` and `generation_provider_api_key` configure its endpoint and credential.
 
 > **Required: configure a grading model.** Without an explicit `generation_provider`, the grader defaults to a promptfoo-hosted model that is unreachable on a self-hosted or air-gapped deployment. When unreachable, every red-team result silently reports as `pass=false` regardless of the target model's actual behavior — the grading pipeline is broken, not the target. This is a verified behavior, confirmed on a live OpenShift cluster (September 2026): results were 100% "failed" until `generation_provider` was passed as the grader endpoint. Pass the `generation_provider` parameter to route both attack generation and result grading to the same operator-configured model.
 
@@ -189,10 +189,12 @@ The promptfoo adapter integrates [promptfoo](https://github.com/promptfoo/prompt
 
 | Parameter | Benchmark | Default | Description |
 |---|---|---|---|
-| `plugins` | promptfoo-redteam | OWASP LLM Top 10 subset | Plugin IDs or category aliases to run; use `promptfoo redteam plugins` to list all 170+ |
+| `plugins` | promptfoo-redteam | OWASP LLM Top 10 subset | Plugin IDs or category aliases to run; use `promptfoo redteam plugins` to list all 155 |
 | `redteam_purpose` | promptfoo-redteam | _(none)_ | Plain-language description of what the application does; used to generate contextually relevant attacks rather than generic ones |
 | `num_tests` | promptfoo-redteam | `5` | Number of test cases per plugin |
-| `generation_provider` | promptfoo-redteam | promptfoo default (unreachable on self-hosted) | OpenAI-compatible URL for the model that generates adversarial content **and** grades results — set this to avoid silent all-failed results |
+| `generation_provider` | promptfoo-redteam | promptfoo default (unreachable on self-hosted) | promptfoo provider ID of the model that generates adversarial content **and** grades results (passed to `redteam generate --provider` and `eval --grader`) — set this to avoid silent all-failed results |
+| `generation_provider_url` | promptfoo-redteam | target model URL | Base URL of the OpenAI-compatible endpoint serving `generation_provider`; only used when `generation_provider` is set |
+| `generation_provider_api_key` | promptfoo-redteam | `GENERATION_PROVIDER_API_KEY` env var, then the target model's key | API key for the `generation_provider` endpoint; only used when `generation_provider` is set |
 | `prompts` / `tests` | promptfoo-eval | _(none)_ | Generate a promptfoo config from these instead of `config_yaml` |
 | `config_yaml` | promptfoo-eval | _(none)_ | Base promptfoo project config: `targets` is removed, `providers` is replaced with the EvalHub model endpoint, and `evaluateOptions.timeoutMs` / `maxConcurrency` are set from `request_timeout` / `max_concurrency`; other `evaluateOptions` keys are preserved |
 | `max_concurrency` | both | `4` | Maximum concurrent API calls |
