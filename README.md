@@ -166,9 +166,9 @@ The promptfoo adapter integrates [promptfoo](https://github.com/promptfoo/prompt
 
 > **Required: configure a grading model.** Without an explicit `generation_provider`, the grader defaults to a promptfoo-hosted model that is unreachable on a self-hosted or air-gapped deployment. When unreachable, every red-team result silently reports as `pass=false` regardless of the target model's actual behavior — the grading pipeline is broken, not the target. This is a verified behavior, confirmed on a live OpenShift cluster (September 2026): results were 100% "failed" until `generation_provider` was passed as the grader endpoint. Pass the `generation_provider` parameter to route both attack generation and result grading to the same operator-configured model.
 
-**Native `eval.json` always retained** — every completed job persists promptfoo's own `eval.json` through three independent paths so results can be reopened in promptfoo's own viewer (`promptfoo import`) or fed into CI tooling:
+**Native `eval.json` export** — every completed job can persist promptfoo's own `eval.json` through three independent paths so results can be reopened in promptfoo's own viewer (`promptfoo import`) or fed into CI tooling. The embedded path is size-gated and the other two depend on the configured exports, so an oversized `eval.json` is not retained when neither export is configured:
 
-1. Always embedded in `JobResults.additional_info["promptfoo_eval_json"]` (size-gated at `PROMPTFOO_EVAL_JSON_MAX_BYTES`)
+1. Embedded in `JobResults.additional_info["promptfoo_eval_json"]` when it is within `PROMPTFOO_EVAL_JSON_MAX_BYTES`; otherwise omitted and flagged with `promptfoo_eval_json_omitted`
 2. Attached as an MLflow artifact when `experiment_name` is set — verified end-to-end against a running RHOAI MLflow deployment; see [adapters/promptfoo/README.md](adapters/promptfoo/README.md) for required RBAC
 3. Attached as an OCI artifact when `config.exports.oci` is set
 
@@ -193,7 +193,7 @@ The promptfoo adapter integrates [promptfoo](https://github.com/promptfoo/prompt
 | `num_tests` | promptfoo-redteam | `5` | Number of test cases per plugin |
 | `generation_provider` | promptfoo-redteam | promptfoo default (unreachable on self-hosted) | OpenAI-compatible URL for the model that generates adversarial content **and** grades results — set this to avoid silent all-failed results |
 | `prompts` / `tests` | promptfoo-eval | _(none)_ | Generate a promptfoo config from these instead of `config_yaml` |
-| `config_yaml` | promptfoo-eval | _(none)_ | Pass an existing promptfoo project config verbatim (providers are always overwritten with the EvalHub model endpoint) |
+| `config_yaml` | promptfoo-eval | _(none)_ | Base promptfoo project config: `targets` is removed, `providers` is replaced with the EvalHub model endpoint, and `evaluateOptions.timeoutMs` / `maxConcurrency` are set from `request_timeout` / `max_concurrency`; other `evaluateOptions` keys are preserved |
 | `max_concurrency` | both | `4` | Maximum concurrent API calls |
 | `request_timeout` | both | `120` | Per-request timeout in seconds |
 | `experiment_name` | both | _(none)_ | MLflow experiment name; when set, results and `eval.json` are logged as an MLflow run |
