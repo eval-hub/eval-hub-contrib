@@ -22,6 +22,7 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [WildGuard](https://arxiv.org/abs/2406.18495) | `quay.io/evalhub/community-wildguard:latest` | ✓ | AllenAI safety classification benchmark — evaluates a model's ability to classify prompt+response pairs as safe or unsafe, reporting accuracy and per-class recall |
 | [IFBench](https://arxiv.org/abs/2507.02833) | `quay.io/evalhub/community-ifbench:latest` | ✓ | AllenAI precise instruction-following benchmark — 58 OOD verifiable constraints with programmatic scoring (prompt-level loose accuracy) |
 | [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) | `quay.io/eval-hub/community-nemo-guardrails:latest` | ✓ | Safety rail evaluation — prompt injection and toxicity detection benchmarks |
+| [ToolEval](https://github.com/OpenBMB/ToolBench) | `quay.io/evalhub/community-tooleval:latest` | ✓ | Tool-use sequencing / multi-step planning (tool server image separate) |
 | [FollowBench](https://github.com/YJiangcm/FollowBench) | `quay.io/evalhub/community-followbench:latest` | ✓ | Multi-level instruction-following benchmark with HSR, SSR, and CSL metrics |
 
 ## Inspect AI Adapter

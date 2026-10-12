@@ -1,6 +1,7 @@
 """Log parsing and result extraction for the Inspect AI adapter."""
 
 import logging
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -96,19 +97,35 @@ _DISPERSION_METRICS = frozenset({"stderr", "bootstrap_stderr", "std", "var"})
 
 
 def _is_dispersion_metric(metric_name: str) -> bool:
-    """True for ``<scorer>/<metric>`` names whose metric is a spread, e.g. ``match/stderr``."""
-    return metric_name.rsplit("/", 1)[-1] in _DISPERSION_METRICS
+    """Recognize dispersion metrics, including category-specific standard errors."""
+    name = metric_name.rsplit("/", 1)[-1]
+    return name in _DISPERSION_METRICS or name.endswith(("_stderr", "_sterr"))
 
 
-def compute_overall_score(results: list[EvaluationResult], mode: str) -> float | None:
+def compute_overall_score(
+    results: list[EvaluationResult], mode: str, benchmark_id: str | None = None
+) -> float | None:
     """Representative score for logging and ``JobResults.overall_score``.
 
-    Petri/Bloom report the primary ``concerning/mean``. Otherwise this is the mean of
+    HLE and BFCL report their accuracy metric. Petri/Bloom report
+    ``concerning/mean``. For other benchmarks this remains the mean of
     the score metrics, excluding dispersion metrics such as stderr. EvalHub selects the
     primary metric for pass/fail from the full results list via ``primary_score.metric``.
     """
     if not results:
         return None
+
+    def selected_score(metric_name: str) -> float | None:
+        matches = [r for r in results if r.metric_name == metric_name]
+        if len(matches) != 1 or not math.isfinite(float(matches[0].metric_value)):
+            logger.warning("Representative metric %s is missing, ambiguous or non-finite", metric_name)
+            return None
+        return round(float(matches[0].metric_value), 4)
+
+    if benchmark_id == "inspect/hle":
+        return selected_score("hle/regex_judge/hle/accuracy")
+    if benchmark_id == "inspect/bfcl":
+        return selected_score("bfcl_scorer/accuracy")
 
     if mode in ("petri", "bloom"):
         primary = next(

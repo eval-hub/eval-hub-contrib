@@ -757,7 +757,9 @@ def test_standard_overall_score_excludes_stderr(job_spec_path, standard_eval_log
     assert adapter._compute_overall_score(results, "standard") == pytest.approx(accuracy)
 
 
-@pytest.mark.parametrize("stderr_name", ["stderr", "bootstrap_stderr", "std", "var"])
+@pytest.mark.parametrize("stderr_name", [
+    "stderr", "bootstrap_stderr", "std", "var", "simple_python_sterr", "category_stderr",
+])
 def test_overall_score_ignores_dispersion_metrics(job_spec_path, stderr_name):
     """accuracy 1.0 with a zero-width spread reports 1.0, not 0.5."""
     adapter = InspectAdapter(job_spec_path=job_spec_path)
@@ -921,8 +923,36 @@ def test_standard_happy_path(monkeypatch, job_spec_path, standard_log_file):
     assert results.eval_card is None
     assert results.additional_info is not None
     assert results.additional_info["mode"] == "standard"
-    assert results.additional_info["zero_shot"] == results.overall_score
+    assert "zero_shot" not in results.additional_info
     assert "alt_prompting" not in results.additional_info
+
+
+@pytest.mark.parametrize(
+    "task_args, expected_zero_shot",
+    [
+        ({"fewshot": 0}, True),
+        ({"few_shot": "0"}, True),
+        ({"few_shots": []}, True),
+        ({"fewshot": 5}, False),
+        ({"fewshot": True}, False),
+        ({"fewshot_shuffle": True}, False),
+        ({}, False),
+    ],
+)
+def test_standard_zero_shot_metadata_requires_confirmed_task_setting(task_args, expected_zero_shot):
+    info = InspectAdapter._build_additional_info(
+        mode="standard",
+        task_spec="inspect_evals/mmlu_pro",
+        inspect_version="0.3.276",
+        overall_score=0.713,
+        eval_status="success",
+        num_samples=10,
+        eval_log={"eval": {"task_args": task_args}},
+    )
+
+    assert ("zero_shot" in info) is expected_zero_shot
+    if expected_zero_shot:
+        assert info["zero_shot"] == 0.713
 
 
 # ---------------------------------------------------------------------------

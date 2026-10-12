@@ -116,7 +116,9 @@ def test_followbench_judge_and_callbacks_integration(monkeypatch):
     adapter = main_module.FollowBenchAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
     config = copy.deepcopy(adapter.job_spec)
-    config.parameters["num_examples"] = 1
+    # EvalHub serializes this standard limit to the JobSpec root field.
+    config.parameters.pop("num_examples", None)
+    config.num_examples = 1
 
     model_client = MagicMock(name="model_client")
     judge_client = MagicMock(name="judge_client")
