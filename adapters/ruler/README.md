@@ -197,6 +197,18 @@ HTTP status when available. API failures are never recorded as empty answers or
 included in the score. A successful response containing an empty or incorrect
 answer is still scored normally and remains in the sample count.
 
+## EvalCard prompting metadata
+
+The official CWE and variable-tracking prompts include one worked example by
+default. Their EvalCard scores use `alt_prompting`, with a `1-shot` description;
+`zero_shot` is omitted. CWE follows `num_fewshot` in its generator task
+configuration. NIAH, FWE and QA scores use `zero_shot`.
+
+Each EvalCard row averages task overall scores within the same category and
+shot count. For example, a job containing CWE and FWE produces separate
+aggregation rows for their 1-shot and zero-shot scores. This metadata does not
+change the generated prompts, per-task metrics or job `overall_score`.
+
 ## Per-example diagnostics
 
 The result directory includes `samples.jsonl` alongside `summary.csv` and
