@@ -5,7 +5,7 @@ import json
 import runpy
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -40,6 +40,36 @@ def test_bad_download_does_not_replace_existing_file(tmp_path):
         with pytest.raises(ValueError, match="Checksum mismatch"):
             materialize_asset(path, "https://example.org/data", DIGEST)
     assert path.read_bytes() == b"original"
+
+
+@pytest.mark.parametrize("existing", [True, False])
+def test_oversized_download_is_bounded_and_preserves_cache(monkeypatch, tmp_path, existing):
+    """Reject oversized responses before checksum validation or cache writes."""
+    limit = len(PAYLOAD) - 1
+    monkeypatch.setattr("prepare_assets.MAX_ASSET_BYTES", limit)
+    path = tmp_path / "words.json"
+    if existing:
+        path.write_bytes(b"original")
+    response = io.BytesIO(PAYLOAD + b"unexpected extra data")
+    response.read = Mock(wraps=response.read)
+    with patch("prepare_assets.urlopen", return_value=response):
+        with pytest.raises(ValueError, match=f"Download for words.json exceeds {limit} bytes"):
+            materialize_asset(path, "https://example.org/data", DIGEST)
+    response.read.assert_called_once_with(limit + 1)
+    if existing:
+        assert path.read_bytes() == b"original"
+    else:
+        assert not path.exists()
+    assert not path.with_suffix(".download").exists()
+
+
+def test_download_at_size_limit_is_accepted(monkeypatch, tmp_path):
+    """Accept a valid asset exactly at the download-size boundary."""
+    monkeypatch.setattr("prepare_assets.MAX_ASSET_BYTES", len(PAYLOAD))
+    path = tmp_path / "words.json"
+    with patch("prepare_assets.urlopen", return_value=io.BytesIO(PAYLOAD)):
+        materialize_asset(path, "https://example.org/data", DIGEST)
+    assert path.read_bytes() == PAYLOAD
 
 
 def test_matching_checksum_still_requires_json(tmp_path):

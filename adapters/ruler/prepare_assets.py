@@ -12,6 +12,7 @@ from urllib.request import urlopen
 
 logger = logging.getLogger(__name__)
 ESSAY_FILE = "PaulGrahamEssays.json"
+MAX_ASSET_BYTES = 200 * 1024 * 1024
 
 ASSETS = {
     "english_words.json": (
@@ -37,7 +38,9 @@ def materialize_asset(path: Path, url: str, digest: str, timeout: int = 60) -> N
         json.loads(path.read_bytes())
         return
     with urlopen(url, timeout=timeout) as response:
-        payload = response.read()
+        payload = response.read(MAX_ASSET_BYTES + 1)
+    if len(payload) > MAX_ASSET_BYTES:
+        raise ValueError(f"Download for {path.name} exceeds {MAX_ASSET_BYTES} bytes")
     if hashlib.sha256(payload).hexdigest() != digest:
         raise ValueError(f"Checksum mismatch for {path.name}")
     json.loads(payload)
