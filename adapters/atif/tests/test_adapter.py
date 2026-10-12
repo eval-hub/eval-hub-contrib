@@ -97,6 +97,92 @@ def test_atif_adapter_happy_path(job_spec):
     ]
 
 
+def test_auto_scoring_accepts_fenced_derivation_response(job_spec):
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+    callbacks = FakeCallbacks()
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://localhost:8080/v1/chat/completions").mock(
+            side_effect=[
+                Response(
+                    200,
+                    text="```json\n"
+                    '{"criteria": [{"name": "quality", "weight": 1.0}]}\n'
+                    "```",
+                ),
+                Response(200, text=json.dumps({"score": 0.8})),
+                Response(200, text=json.dumps({"score": 0.6})),
+            ]
+        )
+
+        result = adapter.run_benchmark_job(job_spec, callbacks)
+
+    assert result.overall_score == 0.7
+
+
+def test_auto_scoring_accepts_fenced_step_score_response(job_spec):
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+    callbacks = FakeCallbacks()
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://localhost:8080/v1/chat/completions").mock(
+            side_effect=[
+                Response(
+                    200,
+                    text=json.dumps({"criteria": [{"name": "quality", "weight": 1.0}]}),
+                ),
+                Response(200, text='```json\n{"score": 0.8}\n```'),
+                Response(200, text='```json\n{"score": 0.6}\n```'),
+            ]
+        )
+
+        result = adapter.run_benchmark_job(job_spec, callbacks)
+
+    assert result.overall_score == 0.7
+
+
+def test_auto_scoring_accepts_score_json_wrapped_in_prose(job_spec):
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+    callbacks = FakeCallbacks()
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://localhost:8080/v1/chat/completions").mock(
+            side_effect=[
+                Response(
+                    200,
+                    text=json.dumps({"criteria": [{"name": "quality", "weight": 1.0}]}),
+                ),
+                Response(
+                    200,
+                    text='```json\n{"score": 0.8}\n```\n\n### Evaluation:\n'
+                    "The step meets the criteria.",
+                ),
+                Response(
+                    200,
+                    text='Here is the score as requested:\n{"score": 0.6}\n'
+                    "Hope this helps.",
+                ),
+            ]
+        )
+
+        result = adapter.run_benchmark_job(job_spec, callbacks)
+
+    assert result.overall_score == 0.7
+
+
+def test_derivation_still_rejects_unfenced_prose(job_spec):
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+    callbacks = FakeCallbacks()
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://localhost:8080/v1/chat/completions").mock(
+            return_value=Response(200, text="Here are the criteria you asked for.")
+        )
+
+        with pytest.raises(JudgeResponseError, match="invalid derived criteria"):
+            adapter.run_benchmark_job(job_spec, callbacks)
+
+
 def test_detailed_results_include_identity_pass_status_and_serialize(job_spec):
     adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
     callbacks = FakeCallbacks()

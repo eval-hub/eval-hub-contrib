@@ -67,3 +67,28 @@ def test_failure_categorization_request_contract_on_labelled_corpus() -> None:
             "Return only JSON with category, confidence, and rationale"
             in payload["request"]
         )
+
+
+def test_failure_categorization_accepts_fenced_judge_response() -> None:
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+    step = {
+        "step_id": 1,
+        "source": "agent",
+        "message": "I will look up information.",
+        "tool_calls": [],
+    }
+
+    async def judge_call(payload: dict[str, Any]) -> str:
+        return (
+            "```json\n"
+            '{"category": "reasoning_failure", "confidence": 0.9, '
+            '"rationale": "The step does not follow from the task."}\n'
+            "```"
+        )
+
+    adapter._judge_call = judge_call  # type: ignore[method-assign]
+    result = asyncio.run(adapter._categorize_failure(step, 0.2, CRITERIA))
+
+    assert result["category"] == "reasoning_failure"
+    assert result["categorization_status"] == "categorized"
+    assert result["confidence"] == 0.9

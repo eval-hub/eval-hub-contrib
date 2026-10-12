@@ -158,6 +158,69 @@ class CustomRubricError(ValueError):
     """Raised when custom scoring configuration is invalid."""
 
 
+def _strip_code_fence(response: str) -> str:
+    """Strip one surrounding markdown code fence from a judge response.
+
+    Chat models routinely wrap JSON in fenced blocks even when asked for bare
+    JSON. Only a single leading and trailing fence (with an optional language
+    tag) is removed; any other malformed wrapping still fails JSON parsing and
+    is reported as a protocol error rather than silently reinterpreted.
+    """
+    text = response.strip()
+    if not (text.startswith("```") and text.endswith("```") and len(text) >= 6):
+        return text
+    body = text[3:-3]
+    first_newline = body.find("\n")
+    if first_newline != -1 and body[:first_newline].strip().isalnum():
+        body = body[first_newline + 1 :]
+    return body.strip()
+
+
+def _parse_judge_json(response: str) -> Any:
+    """Parse a judge response that may be wrapped in fences or commentary.
+
+    Chat models frequently wrap or trail the requested JSON with markdown
+    fences or prose. Direct parsing is attempted first, then a single leading
+    fence is stripped, then the first balanced JSON object in the text is
+    extracted (ignoring braces inside string literals). A response containing
+    no valid JSON object remains a protocol error; this never invents,
+    defaults, or repairs a value.
+    """
+    text = _strip_code_fence(response)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start : index + 1])
+                    except json.JSONDecodeError:
+                        break
+        start = text.find("{", start + 1)
+    raise json.JSONDecodeError("no valid JSON object in judge response", text, 0)
+
+
 class ATIFAdapter(FrameworkAdapter):
     _judge_client: httpx.AsyncClient | None
     _credentials: ModelCredentials | None
@@ -1379,7 +1442,7 @@ class ATIFAdapter(FrameworkAdapter):
         }
         response = await self._judge_call(prompt)
         try:
-            parsed = json.loads(response)
+            parsed = _parse_judge_json(response)
             # Names-only criteria from older judges remain valid, but never use a
             # generic fallback for malformed derivation responses.
             if isinstance(parsed, dict) and isinstance(parsed.get("criteria"), list):
@@ -1523,7 +1586,7 @@ class ATIFAdapter(FrameworkAdapter):
         step_id: Any,
     ) -> tuple[float, dict[str, float]]:
         try:
-            parsed = json.loads(response)
+            parsed = _parse_judge_json(response)
         except json.JSONDecodeError as exc:
             raise JudgeResponseError(
                 "judge returned non-JSON custom score response "
@@ -1583,7 +1646,7 @@ class ATIFAdapter(FrameworkAdapter):
     ) -> float:
         """Parse and validate one judge score without masking protocol errors."""
         try:
-            parsed = json.loads(response)
+            parsed = _parse_judge_json(response)
         except json.JSONDecodeError as exc:
             raise JudgeResponseError(
                 "judge returned non-JSON score response "
@@ -1646,7 +1709,7 @@ class ATIFAdapter(FrameworkAdapter):
         }
         try:
             raw_response = await self._judge_call(payload)
-            parsed = json.loads(raw_response)
+            parsed = _parse_judge_json(raw_response)
             category = parsed["category"]
             if category not in FAILURE_CATEGORIES:
                 raise ValueError("unknown failure category")
