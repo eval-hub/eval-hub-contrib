@@ -1814,10 +1814,12 @@ class ATIFAdapter(FrameworkAdapter):
         model_url = job_spec.model.url.strip().rstrip("/")
         if not model_url:
             raise ValueError("model.url is required for the ATIF judge")
-        if os.getenv("EVALHUB_MODE") == "k8s":
-            judge_url = os.getenv("EVALHUB_JUDGE_PROXY_URL", "http://localhost:8080")
-        else:
-            judge_url = model_url
+        # The server rewrites the JobSpec model URL to the runtime sidecar in
+        # Kubernetes mode and preserves the provider path, so the job model URL
+        # is authoritative in every mode. EVALHUB_JUDGE_PROXY_URL remains an
+        # explicit override for deployments that route judge traffic elsewhere.
+        proxy_url = os.getenv("EVALHUB_JUDGE_PROXY_URL", "").strip().rstrip("/")
+        judge_url = proxy_url or model_url
         if judge_url.endswith("/v1"):
             judge_url = f"{judge_url}/chat/completions"
         elif not judge_url.endswith("/v1/chat/completions"):

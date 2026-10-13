@@ -63,8 +63,9 @@ source-manifest contract. Local paths are not automatically downloadable URLs.
 
 ## Judge routing and authentication
 
-- **Kubernetes:** use the runtime sidecar (`http://localhost:8080` by default,
-  overridden by `EVALHUB_JUDGE_PROXY_URL`). With `model.auth` configured, send only
+- **Kubernetes:** call the invocation's `model.url`; the server rewrites it to the
+  runtime sidecar and preserves the provider path. `EVALHUB_JUDGE_PROXY_URL` remains
+  an explicit override for unusual deployments. With `model.auth` configured, send only
   `Bearer api-key:ref`. The adapter does not read cluster credential files. The
   sidecar owns upstream authentication and TLS.
 - **Local:** use the invocation's `model.url` directly. `model.auth.secret_ref` must

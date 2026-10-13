@@ -1554,7 +1554,9 @@ def test_k8s_proxy_uses_job_model_and_reference_credential(job_spec, monkeypatch
         update={
             "model": job_spec.model.model_copy(
                 update={
-                    "url": "https://internal-judge.apps.cluster.test/v1",
+                    # The server rewrites model.url to the sidecar proxy and
+                    # preserves the provider path.
+                    "url": "http://localhost:8080/llm/v1",
                     "name": "cluster-judge",
                 }
             )
@@ -1569,7 +1571,7 @@ def test_k8s_proxy_uses_job_model_and_reference_credential(job_spec, monkeypatch
     )
 
     with respx.mock(assert_all_called=True) as mock:
-        route = mock.post("http://localhost:8080/v1/chat/completions").mock(
+        route = mock.post("http://localhost:8080/llm/v1/chat/completions").mock(
             return_value=Response(200, json={"score": 0.8})
         )
         response = asyncio.run(adapter._judge_call({"request": "score"}))
@@ -1578,6 +1580,21 @@ def test_k8s_proxy_uses_job_model_and_reference_credential(job_spec, monkeypatch
     request = route.calls[0].request
     assert request.headers["authorization"] == "Bearer api-key:ref"
     assert json.loads(request.content)["model"] == "cluster-judge"
+
+
+def test_k8s_judge_proxy_url_overrides_job_model_url(monkeypatch):
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    monkeypatch.setenv("EVALHUB_JUDGE_PROXY_URL", "http://judge-proxy.cluster.test")
+
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post("http://judge-proxy.cluster.test/v1/chat/completions").mock(
+            return_value=Response(200, json={"score": 0.7})
+        )
+        response = asyncio.run(adapter._judge_call({"request": "score"}))
+
+    assert json.loads(response)["score"] == 0.7
+    assert len(route.calls) == 1
 
 
 def test_local_judge_uses_configured_endpoint_and_ca_bundle(
