@@ -466,15 +466,15 @@ def test_benchmark_scoring_rejects_unknown_name(job_spec):
 
     with pytest.raises(ReferenceRegistryError, match="unknown benchmark") as error:
         adapter.run_benchmark_job(job_spec, FakeCallbacks())
-    assert "swe-bench-lite" in str(error.value)
+    assert "swebench-verified" in str(error.value)
 
 
 def test_benchmark_registry_returns_stable_independent_rubrics():
-    first = RubricRegistry.get("SWE-BENCH-LITE")
-    second = RubricRegistry.get("swe-bench-lite")
+    first = RubricRegistry.get("SWEBENCH-VERIFIED")
+    second = RubricRegistry.get("swebench-verified")
     assert first == second
     first["criteria"][0]["name"] = "changed"
-    assert RubricRegistry.get("swe-bench-lite")["criteria"][0]["name"] != "changed"
+    assert RubricRegistry.get("swebench-verified")["criteria"][0]["name"] != "changed"
 
 
 def test_benchmark_registry_validates_seed_rubrics():
@@ -487,13 +487,24 @@ def test_benchmark_registry_validates_seed_rubrics():
         assert all(criterion["weight"] > 0 for criterion in rubric["criteria"])
 
 
+def test_registry_seeds_are_harbor_benchmark_names():
+    # Seed names must exist in Harbor's benchmark registry under the exact
+    # same name (harbor-framework/harbor registry.json, commit 4778ceba,
+    # verified 2026-10-13).  Pins the confirmed seed set against drift.
+    assert RubricRegistry.names() == (
+        "swebench-verified",
+        "terminal-bench",
+        "humanevalfix",
+    )
+
+
 def test_benchmark_scoring_is_reproducible_for_equivalent_input(job_spec):
     job_spec = job_spec.model_copy(
         update={
             "parameters": {
                 **(job_spec.parameters or {}),
                 "scoring_mode": "benchmark",
-                "benchmark_name": "swe-bench-lite",
+                "benchmark_name": "swebench-verified",
             }
         }
     )

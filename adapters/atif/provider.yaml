@@ -43,7 +43,7 @@ parameters:
     description: Scoring mode; auto derives criteria, benchmark selects a built-in benchmark rubric, reference uses a local registry, and custom uses an inline or mounted rubric.
   - name: benchmark_name
     type: string
-    description: Built-in benchmark rubric selected when scoring_mode is benchmark (swe-bench-lite, terminal-bench, or humaneval).
+    description: Built-in benchmark rubric selected when scoring_mode is benchmark (swebench-verified, terminal-bench, or humanevalfix).
   - name: reference_registry_path
     type: string
     description: Path to a JSON rubric registry required when scoring_mode is reference.
