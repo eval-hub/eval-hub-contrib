@@ -20,6 +20,10 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [DeepEval](https://github.com/confident-ai/deepeval) | `quay.io/evalhub/community-deepeval:latest` | ✓ | LLM-as-judge evaluation: faithfulness, relevancy, hallucination, correctness, summarization, and multi-turn conversation metrics |
 | [RULER](https://github.com/NVIDIA/RULER) | `quay.io/evalhub/community-ruler:latest` | ✓ | NVIDIA RULER long-context benchmark — 13 synthetic tasks across needle-in-a-haystack, variable tracking, aggregation, and QA at configurable context lengths |
 | [WildGuard](https://arxiv.org/abs/2406.18495) | `quay.io/evalhub/community-wildguard:latest` | ✓ | AllenAI safety classification benchmark — evaluates a model's ability to classify prompt+response pairs as safe or unsafe, reporting accuracy and per-class recall |
+| [IFBench](https://arxiv.org/abs/2507.02833) | `quay.io/evalhub/community-ifbench:latest` | ✓ | AllenAI precise instruction-following benchmark — 58 OOD verifiable constraints with programmatic scoring (prompt-level loose accuracy) |
+| [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) | `quay.io/eval-hub/community-nemo-guardrails:latest` | ✓ | Safety rail evaluation — prompt injection and toxicity detection benchmarks |
+| [ToolEval](https://github.com/OpenBMB/ToolBench) | `quay.io/evalhub/community-tooleval:latest` | ✓ | Tool-use sequencing / multi-step planning (tool server image separate) |
+| [FollowBench](https://github.com/YJiangcm/FollowBench) | `quay.io/evalhub/community-followbench:latest` | ✓ | Multi-level instruction-following benchmark with HSR, SSR, and CSL metrics |
 
 ## Inspect AI Adapter
 
@@ -116,6 +120,39 @@ Score guide: 0.5 or below is near random chance; 0.85 or above is strong perform
 
 See [adapters/wildguard/README.md](adapters/wildguard/README.md) for full documentation and example job specs.
 
+## IFBench Adapter
+
+The IFBench adapter integrates [IFBench](https://github.com/allenai/IFBench) (AllenAI, Apache 2.0) — a benchmark of 58 out-of-domain verifiable instruction constraints. The adapter loads the bundled IFBench test set (299 prompts), generates completions via an OpenAI-compatible endpoint, and scores responses with programmatic constraint checkers from the upstream `ifbench` package.
+
+**1 benchmark:**
+
+- **`ifbench`** — evaluates prompt-level instruction-following accuracy (strict and loose), plus instruction-level scores.
+
+**Metrics:**
+
+| Metric | Description |
+|---|---|
+| `accuracy` | Prompt-level accuracy for the configured `scoring_mode` (`overall_score`) |
+| `prompt_level_strict` | Prompt-level strict accuracy |
+| `prompt_level_loose` | Prompt-level loose accuracy (paper default) |
+| `inst_level_strict` | Instruction-level strict accuracy |
+| `inst_level_loose` | Instruction-level loose accuracy |
+
+Score guide: GPT-4o scores ~34% on this benchmark; pass threshold in curated collections is typically `0.05` (5%).
+
+**Key parameters:**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `scoring_mode` | `loose` | Primary scoring mode (`loose` or `strict`) |
+| `num_examples` | _(full set)_ | Cap the number of prompts (useful for smoke tests) |
+| `max_concurrent` | `4` | Concurrent API calls to the model endpoint |
+| `max_tokens` | `2048` | Max generation tokens per prompt |
+| `temperature` | `0.0` | Sampling temperature (paper uses 0) |
+| `request_timeout` | `120` | Per-request timeout in seconds |
+
+See [adapters/ifbench/README.md](adapters/ifbench/README.md) for full documentation and example job specs.
+
 ## JobPhase Lifecycle
 
 Every adapter must report progress through the `JobPhase` lifecycle via `callbacks.report_status()`. The server validates phases against a fixed set, so adapters must emit them in order and use only the values listed below.
@@ -175,6 +212,7 @@ make image-inspect
 make image-deepeval
 make image-ragas
 make image-swebench
+make image-nemo-guardrails
 
 # Build all adapters
 make images
@@ -186,6 +224,7 @@ make test-deepeval
 make test-ragas
 make test-swebench
 make test-clear
+make test-nemo-guardrails
 make tests
 
 # Push to registry
@@ -195,7 +234,31 @@ make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-deepeval REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-ragas REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-swebench REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-nemo-guardrails REGISTRY=quay.io/your-org VERSION=v1.0.0
 ```
+
+## Publishing a Versioned Framework Image
+
+Merges to `main` automatically publish a `latest` image for adapters changed by the merge. Deployments should use a versioned image tag instead of `latest`.
+To publish a versioned image for a framework:
+
+1. Confirm the required adapter change has merged to `main` and that its `main` image build succeeded.
+2. Create a `v*` release branch from the intended `main` commit, for example:
+
+   ```bash
+   git fetch origin
+   git switch main
+   git pull --ff-only origin main
+   git switch -c v0.5.3
+   git push origin v0.5.3
+   ```
+
+3. In GitHub Actions, open **Build and push adapter images**. In **Use workflow from**, click **Run workflow** and enter the adapter directory name (for example, `ragas`) in the `adapter` field, and select the release branch from above (for example, `v0.5.3`).
+The workflow must run from the release branch for the published tag to be `v0.5.3` rather than `latest`.
+4. Wait for both the build and push steps to complete, then verify the resulting `quay.io/evalhub/community-<adapter>:vX.Y.Z` tag in Quay.
+5. Update the consuming deployment configuration, such as the TrustyAI Operator image parameter, to the versioned tag (or its immutable digest), and validate an evaluation job using that image.
+
+The workflow detects changed adapters for normal `main` pushes. A newly created release branch normally has no adapter-file diff of its own, so the explicit manual workflow run and adapter selection in step 3 are required to publish the versioned tag.
 
 ## Contributing
 

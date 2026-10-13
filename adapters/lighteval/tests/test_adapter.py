@@ -18,6 +18,7 @@ import pytest
 from evalhub.adapter import JobCallbacks, JobPhase, JobResults, OCIArtifactResult
 from evalhub.models import ResultType
 from main import LightEvalAdapter
+import main as adapter_main
 
 # Canned output matching LightEval's results JSON structure.
 # Based losely on https://github.com/huggingface/lighteval/blob/main/docs/source/saving-and-reading-results.mdx#general-configuration
@@ -158,6 +159,122 @@ def test_oci_export_persists_artifacts(tmp_path, mock_callbacks, monkeypatch, mo
     # OCI artifact is attached to results
     assert results.oci_artifact is not None
     assert results.oci_artifact.digest == "sha256:fake"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("oci_enabled", [False, True])
+def test_main_uploads_result_artifacts_to_mlflow(
+    adapter, monkeypatch, mock_hf_api, oci_enabled
+):
+    """MLflow receives the generated result files with or without OCI exports."""
+    from evalhub.adapter import DefaultCallbacks
+
+    job = adapter.job_spec.model_dump(mode="json")
+    job["experiment_name"] = "test-lighteval"
+    if oci_enabled:
+        job["exports"] = {
+            "oci": {
+                "coordinates": {
+                    "oci_host": "quay.io",
+                    "oci_repository": "test-org/test-repo",
+                    "oci_tag": "test-tag",
+                }
+            }
+        }
+    job_path = adapter.local_jobs_base_path / "meta" / "job.json"
+    job_path.write_text(json.dumps(job))
+    adapter = LightEvalAdapter(job_spec_path=str(job_path))
+    callbacks = MagicMock()
+    callbacks.create_oci_artifact.return_value = OCIArtifactResult(
+        digest="sha256:fake", reference="fake:latest",
+    )
+    callbacks.mlflow.save.return_value = "test-run-id"
+    monkeypatch.setattr(adapter_main, "LightEvalAdapter", lambda **kwargs: adapter)
+    monkeypatch.setattr(DefaultCallbacks, "from_adapter", lambda adapter: callbacks)
+    monkeypatch.setattr("evalhub.adapter.configure_telemetry", lambda: None)
+    monkeypatch.setattr(adapter, "_run_lighteval", lambda **kwargs: CANNED_RESULTS)
+
+    with pytest.raises(SystemExit) as exc:
+        adapter_main.main()
+    assert exc.value.code == 0
+
+    callbacks.mlflow.save.assert_called_once()
+    artifacts = callbacks.mlflow.save.call_args.kwargs["artifacts"]
+    assert {artifact.path for artifact in artifacts} == {
+        "lighteval_results.json", "results.json", "summary.txt"
+    }
+    results_dir = adapter.local_jobs_base_path / "results"
+    for artifact in artifacts:
+        assert artifact.content == (results_dir / artifact.path).read_bytes()
+        assert artifact.content_type == (
+            "text/plain" if artifact.path.endswith(".txt") else "application/json"
+        )
+    assert json.loads(artifacts[0].content) == CANNED_RESULTS
+    reported = callbacks.report_results.call_args.args[0]
+    assert reported.mlflow_run_id == "test-run-id"
+    assert callbacks.create_oci_artifact.called == oci_enabled
+    if oci_enabled:
+        assert callbacks.create_oci_artifact.call_args.args[0].files_path == results_dir
+
+
+@pytest.mark.integration
+def test_oci_export_includes_opted_in_sample_results(
+    tmp_path, mock_callbacks, monkeypatch, mock_hf_api
+):
+    """The OCI directory contains selected sample fields when requested."""
+    import pyarrow as pa
+    import pyarrow.parquet as parquet
+
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    job = json.loads(Path("meta/job.json").read_text())
+    job["parameters"]["save_sample_results"] = True
+    job["exports"] = {
+        "oci": {
+            "coordinates": {
+                "oci_host": "quay.io",
+                "oci_repository": "test-org/test-repo",
+                "oci_tag": "test-tag",
+                "annotations": {},
+            }
+        }
+    }
+    (meta_dir / "job.json").write_text(json.dumps(job))
+    adapter = LightEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
+
+    def fake_run_lighteval(**kwargs):
+        detail_file = kwargs["output_dir"] / "details" / "model" / "details_boolq.parquet"
+        detail_file.parent.mkdir(parents=True)
+        parquet.write_table(
+            pa.Table.from_pylist([{
+                "doc": {"query": "Question", "specific": {"private": "do not export"}},
+                "model_response": {"text": ["Answer"]},
+                "metric": {"accuracy": 1},
+            }]),
+            detail_file,
+        )
+        return CANNED_RESULTS
+
+    monkeypatch.setattr(adapter, "_run_lighteval", fake_run_lighteval)
+    adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+
+    spec = mock_callbacks.create_oci_artifact.call_args.args[0]
+    sample_file = spec.files_path / "sample_results.jsonl"
+    assert sample_file.is_file()
+    sample = json.loads(sample_file.read_text())
+    assert sample["answers"] == ["Answer"]
+    assert sample["metric"] == {"accuracy": 1}
+    assert set(sample) == {"sample_index", "task", "answers", "metric"}
+    assert "do not export" not in sample_file.read_text()
+    assert "Question" not in sample_file.read_text()
+    assert not (spec.files_path / "details").exists()
+
+
+@pytest.mark.integration
+def test_sample_export_requires_oci(adapter, mock_callbacks):
+    adapter.job_spec.parameters["save_sample_results"] = True
+    with pytest.raises(ValueError, match="requires an OCI export"):
+        adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
 
 
 @pytest.mark.integration

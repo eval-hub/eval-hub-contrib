@@ -1,0 +1,89 @@
+name: Build and push all adapter images
+
+on:
+  workflow_dispatch:
+
+env:
+  REGISTRY: quay.io/evalhub
+
+jobs:
+  build:
+    if: github.repository == 'eval-hub/eval-hub-contrib'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter:
+          - clear
+          - deepeval
+          - guidellm
+          - ifbench
+          - inspect
+          - lighteval
+          - mteb
+          - nemo-guardrails
+          - ragas
+          - ruler
+          - swebench
+          - tooleval
+          - toolbench-server
+          - wildguard
+    concurrency:
+      group: push-${{ matrix.adapter }}-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve image name and tag
+        id: image
+        env:
+          ADAPTER: ${{ matrix.adapter }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          # Validate adapter names before using them in paths or image names.
+          if [[ ! "$ADAPTER" =~ ^[a-z0-9-]+$ ]]; then
+            echo "::error::Invalid adapter name: '${ADAPTER}'" >&2
+            exit 1
+          fi
+          declare -A IMAGE_MAP=(
+            [clear]=ibm-clear
+          )
+          suffix="${IMAGE_MAP[$ADAPTER]:-$ADAPTER}"
+          echo "name=community-${suffix}" >> "$GITHUB_OUTPUT"
+          if [[ "$BRANCH" == "main" ]]; then
+            echo "channel=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=${BRANCH}" >> "$GITHUB_OUTPUT"
+          fi
+          # toolbench-server lives under adapters/tooleval/tool-server/
+          if [[ "$ADAPTER" == "toolbench-server" ]]; then
+            echo "context=adapters/tooleval/tool-server" >> "$GITHUB_OUTPUT"
+          else
+            echo "context=adapters/${ADAPTER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build image
+        env:
+          ADAPTER: ${{ matrix.adapter }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          CHANNEL: ${{ steps.image.outputs.channel }}
+          CONTEXT: ${{ steps.image.outputs.context }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          docker build \
+            -f "${CONTEXT}/Containerfile" \
+            -t "${REGISTRY}/${IMAGE_NAME}:${GIT_SHA}" \
+            -t "${REGISTRY}/${IMAGE_NAME}:${CHANNEL}" \
+            "${CONTEXT}"
+
+      - name: Push image
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          CHANNEL: ${{ steps.image.outputs.channel }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          echo "${{ secrets.QUAY_TOKEN }}" | docker login quay.io -u "${{ secrets.QUAY_USER }}" --password-stdin
+          docker push "${REGISTRY}/${IMAGE_NAME}:${GIT_SHA}"
+          docker push "${REGISTRY}/${IMAGE_NAME}:${CHANNEL}"

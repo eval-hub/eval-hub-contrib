@@ -1,4 +1,4 @@
-eval-hub-sdk[adapter]==1.0.2
+eval-hub-sdk[adapter]~=1.0.5
 swebench==4.1.0
 kubernetes>=28.0
 requests>=2.31.0

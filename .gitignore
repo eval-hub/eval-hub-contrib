@@ -219,3 +219,6 @@ adapters/*/meta/job_oci.json
 /.idea/misc.xml
 /.idea/modules.xml
 /.idea/vcs.xml
+
+# MacOS
+**/.DS_Store

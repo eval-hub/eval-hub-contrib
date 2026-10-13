@@ -123,8 +123,11 @@ class GuideLLMAdapter(FrameworkAdapter):
             )
             results_data = self._parse_results(config)
 
-            # Extract overall score (requests per second or throughput)
-            overall_score = results_data.get("requests_per_second")
+            # Use the server-configured primary metric when available,
+            # falling back to requests_per_second for backward compatibility.
+            ps = getattr(config, "primary_score", None)
+            ps_metric = ps.metric if ps else None
+            overall_score = results_data.get(ps_metric or "requests_per_second")
 
             # Create evaluation results with performance metrics
             evaluation_results = []
@@ -612,6 +615,12 @@ def main() -> None:
 
         # Run benchmark job
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+        # Persist benchmark metrics in MLflow before reporting the run ID.
+        run_id = callbacks.mlflow.save(results, adapter.job_spec)
+        if run_id:
+            results.mlflow_run_id = run_id
+            logger.info("MLflow run created: %s", run_id)
 
         # Report results to service
         callbacks.report_results(results)

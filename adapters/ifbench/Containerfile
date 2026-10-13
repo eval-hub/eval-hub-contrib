@@ -1,0 +1,26 @@
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+# ifbench is installed from git in requirements.txt; pip clone needs git in the image.
+USER 0
+RUN dnf install -y git && dnf clean all
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Upstream creates ifbench/.nltk_data on import. Prepare it and its resources
+# while building so non-root, offline jobs only need read access.
+ENV NLTK_DATA=/usr/local/share/nltk_data
+COPY prepare_nltk.py /tmp/prepare_ifbench_nltk.py
+RUN python /tmp/prepare_ifbench_nltk.py && rm /tmp/prepare_ifbench_nltk.py
+
+COPY _evaluation.py main.py provider.yaml ./
+COPY meta/job.json /meta/job.json
+
+ENV PYTHONUNBUFFERED=1
+ENV EVALHUB_MODE=k8s
+
+USER 1001
+
+ENTRYPOINT ["python", "main.py"]

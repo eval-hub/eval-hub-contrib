@@ -116,5 +116,9 @@ class TestConstants:
             template = cfg["template"]
             assert "{context}" in template, \
                 f"{task_name}: missing {{context}} in template"
-            assert "{query}" in template, \
-                f"{task_name}: missing {{query}} in template"
+            if task_name in ("common_words_extraction", "freq_words_extraction"):
+                assert "{query}" not in template, \
+                    f"{task_name}: official extraction prompts have no query"
+            else:
+                assert "{query}" in template, \
+                    f"{task_name}: missing {{query}} in template"
