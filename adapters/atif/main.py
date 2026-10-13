@@ -40,7 +40,7 @@ from input_collection import (
     ATIFLoadError,
     CollectionBudgetError,
     load_collection,
-    read_bounded,
+    read_bounded_config,
 )
 from judge_auth import resolve_job_credentials
 from rubric_registry import RubricRegistry, UnknownBenchmarkError
@@ -1006,8 +1006,8 @@ class ATIFAdapter(FrameworkAdapter):
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         path = Path(registry_path)
         try:
-            payload = json.loads(read_bounded(path, MAX_ATIF_FILE_BYTES))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            payload = json.loads(read_bounded_config(path, MAX_ATIF_FILE_BYTES))
+        except (OSError, UnicodeError, json.JSONDecodeError, ATIFLoadError) as exc:
             raise ReferenceRegistryError(
                 f"invalid reference registry {path}: {exc}"
             ) from exc
@@ -1102,10 +1102,10 @@ class ATIFAdapter(FrameworkAdapter):
         configured = provider_rubric if provider_rubric is not None else configured
         if rubric_path is not None:
             try:
-                raw = read_bounded(
+                raw = read_bounded_config(
                     Path(str(rubric_path)), MAX_CUSTOM_RUBRIC_BYTES
                 ).decode("utf-8")
-            except (OSError, UnicodeError) as exc:
+            except (OSError, UnicodeError, ATIFLoadError) as exc:
                 raise CustomRubricError(
                     f"cannot read custom rubric {rubric_path}: {exc}"
                 ) from exc

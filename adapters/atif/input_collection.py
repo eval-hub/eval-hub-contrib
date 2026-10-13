@@ -44,6 +44,29 @@ def read_bounded(path: Path, limit: int) -> bytes:
     return raw
 
 
+def read_bounded_config(path: Path, limit: int) -> bytes:
+    """Bounded read for operator-mounted configuration files.
+
+    Kubernetes projected volumes (ConfigMap, Secret) expose mounted entries
+    as symlinks, so symlinks are followed here. The opened target must still
+    be a regular file within ``limit`` bytes. Use :func:`read_bounded` for
+    untrusted trajectory input, where symlinks stay forbidden.
+    """
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        os.close(fd)
+        raise ATIFLoadError("Configuration must be a regular file", "unsafe_path")
+    if info.st_size > limit:
+        os.close(fd)
+        raise ATIFLoadError(f"Configuration exceeds maximum size of {limit} bytes")
+    with os.fdopen(fd, "rb") as stream:
+        raw = stream.read(limit + 1)
+    if len(raw) > limit:
+        raise ATIFLoadError(f"Configuration exceeds maximum size of {limit} bytes")
+    return raw
+
+
 def load_collection(
     files: list[Path],
     *,

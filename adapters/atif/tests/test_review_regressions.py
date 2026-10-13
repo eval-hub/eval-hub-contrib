@@ -14,9 +14,15 @@ from evalhub.adapter.callbacks import _MlflowOps
 from evalhub.models.api import ModelConfig
 from test_adapter import JOB_SPEC_PATH, FakeCallbacks, _valid_trajectory, _write_json
 
-from input_collection import read_bounded
+from input_collection import read_bounded, read_bounded_config
 from judge_auth import resolve_job_credentials
-from main import ATIFAdapter, ATIFLoadError, CustomRubricError, JudgeResponseError
+from main import (
+    ATIFAdapter,
+    ATIFLoadError,
+    CustomRubricError,
+    JudgeResponseError,
+    ReferenceRegistryError,
+)
 from scoring_context import delegation_context, judge_context, task_instruction
 
 
@@ -378,6 +384,89 @@ def test_missing_schema_symlinks_and_oversized_rubric(adapter, tmp_path):
         read_bounded(link, 10000)
     with pytest.raises(CustomRubricError, match="exceeds"):
         adapter._load_custom_rubric({"custom_rubric": {"extra": "x" * 20000}})
+
+
+def _projected_volume(tmp_path: Path, name: str, content: str) -> Path:
+    """Expose ``name`` the way a Kubernetes ConfigMap projection mounts it."""
+    mount = tmp_path / "mount"
+    real = mount / "..1234_projection"
+    real.mkdir(parents=True)
+    (real / name).write_text(content, encoding="utf-8")
+    (mount / "..data").symlink_to(real.name)
+    link = mount / name
+    link.symlink_to(Path("..data") / name)
+    return link
+
+
+def test_config_reader_follows_projected_volume_symlinks(tmp_path):
+    link = _projected_volume(tmp_path, "rubric.json", '{"rubrics": {}}')
+    assert read_bounded_config(link, 10000) == b'{"rubrics": {}}'
+
+
+def test_config_reader_keeps_regular_file_and_size_checks(tmp_path):
+    directory = tmp_path / "directory"
+    directory.mkdir()
+    link = tmp_path / "dir-link.json"
+    link.symlink_to(directory)
+    with pytest.raises(ATIFLoadError, match="regular file"):
+        read_bounded_config(link, 10000)
+    big = tmp_path / "big.json"
+    big.write_bytes(b"x" * 32)
+    with pytest.raises(ATIFLoadError, match="exceeds"):
+        read_bounded_config(big, 16)
+
+
+def test_reference_registry_loads_from_projected_volume(adapter, tmp_path):
+    payload = {
+        "rubrics": {
+            "default": {
+                "criteria": [{"name": "correctness", "weight": 1.0}],
+                "references": {"default": {"answer": "42"}},
+            }
+        }
+    }
+    link = _projected_volume(tmp_path, "registry.json", json.dumps(payload))
+    criteria, references = adapter._load_reference_registry(str(link), "default")
+    assert criteria["rubric"] == "default"
+    assert references == {"default": {"answer": "42"}}
+
+
+def test_reference_registry_violations_are_configuration_errors(adapter, tmp_path):
+    directory = tmp_path / "directory"
+    directory.mkdir()
+    with pytest.raises(ReferenceRegistryError, match="invalid reference registry"):
+        adapter._load_reference_registry(str(directory), "default")
+    link = tmp_path / "registry-link.json"
+    link.symlink_to(directory)
+    with pytest.raises(ReferenceRegistryError, match="invalid reference registry"):
+        adapter._load_reference_registry(str(link), "default")
+
+
+def test_custom_rubric_loads_from_projected_volume(adapter, tmp_path):
+    document = json.dumps(
+        {
+            "name": "projected",
+            "criteria": [
+                {"name": "correctness", "description": "is correct", "weight": 1.0}
+            ],
+        }
+    )
+    link = _projected_volume(tmp_path, "rubric.yaml", document)
+    rubric = adapter._load_custom_rubric({"custom_rubric_path": str(link)})
+    assert rubric["name"] == "projected"
+    assert rubric["aggregation"] == "weighted_mean"
+
+
+def test_custom_rubric_violations_are_configuration_errors(adapter, tmp_path):
+    directory = tmp_path / "directory"
+    directory.mkdir()
+    link = tmp_path / "rubric-link.yaml"
+    link.symlink_to(directory)
+    with pytest.raises(CustomRubricError, match="cannot read custom rubric"):
+        adapter._load_custom_rubric({"custom_rubric_path": str(link)})
+    big = _projected_volume(tmp_path, "big.yaml", "x" * 20000)
+    with pytest.raises(CustomRubricError, match="cannot read custom rubric"):
+        adapter._load_custom_rubric({"custom_rubric_path": str(big)})
 
 
 @pytest.mark.parametrize(
