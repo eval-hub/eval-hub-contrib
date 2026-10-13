@@ -73,7 +73,9 @@ COMPOSITE_SUITES: dict[str, list[str]] = {
         "ifeval",
         "triviaqa",
         "nq_open",
-        "math_500",
+        # Registered as "hendrycks_math500" in lm-eval 0.4.13 ("math_500" is the
+        # benchmark ID, not a task name; see GENERATION_TASKS above).
+        "hendrycks_math500",
     ],
 }
 
@@ -119,6 +121,15 @@ def is_code_execution(benchmark_id: str) -> bool:
         benchmark_id in CODE_EXECUTION_TASKS
         or benchmark_id.removeprefix("lm-eval/") in CODE_EXECUTION_IDS
     )
+
+
+def tasks_include_code_execution(tasks: str) -> bool:
+    """Return True if a comma-separated lm-eval task list names an unsafe-code task.
+
+    ``is_code_execution`` only sees benchmark IDs; ``lm-eval/custom`` carries its
+    tasks in the ``task`` parameter, and lm-eval still demands the confirmation.
+    """
+    return any(t.strip() in CODE_EXECUTION_IDS for t in tasks.split(","))
 
 
 def resolve_tasks(
@@ -206,6 +217,42 @@ def detect_api_style(params: dict, model_url: str) -> str:
 def lmeval_model_type(api_style: str) -> str:
     """Return the lm-eval model registry name for this API style."""
     return "local-chat-completions" if api_style == "chat" else "local-completions"
+
+
+def resolve_chat_template_mode(
+    api_style: str,
+    apply_chat_template: bool,
+    tokenizer: str | None,
+    tokenizer_backend: str,
+) -> tuple[str, bool]:
+    """Return ``(tokenizer_backend, tokenized_requests)`` for the model args.
+
+    On a chat endpoint the server renders the template, so strings are sent as
+    before. On a completions endpoint lm_eval 0.4.13 only renders the Hugging
+    Face template when ``tokenizer_backend=huggingface`` and
+    ``tokenized_requests=True``; otherwise it hands the endpoint the chat
+    history serialised as JSON. That is not a usable prompt, so reject it here
+    instead of running a job whose scores reflect it.
+    """
+    if not apply_chat_template or api_style != "completions":
+        return tokenizer_backend, False
+
+    backend = (tokenizer_backend or "None").strip()
+    if not tokenizer:
+        raise ValueError(
+            "apply_chat_template=true on a completions endpoint needs the "
+            "'tokenizer' parameter (a HuggingFace model ID or path) so the chat "
+            "template can be rendered locally. Without it lm-eval would send the "
+            "chat history as a JSON string. Set 'tokenizer', or use api_style=chat "
+            "so the server applies the template."
+        )
+    if backend.lower() not in ("none", "huggingface"):
+        raise ValueError(
+            f"apply_chat_template=true on a completions endpoint needs "
+            f"tokenizer_backend=huggingface, got {backend!r}: only a Hugging Face "
+            "tokenizer can render the chat template."
+        )
+    return "huggingface", True
 
 
 def build_endpoint_url(model_url: str, api_style: str) -> str:

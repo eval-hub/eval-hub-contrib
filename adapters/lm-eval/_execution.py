@@ -35,8 +35,18 @@ def build_model_args(
     max_gen_toks: int,
     tokenizer: str | None,
     tokenizer_backend: str,
+    tokenized_requests: bool = False,
 ) -> str:
-    """Build the comma-separated model_args string passed to --model_args."""
+    """Build the comma-separated model_args string passed to --model_args.
+
+    ``tokenized_requests`` is False by default: prompts are sent as strings.
+    Without a local tokenizer loaded, True would make the harness guess token
+    IDs from characters. It must be True (with ``tokenizer_backend=huggingface``
+    and a ``tokenizer``) to render a chat template on a completions endpoint:
+    lm_eval 0.4.13 only calls the tokenizer's ``apply_chat_template`` in that
+    case, and otherwise returns the chat history serialised as JSON, which a
+    completions endpoint would receive as the literal prompt.
+    """
     parts: list[tuple[str, str]] = [
         ("base_url", base_url),
         ("model", model_name),
@@ -46,10 +56,7 @@ def build_model_args(
         ("max_length", str(max_length)),
         ("max_gen_toks", str(max_gen_toks)),
         ("tokenizer_backend", tokenizer_backend),
-        # Send prompts as strings, not token-ID lists.
-        # Without a local tokenizer loaded, tokenized_requests=True would cause
-        # the harness to guess token IDs from characters — send strings instead.
-        ("tokenized_requests", "False"),
+        ("tokenized_requests", str(tokenized_requests)),
     ]
     if tokenizer:
         parts.append(("tokenizer", tokenizer))

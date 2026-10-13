@@ -233,9 +233,14 @@ LMEVALJOB_ROLLING_IDS: frozenset[str] = frozenset(
     }
 )
 
-# Tasks that execute model-generated Python (lm-eval ``code_eval`` metric).
+# Tasks that execute model-generated Python. lm-eval refuses to run any task
+# whose config sets ``unsafe_code`` unless --confirm_run_unsafe_code is passed,
+# so this set must list every such task: tests/test_adapter.py checks it against
+# the pinned lm-eval's own task configs (cruxeval_output was missing).
 # Refused unless the job sets allow_code_execution=true.
-CODE_EXECUTION_IDS: frozenset[str] = frozenset({"humaneval", "humaneval_instruct", "mbpp"})
+CODE_EXECUTION_IDS: frozenset[str] = frozenset(
+    {"cruxeval_output", "humaneval", "humaneval_instruct", "mbpp"}
+)
 
 # Not registered in lm-eval 0.4.13 (shipped by the midstream / newer lm-eval builds).
 # Exposed for parity with the LMEvalJob provider; lm-eval reports an unknown

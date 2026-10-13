@@ -61,6 +61,17 @@ agent:
       GSM8K ≥ 0.80 indicates frontier-level math reasoning.
       IFEval ≥ 0.70 indicates reliable instruction following.
       HellaSwag ≥ 0.85 indicates strong commonsense.
+    - >-
+      Metrics are reported as <task>.<metric>, with ,<filter> appended for
+      filtered results (gsm8k.exact_match,strict-match and
+      gsm8k.exact_match,flexible-extract are distinct). A single-task benchmark
+      is also reported under the bare metric name (acc_norm) that its
+      primary_score.metric declares; when a metric exists under several filters
+      the unfiltered value is used, otherwise the first filter lm-eval reported.
+    - >-
+      When num_fewshot is not set each task runs with its own built-in few-shot
+      count (GSM8K is 5-shot); the count actually used is recorded in the
+      EvalCard and in evaluation_metadata.num_fewshot_effective.
 
 runtime:
   k8s:
@@ -5520,6 +5531,11 @@ parameters:
       Apply the model's chat template to prompts before sending. Required for
       instruction-tuned models accessed via local-chat-completions. Set to true
       when api_style=chat or when using a chat endpoint with instruction models.
+      On a completions endpoint (api_style=completions) the template is
+      rendered locally, which needs the 'tokenizer' parameter (a HuggingFace
+      model ID or path); the adapter then sets tokenizer_backend=huggingface
+      and sends token-ID requests. Without a tokenizer the job fails at start
+      rather than sending the chat history as a JSON string.
 
   - name: system_instruction
     type: string

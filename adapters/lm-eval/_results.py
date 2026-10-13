@@ -50,15 +50,34 @@ def parse_results_file(results_file: Path) -> dict[str, Any]:
         return json.load(f)
 
 
-def extract_evaluation_results(raw: dict[str, Any]) -> list[EvaluationResult]:
+#: lm-eval's filter name for results that were not post-processed by a filter.
+_UNFILTERED = "none"
+
+
+def extract_evaluation_results(
+    raw: dict[str, Any], primary_task: str | None = None
+) -> list[EvaluationResult]:
     """Convert an lm-eval results dict to a list of EvaluationResult objects.
 
     lm-eval metric keys use a "<name>,<filter>" format (e.g. "acc,none",
-    "exact_match,strict-match"). We strip the filter suffix for the metric name
-    and skip the paired stderr entries (they are captured in confidence_interval).
+    "exact_match,strict-match"). The paired stderr entries are skipped (they are
+    captured in confidence_interval).
+
+    Names are emitted as ``<task>.<metric>`` for unfiltered results and
+    ``<task>.<metric>,<filter>`` otherwise, so one task's results under several
+    filters (GSM8K's ``strict-match`` and ``flexible-extract``) stay distinct.
+
+    ``primary_task`` is the task whose results are the benchmark's own score.
+    Its metrics are additionally emitted under the bare metric name (``acc_norm``),
+    the form the LMEvalJob-based ``lm_evaluation_harness`` provider reports and
+    that this provider's ``primary_score.metric`` declares. When a metric exists
+    under several filters the unfiltered value wins, otherwise the first filter
+    lm-eval reported (GSM8K: ``strict-match``).
     """
     out: list[EvaluationResult] = []
     results_section = raw.get("results", {})
+    # bare metric name -> (filter, qualified name, result) for ``primary_task``
+    primary: dict[str, tuple[str, str, EvaluationResult]] = {}
 
     for task_name, metrics in results_section.items():
         if not isinstance(metrics, dict):
@@ -91,25 +110,74 @@ def extract_evaluation_results(raw: dict[str, Any]) -> list[EvaluationResult]:
 
             # Strip the "|N" fewshot suffix lm-eval appends to task names.
             clean_task = task_name.split("|")[0]
-
-            out.append(
-                EvaluationResult(
-                    metric_name=f"{clean_task}.{metric_base}",
-                    metric_value=float(val),
-                    metric_type="float",
-                    confidence_interval=confidence_interval,
-                    num_samples=_task_num_samples(raw, task_name),
-                    metadata={
-                        "task": task_name,
-                        "metric": metric_base,
-                        "filter": filter_name,
-                        "stderr": stderr,
-                    },
-                )
+            qualified = (
+                metric_base
+                if filter_name == _UNFILTERED
+                else f"{metric_base},{filter_name}"
             )
+
+            result = EvaluationResult(
+                metric_name=f"{clean_task}.{qualified}",
+                metric_value=float(val),
+                metric_type="float",
+                confidence_interval=confidence_interval,
+                num_samples=_task_num_samples(raw, task_name),
+                metadata={
+                    "task": task_name,
+                    "metric": metric_base,
+                    "filter": filter_name,
+                    "stderr": stderr,
+                },
+            )
+            out.append(result)
+
+            if primary_task is not None and clean_task == primary_task:
+                kept = primary.get(metric_base)
+                if kept is None or (
+                    filter_name == _UNFILTERED and kept[0] != _UNFILTERED
+                ):
+                    primary[metric_base] = (filter_name, result.metric_name, result)
+
+    # Bare-name aliases for the benchmark's own task. num_samples is left unset
+    # so per-task sample totals are not counted twice.
+    for metric_base, (filter_name, full_name, result) in primary.items():
+        out.append(
+            EvaluationResult(
+                metric_name=metric_base,
+                metric_value=result.metric_value,
+                metric_type="float",
+                confidence_interval=result.confidence_interval,
+                num_samples=None,
+                metadata={
+                    **(result.metadata or {}),
+                    "alias_of": full_name,
+                },
+            )
+        )
 
     logger.info("Extracted %d metrics from %d tasks", len(out), len(results_section))
     return out
+
+
+def effective_num_fewshot(raw: dict[str, Any], requested: Any = None) -> int | None:
+    """Return the few-shot count the run actually used, or None if it is not one number.
+
+    An explicit ``num_fewshot`` overrides every task. When it is omitted the
+    harness keeps each task's built-in default (GSM8K runs 5-shot), which
+    lm-eval reports per task under ``n-shot`` in the results JSON. None means
+    the tasks disagree or lm-eval did not report it.
+    """
+    if requested is not None:
+        return int(requested)
+    n_shot = raw.get("n-shot")
+    if not isinstance(n_shot, dict):
+        return None
+    counts = {
+        int(v)
+        for v in n_shot.values()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    }
+    return counts.pop() if len(counts) == 1 else None
 
 
 def _task_num_samples(raw: dict[str, Any], task_name: str) -> int | None:

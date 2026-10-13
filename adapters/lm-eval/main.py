@@ -61,6 +61,7 @@ from _execution import (
 )
 from _results import (
     compute_overall_score,
+    effective_num_fewshot,
     extract_evaluation_results,
     find_results_file,
     parse_results_file,
@@ -72,7 +73,9 @@ from _tasks import (
     is_rolling,
     lmeval_model_type,
     preflight_check,
+    resolve_chat_template_mode,
     resolve_tasks,
+    tasks_include_code_execution,
 )
 
 logger = logging.getLogger(__name__)
@@ -185,6 +188,10 @@ class LMEvalAdapter(FrameworkAdapter):
             api_key = params.get("api_key") or (creds.api_key if creds else "") or ""
 
             endpoint_url = build_endpoint_url(model_url, api_style)
+            apply_chat_template = bool(params.get("apply_chat_template", False))
+            tokenizer_backend, tokenized_requests = resolve_chat_template_mode(
+                api_style, apply_chat_template, tokenizer, tokenizer_backend
+            )
             model_args = build_model_args(
                 base_url=endpoint_url,
                 model_name=config.model.name,
@@ -195,6 +202,7 @@ class LMEvalAdapter(FrameworkAdapter):
                 max_gen_toks=int(params.get("max_gen_tokens", 512)),
                 tokenizer=tokenizer,
                 tokenizer_backend=tokenizer_backend,
+                tokenized_requests=tokenized_requests,
             )
             logger.info(
                 "model_type=%s endpoint=%s model=%s",
@@ -223,11 +231,16 @@ class LMEvalAdapter(FrameworkAdapter):
                 limit=config.num_examples,
                 gen_kwargs=params.get("gen_kwargs"),
                 include_path=params.get("custom_tasks_path"),
-                apply_chat_template=bool(params.get("apply_chat_template", False)),
+                apply_chat_template=apply_chat_template,
                 system_instruction=params.get("system_instruction"),
                 trust_remote_code=bool(params.get("trust_remote_code", False)),
+                # lm-eval refuses any task whose config sets unsafe_code unless
+                # this is passed; cover the benchmark ID and custom task lists.
                 confirm_run_unsafe_code=allow_code_execution
-                and is_code_execution(config.benchmark_id),
+                and (
+                    is_code_execution(config.benchmark_id)
+                    or tasks_include_code_execution(tasks)
+                ),
             )
             # Command is already logged at INFO level inside run_lmeval().
 
@@ -251,7 +264,13 @@ class LMEvalAdapter(FrameworkAdapter):
                 )
             )
             raw = self._parse_results(output_dir)
-            evaluation_results = extract_evaluation_results(raw)
+            # A single task's results are the benchmark's own score and are also
+            # reported under bare metric names (what primary_score.metric
+            # declares); a multi-task suite has no single primary task.
+            primary_task = tasks if "," not in tasks else None
+            evaluation_results = extract_evaluation_results(
+                raw, primary_task=primary_task
+            )
             overall_score = compute_overall_score(evaluation_results)
             num_samples = self._total_samples(evaluation_results)
             lmeval_version = get_lmeval_version()
@@ -291,23 +310,30 @@ class LMEvalAdapter(FrameworkAdapter):
                 )
                 logger.info("OCI artifact: %s", oci_artifact.reference)
 
-            num_fewshot = params.get("num_fewshot")
+            # When num_fewshot is omitted the harness keeps each task's own
+            # default (GSM8K is 5-shot), so zero-shot may only be claimed when
+            # the run reports 0 shots.
+            effective_shots = effective_num_fewshot(raw, params.get("num_fewshot"))
             _ability = _benchmark_ability(config.benchmark_id)
             _primary_metric = _primary_metric_name(evaluation_results)
-            if num_fewshot and int(num_fewshot) > 0:
+            if effective_shots == 0:
                 cap_entry = CapabilityEvalEntry(
                     ability=_ability,
                     benchmark=config.benchmark_id,
                     metric=_primary_metric,
-                    alt_prompting=overall_score,
-                    alt_prompting_description=f"{num_fewshot}-Shot",
+                    zero_shot=overall_score,
                 )
             else:
                 cap_entry = CapabilityEvalEntry(
                     ability=_ability,
                     benchmark=config.benchmark_id,
                     metric=_primary_metric,
-                    zero_shot=overall_score,
+                    alt_prompting=overall_score,
+                    alt_prompting_description=(
+                        f"{effective_shots}-Shot"
+                        if effective_shots is not None
+                        else "Task-default few-shot (count varies by task)"
+                    ),
                 )
 
             eval_card = EvalCardMetadata(
@@ -340,6 +366,7 @@ class LMEvalAdapter(FrameworkAdapter):
                     "api_style": api_style,
                     "endpoint_url": endpoint_url,
                     "num_fewshot": params.get("num_fewshot"),
+                    "num_fewshot_effective": effective_shots,
                     "gen_kwargs": params.get("gen_kwargs"),
                     "tokenizer": tokenizer,
                     "benchmark_config": params,
