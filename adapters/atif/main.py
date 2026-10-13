@@ -231,19 +231,30 @@ class ATIFAdapter(FrameworkAdapter):
     _credentials: ModelCredentials | None
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
+        try:
+            return self._run_benchmark_job(config, callbacks)
+        except Exception as exc:
+            logger.exception("ATIF evaluation failed")
+            callbacks.report_status(
+                JobStatusUpdate(
+                    status=JobStatus.FAILED,
+                    error_message=MessageInfo(
+                        message=str(exc), message_code="evaluation_error"
+                    ),
+                )
+            )
+            raise
+
+    def _run_benchmark_job(
+        self, config: JobSpec, callbacks: JobCallbacks
+    ) -> JobResults:
         config = self._validate_job_spec(config)
         # The invocation's spec is authoritative for model routing. This also
         # supports local runners and tests that override the loaded spec.
         self._active_job_spec = config
         start_time = time.monotonic()
         callbacks.report_status(
-            JobStatusUpdate(
-                phase=JobPhase.INITIALIZING,
-                status=JobStatus.RUNNING,
-                message=MessageInfo(
-                    message="Initializing ATIF adapter", message_code="initializing"
-                ),
-            )
+            JobStatusUpdate(phase=JobPhase.INITIALIZING, status=JobStatus.RUNNING)
         )
 
         params = config.parameters or {}
@@ -366,14 +377,7 @@ class ATIFAdapter(FrameworkAdapter):
             custom_rubric = self._load_custom_rubric(params)
 
         callbacks.report_status(
-            JobStatusUpdate(
-                phase=JobPhase.LOADING_DATA,
-                status=JobStatus.RUNNING,
-                message=MessageInfo(
-                    message="Discovering ATIF trajectory files",
-                    message_code="loading_data",
-                ),
-            )
+            JobStatusUpdate(phase=JobPhase.LOADING_DATA, status=JobStatus.RUNNING)
         )
         mlflow = getattr(callbacks, "mlflow", None)
         if (
@@ -404,14 +408,7 @@ class ATIFAdapter(FrameworkAdapter):
         )
 
         callbacks.report_status(
-            JobStatusUpdate(
-                phase=JobPhase.RUNNING_EVALUATION,
-                status=JobStatus.RUNNING,
-                message=MessageInfo(
-                    message=f"Scoring {len(trajectories)} ATIF trajectories",
-                    message_code="running_evaluation",
-                ),
-            )
+            JobStatusUpdate(phase=JobPhase.RUNNING_EVALUATION, status=JobStatus.RUNNING)
         )
 
         scored = asyncio.run(
@@ -511,14 +508,7 @@ class ATIFAdapter(FrameworkAdapter):
         )
 
         callbacks.report_status(
-            JobStatusUpdate(
-                phase=JobPhase.POST_PROCESSING,
-                status=JobStatus.RUNNING,
-                message=MessageInfo(
-                    message="Preparing evaluation result",
-                    message_code="post_processing",
-                ),
-            )
+            JobStatusUpdate(phase=JobPhase.POST_PROCESSING, status=JobStatus.RUNNING)
         )
 
         trajectory_results = [
@@ -654,12 +644,7 @@ class ATIFAdapter(FrameworkAdapter):
         # uploading a third, duplicate copy of the complete result tree.
         callbacks.report_status(
             JobStatusUpdate(
-                phase=JobPhase.PERSISTING_ARTIFACTS,
-                status=JobStatus.RUNNING,
-                message=MessageInfo(
-                    message="Persisting evaluation artifacts",
-                    message_code="persisting_artifacts",
-                ),
+                phase=JobPhase.PERSISTING_ARTIFACTS, status=JobStatus.RUNNING
             )
         )
         artifacts = self._build_mlflow_artifacts(detailed_result, training_threshold)

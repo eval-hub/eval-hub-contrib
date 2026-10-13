@@ -10,7 +10,7 @@ import certifi
 import httpx
 import pytest
 import respx
-from evalhub.adapter import JobCallbacks, JobPhase
+from evalhub.adapter import JobCallbacks, JobPhase, JobStatus
 from httpx import Response
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
@@ -266,7 +266,11 @@ def test_atif_adapter_revalidates_job_spec_and_reports_actionable_error(job_spec
     with pytest.raises(ValueError, match="Invalid ATIF JobSpec"):
         adapter.run_benchmark_job(invalid_job_spec, callbacks)
 
-    assert callbacks.status_updates == []
+    assert len(callbacks.status_updates) == 1
+    failure = callbacks.status_updates[0]
+    assert failure.status == JobStatus.FAILED
+    assert failure.error_message.message.startswith("Invalid ATIF JobSpec")
+    assert failure.error_message.message_code == "evaluation_error"
 
 
 def test_training_eligibility_marks_trajectories_and_manifest(job_spec):
