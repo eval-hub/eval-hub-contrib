@@ -1,0 +1,6 @@
+# Temporary immutable integration SDK (branch feat/rhai-473-mlflow on the org
+# repository); replace with an approved release before promotion.
+eval-hub-sdk[adapter] @ git+https://github.com/eval-hub/eval-hub-sdk.git@8c4d51a9e0c64ce226166be3977cb1dbe19c7107
+opentelemetry-api==1.44.0
+httpx==0.28.1
+PyYAML==6.0.3

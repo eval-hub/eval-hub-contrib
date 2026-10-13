@@ -8,6 +8,7 @@ VERSION ?= latest
 PYTHON_VERSION ?= 3.12
 
 # Image names
+IMAGE_ATIF = $(REGISTRY)/community-atif:$(VERSION)
 IMAGE_DATABENCH = $(REGISTRY)/community-databench:$(VERSION)
 IMAGE_FOLLOWBENCH = $(REGISTRY)/community-followbench:$(VERSION)
 IMAGE_LIGHTEVAL = $(REGISTRY)/community-lighteval:$(VERSION)
@@ -34,6 +35,8 @@ help:
 	@echo "==============================="
 	@echo ""
 	@echo "Image Build:"
+	@echo "  make image-atif         - Build ATIF adapter image"
+	@echo "  make smoke-atif         - Build and run offline ATIF image smoke test"
 	@echo "  make image-lighteval    - Build LightEval adapter image"
 	@echo "  make image-guidellm     - Build GuideLLM adapter image"
 	@echo "  make image-mteb         - Build MTEB adapter image"
@@ -73,6 +76,7 @@ help:
 	@echo "  make clean-images       - Remove all adapter images"
 	@echo ""
 	@echo "Test:"
+	@echo "  make test-atif          - Run ATIF adapter tests"
 	@echo "  make test-guidellm     - Run GuideLLM adapter tests"
 	@echo "  make test-lighteval    - Run LightEval adapter tests"
 	@echo "  make test-mteb         - Run MTEB adapter tests"
@@ -92,6 +96,34 @@ help:
 	@echo ""
 	@echo "Example:"
 	@echo "  make image-lighteval REGISTRY=localhost:5000 VERSION=dev"
+
+# ATIF targets
+.PHONY: image-atif push-atif clean-atif test-atif smoke-atif lock-atif
+image-atif:
+	$(BUILD_TOOL) build -t $(IMAGE_ATIF) -f adapters/atif/Containerfile adapters/atif
+
+push-atif:
+	$(BUILD_TOOL) push $(IMAGE_ATIF)
+
+clean-atif:
+	$(BUILD_TOOL) rmi $(IMAGE_ATIF) 2>/dev/null || true
+
+test-atif:
+	cd adapters/atif && \
+	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \
+	uv pip install --python .venv/bin/python -r requirements.lock -r requirements-test.txt && \
+	PYTHONPATH=. .venv/bin/python -m pytest tests -q
+
+smoke-atif: image-atif
+	$(BUILD_TOOL) run --rm --network=none --entrypoint python $(IMAGE_ATIF) smoke_test.py
+
+lock-atif:
+	cd adapters/atif && uv pip compile --python-version $(PYTHON_VERSION) requirements.txt -o requirements.lock
+
+images: image-atif
+push-images: push-atif
+clean-images: clean-atif
+tests: test-atif
 
 # Build targets
 .PHONY: image-followbench
