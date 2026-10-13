@@ -352,7 +352,12 @@ parameters:
       directory named after the dataset's hf_name (e.g. prompt-injections/ for
       deepset/prompt-injections), or, for a benchmark with a single dataset
       only, any parquet/json/jsonl file matching the requested split.
-      Benchmarks with several datasets (e.g. prompt_injection) must stage each
-      dataset under its own directory. test_data_ref jobs with no usable staged
-      material fail fast with a clear error instead of falling back to the
-      HuggingFace Hub.
+      An explicit 'dataset_path' is authoritative: if it does not exist or
+      holds no dataset files the job fails instead of using auto-detected data.
+      Auto-detection never uses a file whose name states a different split
+      (train.jsonl for the test split); split-neutral names such as data.jsonl
+      are accepted. Benchmarks with several datasets (e.g. prompt_injection)
+      must stage each dataset under its own directory. A mounted /test_data
+      marks a staged job even when it is empty: test_data_ref jobs with no
+      usable staged material fail fast with a clear error instead of falling
+      back to the HuggingFace Hub.

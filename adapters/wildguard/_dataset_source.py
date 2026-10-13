@@ -19,9 +19,13 @@ Resolution order (mirrors the inspect adapter's offline module and the
 ``swebench``/``ragas``/``deepeval`` ``/test_data``-first patterns):
 
 1. Explicit ``parameters.dataset_path`` (absolute, or relative to ``/test_data``).
+   It is authoritative: a path that is missing or holds no dataset files fails
+   the job instead of falling through to discovery.
 2. A staged WildGuard dataset under ``/test_data`` — files whose name or path
-   contains the requested split are preferred; hidden dirs (``.git``) are
-   skipped; ambiguous matches raise instead of silently picking the first file.
+   contains the requested split are preferred, files that name a different
+   split are never used (``train.jsonl`` cannot stand in for ``split="test"``;
+   split-neutral names stay eligible); hidden dirs (``.git``) are skipped;
+   ambiguous matches raise instead of silently picking the first file.
 3. Fail with a clear error — staged-data jobs never fall through to the Hub.
 
 Expected staged format: JSONL (one object per line, bare JSON arrays also
@@ -38,6 +42,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +68,51 @@ class DatasetSourceError(RuntimeError):
 
 class AmbiguousDatasetError(DatasetSourceError):
     """Raised when staged discovery matches more than one dataset file."""
+
+
+class DatasetUnavailableError(DatasetSourceError):
+    """Raised when the requested staged dataset cannot be supplied.
+
+    Covers an explicit ``dataset_path`` that does not resolve and a requested
+    split whose only staged files belong to a different split.
+    """
+
+
+#: Split names grouped by the split they denote. A staged file whose name or
+#: parent directory names a split in one group belongs to that split.
+_SPLIT_FAMILIES: dict[str, frozenset[str]] = {
+    "train": frozenset({"train", "training"}),
+    "test": frozenset({"test", "testing"}),
+    "validation": frozenset({"validation", "valid", "val", "dev"}),
+}
+
+
+def _split_family(name: str | None) -> str | None:
+    """Canonical split family of a split name such as ``test`` or ``test[:100]``."""
+    if not name:
+        return None
+    base = name.lower().split("[", 1)[0].strip()
+    for family, names in _SPLIT_FAMILIES.items():
+        if base in names:
+            return family
+    return None
+
+
+def _claimed_splits(path: Path) -> set[str]:
+    """Split families a staged file explicitly names (file-name tokens or parent dir).
+
+    Tokens are whole words, so ``train-00000-of-00001.parquet`` claims ``train``
+    while ``latest.jsonl`` and a ``test_data`` mount directory claim nothing.
+    """
+    claimed = {
+        family
+        for token in re.split(r"[^a-z0-9]+", path.name.lower())
+        if (family := _split_family(token))
+    }
+    parent_family = _split_family(path.parent.name)
+    if parent_family:
+        claimed.add(parent_family)
+    return claimed
 
 
 def _read_job_spec_parameters(job_spec_path: str | None = None) -> dict[str, Any]:
@@ -160,6 +210,12 @@ def _find_dataset_files(root: Path) -> list[Path]:
 def _pick_best_file(files: list[Path], split: str | None, context: str) -> Path | None:
     """Pick the single best dataset file from ``files``, raising on ambiguity.
 
+    Files that explicitly name a *different* split (``train.jsonl`` for
+    ``split="test"``) are never candidates: substituting another split would
+    score the wrong data without any error. Split-neutral names (``data.jsonl``)
+    stay eligible. When every file belongs to another split this raises
+    ``DatasetUnavailableError``.
+
     Ranking: files whose stem or parent path mentions the requested split first,
     then shallowest. Only files tied at the best rank are ambiguous — silently
     picking the first would make results depend on filesystem order, so raise a
@@ -169,6 +225,25 @@ def _pick_best_file(files: list[Path], split: str | None, context: str) -> Path 
         return None
 
     if split:
+        # Compare against the split name without a slice suffix ("test[:100]").
+        split_name = split.lower().split("[", 1)[0].strip()
+        requested_family = _split_family(split_name)
+
+        if requested_family is not None:
+            compatible = [
+                p
+                for p in files
+                if not (claimed := _claimed_splits(p)) or requested_family in claimed
+            ]
+            if not compatible:
+                names = ", ".join(str(p.relative_to(context)) for p in files[:8])
+                raise DatasetUnavailableError(
+                    f"No staged dataset for split={split!r} under {context}: every "
+                    f"staged file belongs to another split ({names}). Stage the "
+                    f"{split!r} split or set parameters.dataset_path to the exact "
+                    "file."
+                )
+            files = compatible
 
         def _rank(p: Path) -> tuple[int, int]:
             # Match the split against the file STEM, or the parent DIRECTORY
@@ -177,10 +252,11 @@ def _pick_best_file(files: list[Path], split: str | None, context: str) -> Path 
             # "test" and would rank every file 0, defeating disambiguation.
             stem = p.stem.lower()
             parent = p.parent.name.lower()
-            return (
-                0 if (split.lower() in stem or parent == split.lower()) else 1,
-                len(p.parts),
+            named = split_name in stem or parent == split_name
+            claimed = requested_family is not None and (
+                requested_family in _claimed_splits(p)
             )
+            return (0 if (named or claimed) else 1, len(p.parts))
 
         def _order(p: Path) -> tuple[int, int, str]:
             return (*_rank(p), str(p))
@@ -217,6 +293,14 @@ def _find_staged_wildguard_dir(root: Path) -> Path | None:
     return None
 
 
+def _explicit_dataset_path(parameters: dict[str, Any]) -> str | None:
+    """``parameters.dataset_path`` when the caller supplied a non-blank string."""
+    explicit = parameters.get("dataset_path")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    return None
+
+
 def _resolve_staged_dataset(
     parameters: dict[str, Any],
     test_data_root: str | Path = TEST_DATA_DIR,
@@ -226,25 +310,38 @@ def _resolve_staged_dataset(
 
     Order: explicit ``parameters.dataset_path`` (absolute, or relative to the
     root), a named WildGuard directory, then split-aware discovery over the
-    whole root. Raises ``AmbiguousDatasetError`` when discovery matches more
-    than one dataset file and no explicit path disambiguates.
+    whole root. An explicit ``dataset_path`` is authoritative: when it is
+    missing or holds no dataset files this raises ``DatasetUnavailableError``
+    instead of falling through to discovery, which would evaluate a dataset the
+    caller did not select. Raises ``AmbiguousDatasetError`` when discovery
+    matches more than one dataset file and no explicit path disambiguates.
     """
     root = Path(test_data_root)
 
-    explicit = parameters.get("dataset_path")
-    if isinstance(explicit, str) and explicit.strip():
-        p = Path(explicit.strip())
+    explicit = _explicit_dataset_path(parameters)
+    if explicit is not None:
+        p = Path(explicit)
         if not p.is_absolute():
             p = root / p
         try:
             if p.is_file():
                 return p
-            if p.is_dir() and any(p.iterdir()):
+            if p.is_dir():
                 found = _pick_best_file(_find_dataset_files(p), split, str(p))
                 if found is not None:
                     return found
-        except OSError:
-            pass
+                raise DatasetUnavailableError(
+                    f"parameters.dataset_path {str(p)!r} contains no dataset "
+                    f"files ({', '.join(DATASET_EXTENSIONS)})."
+                )
+        except OSError as exc:
+            raise DatasetUnavailableError(
+                f"parameters.dataset_path {str(p)!r} cannot be read: {exc}"
+            ) from exc
+        raise DatasetUnavailableError(
+            f"parameters.dataset_path {str(p)!r} does not exist. Stage the file "
+            "there or fix dataset_path."
+        )
 
     staged_dir = _find_staged_wildguard_dir(root)
     if staged_dir is not None:
@@ -264,14 +361,19 @@ def should_use_staged_data(
 ) -> bool:
     """Whether staged ``/test_data`` data should take priority over the HF Hub.
 
-    True when the ``/test_data`` mount is usable, when the job spec carries
-    ``test_data_ref``, or when staged dataset material is actually present.
+    True when the caller supplied ``parameters.dataset_path`` (it is
+    authoritative: a path that cannot be loaded raises in
+    ``_resolve_staged_dataset`` rather than selecting something else), when the
+    ``/test_data`` mount is usable, when the job spec carries ``test_data_ref``,
+    or when staged dataset material is actually present.
 
     The mount is the reliable signal on a cluster: eval-hub mounts ``/test_data``
     only for jobs that set ``test_data_ref`` and does NOT copy that key into the
     ``/meta/job.json`` the adapter reads (verified on-cluster), so the spec check
     alone never fires there.
     """
+    if _explicit_dataset_path(parameters) is not None:
+        return True
     if is_test_data_mount_usable(test_data_root):
         return True
     if job_spec_requests_test_data(job_spec_path):

@@ -20,6 +20,7 @@ import pytest
 from _dataset_source import (
     AmbiguousDatasetError,
     DatasetSourceError,
+    DatasetUnavailableError,
     configure_hf_offline_environment,
     ensure_staged_data_ready,
     is_test_data_mount_usable,
@@ -219,6 +220,161 @@ def test_train_split_discovery_is_not_ambiguous_with_test(tmp_path):
     )
     assert source == "staged"
     assert len(rows) == 2
+
+
+# ---------------------------------------------------------------------------
+# An explicit dataset_path is authoritative
+# ---------------------------------------------------------------------------
+
+UNRELATED_ROWS = [
+    {"prompt": "unrelated", "response": "other", "safety_label": "safe"},
+]
+
+
+def test_explicit_dataset_path_missing_does_not_load_a_discovered_file(tmp_path, monkeypatch):
+    """dataset_path=missing.jsonl must fail, not evaluate an unrelated test.jsonl."""
+    _write_jsonl(tmp_path / "test.jsonl", UNRELATED_ROWS)
+    loader = _install_fake_datasets(monkeypatch, fail=False)
+    with pytest.raises(DatasetUnavailableError, match=r"missing\.jsonl.*does not exist"):
+        load_dataset_rows(
+            {"dataset_path": "missing.jsonl"},
+            hf_dataset_id="allenai/wildguard",
+            split="test",
+            test_data_root=tmp_path,
+        )
+    loader.assert_not_called()
+
+
+def test_explicit_dataset_path_empty_dir_does_not_load_a_discovered_file(tmp_path):
+    """An empty explicit directory fails even beside a valid root-level file."""
+    (tmp_path / "chosen").mkdir()
+    _write_jsonl(tmp_path / "test.jsonl", UNRELATED_ROWS)
+    with pytest.raises(DatasetUnavailableError, match="contains no dataset files"):
+        load_dataset_rows(
+            {"dataset_path": "chosen"},
+            hf_dataset_id="allenai/wildguard",
+            split="test",
+            test_data_root=tmp_path,
+        )
+
+
+def test_explicit_dataset_path_dir_with_other_split_only_fails(tmp_path):
+    """The split rule also applies inside an explicit directory."""
+    chosen = tmp_path / "chosen"
+    chosen.mkdir()
+    _write_jsonl(chosen / "train.jsonl", CANNED_ROWS)
+    _write_jsonl(tmp_path / "test.jsonl", UNRELATED_ROWS)
+    with pytest.raises(DatasetUnavailableError, match="another split"):
+        load_dataset_rows(
+            {"dataset_path": "chosen"},
+            hf_dataset_id="allenai/wildguard",
+            split="test",
+            test_data_root=tmp_path,
+        )
+
+
+def test_explicit_dataset_path_file_is_not_split_filtered(tmp_path):
+    """A file the caller named is used as given, whatever its name says."""
+    _write_jsonl(tmp_path / "train.jsonl", CANNED_ROWS)
+    rows, source = load_dataset_rows(
+        {"dataset_path": "train.jsonl"},
+        hf_dataset_id="allenai/wildguard",
+        split="test",
+        test_data_root=tmp_path,
+    )
+    assert source == "staged"
+    assert rows[0]["prompt"] == CANNED_ROWS[0]["prompt"]
+
+
+def test_explicit_dataset_path_missing_selects_staged_route_even_without_mount(tmp_path):
+    """A named path means the staged route: the error is about the path itself."""
+    with pytest.raises(DatasetUnavailableError, match="does not exist"):
+        load_dataset_rows(
+            {"dataset_path": str(tmp_path / "nope.jsonl")},
+            hf_dataset_id="allenai/wildguard",
+            test_data_root=tmp_path / "test_data",  # nonexistent
+        )
+
+
+# ---------------------------------------------------------------------------
+# A requested split is never silently replaced by a different split
+# ---------------------------------------------------------------------------
+
+
+def test_train_only_staging_rejects_a_test_split_request(tmp_path):
+    _write_jsonl(tmp_path / "train.jsonl", CANNED_ROWS)
+    with pytest.raises(DatasetUnavailableError, match=r"another split.*train\.jsonl"):
+        load_dataset_rows(
+            {},
+            hf_dataset_id="allenai/wildguard",
+            split="test",
+            test_data_root=tmp_path,
+        )
+
+
+def test_split_conflict_applies_inside_the_named_wildguard_directory(tmp_path):
+    staged_dir = tmp_path / "wildguard"
+    staged_dir.mkdir()
+    _write_jsonl(staged_dir / "train-00000-of-00001.jsonl", CANNED_ROWS)
+    with pytest.raises(DatasetUnavailableError, match="another split"):
+        load_dataset_rows(
+            {},
+            hf_dataset_id="allenai/wildguard",
+            split="test",
+            test_data_root=tmp_path,
+        )
+
+
+def test_split_neutral_file_is_still_eligible(tmp_path):
+    """data.jsonl names no split, so it is used; the train file is excluded."""
+    _write_jsonl(tmp_path / "data.jsonl", UNRELATED_ROWS)
+    _write_jsonl(tmp_path / "train.jsonl", CANNED_ROWS)
+    rows, _ = load_dataset_rows(
+        {},
+        hf_dataset_id="allenai/wildguard",
+        split="test",
+        test_data_root=tmp_path,
+    )
+    assert rows == UNRELATED_ROWS
+
+
+def test_sliced_split_request_matches_the_split_file(tmp_path):
+    """split="test[:100]" selects test.jsonl and still excludes train.jsonl."""
+    _write_jsonl(tmp_path / "train.jsonl", CANNED_ROWS)
+    _write_jsonl(tmp_path / "test.jsonl", UNRELATED_ROWS)
+    rows, _ = load_dataset_rows(
+        {},
+        hf_dataset_id="allenai/wildguard",
+        split="test[:100]",
+        test_data_root=tmp_path,
+    )
+    assert rows == UNRELATED_ROWS
+
+
+def test_validation_split_accepts_the_dev_alias(tmp_path):
+    _write_jsonl(tmp_path / "train.jsonl", CANNED_ROWS)
+    _write_jsonl(tmp_path / "dev.jsonl", UNRELATED_ROWS)
+    rows, _ = load_dataset_rows(
+        {},
+        hf_dataset_id="allenai/wildguard",
+        split="validation",
+        test_data_root=tmp_path,
+    )
+    assert rows == UNRELATED_ROWS
+
+
+def test_test_data_mount_directory_name_is_not_a_split_claim(tmp_path):
+    """A parent directory named test_data (the mount) must not claim the test split."""
+    root = tmp_path / "test_data"
+    root.mkdir()
+    _write_jsonl(root / "export.jsonl", UNRELATED_ROWS)
+    rows, _ = load_dataset_rows(
+        {},
+        hf_dataset_id="allenai/wildguard",
+        split="train",
+        test_data_root=root,
+    )
+    assert rows == UNRELATED_ROWS
 
 
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import random
+import re
 import shutil
 import signal
 import statistics
@@ -247,25 +248,22 @@ def _job_spec_requests_test_data() -> bool:
     return any(ref.get(key) for key in ("s3", "pvc", "git", "hf"))
 
 
-def _dir_has_entries(path: str) -> bool:
-    try:
-        with os.scandir(path) as entries:
-            return any(True for _ in entries)
-    except OSError:
-        return False
+def _test_data_mount_present() -> bool:
+    """True when the configured staged root or the default mount exists.
 
-
-def _test_data_mount_usable() -> bool:
-    """True when the configured staged root or the default mount holds entries.
+    Presence, not content, identifies a staged job: eval-hub mounts ``/test_data``
+    only for jobs that carry S3 or PVC test data, so the directory exists even
+    when staging produced nothing (a failed S3 download, an empty PVC). Such a
+    job must fail with a staging error instead of reaching for the Hub.
 
     The default ``/test_data`` mount is deliberately checked as well as a custom
-    ``evalhub_test_data_dir``: if the override is mistyped or empty while the real
-    mount is populated, the job is still a staged job and must fail with a clear
+    ``evalhub_test_data_dir``: if the override is mistyped while the real mount
+    is present, the job is still a staged job and must fail with a clear
     "stage it under <dir>" error instead of silently reaching for the Hub on an
     air-gapped cluster.
     """
     return any(
-        _dir_has_entries(root) for root in {_test_data_root(), _DEFAULT_TEST_DATA_DIR}
+        os.path.isdir(root) for root in {_test_data_root(), _DEFAULT_TEST_DATA_DIR}
     )
 
 
@@ -274,13 +272,59 @@ def _staged_data_requested() -> bool:
 
     eval-hub mounts ``/test_data`` only for jobs that set ``test_data_ref`` and
     does NOT copy that key into ``/meta/job.json`` (verified on-cluster), so the
-    job-spec check alone never fires there; a usable mount is the reliable signal.
+    job-spec check alone never fires there; the mount's presence is the reliable
+    signal, independent of whether it holds any dataset files.
     """
-    return _job_spec_requests_test_data() or _test_data_mount_usable()
+    return _job_spec_requests_test_data() or _test_data_mount_present()
 
 
 class _AmbiguousStagedDataset(RuntimeError):
     """Raised when staged discovery matches more than one dataset file."""
+
+
+class _StagedDatasetUnavailable(RuntimeError):
+    """Raised when the requested staged dataset cannot be supplied.
+
+    Covers an explicit ``dataset_path`` that does not resolve and a requested
+    split whose only staged files belong to a different split.
+    """
+
+
+#: Split names grouped by the split they denote. A staged file whose name or
+#: parent directory names a split in one group belongs to that split.
+_SPLIT_FAMILIES: dict[str, frozenset[str]] = {
+    "train": frozenset({"train", "training"}),
+    "test": frozenset({"test", "testing"}),
+    "validation": frozenset({"validation", "valid", "val", "dev"}),
+}
+
+
+def _split_family(name: str | None) -> str | None:
+    """Canonical split family of a split name such as ``test`` or ``test[:100]``."""
+    if not name:
+        return None
+    base = name.lower().split("[", 1)[0].strip()
+    for family, names in _SPLIT_FAMILIES.items():
+        if base in names:
+            return family
+    return None
+
+
+def _claimed_splits(path: str) -> set[str]:
+    """Split families a staged file explicitly names (file-name tokens or parent dir).
+
+    Tokens are whole words, so ``train-00000-of-00001.parquet`` claims ``train``
+    while ``latest.jsonl`` and a ``test_data`` mount directory claim nothing.
+    """
+    claimed = {
+        family
+        for token in re.split(r"[^a-z0-9]+", os.path.basename(path).lower())
+        if (family := _split_family(token))
+    }
+    parent_family = _split_family(os.path.basename(os.path.dirname(path)))
+    if parent_family:
+        claimed.add(parent_family)
+    return claimed
 
 
 def _find_staged_rows_file(
@@ -290,11 +334,16 @@ def _find_staged_rows_file(
 
     Skips ``_SKIPPED_DIRS`` and dot-directories (never descends into them).
     When ``split`` is set, files whose stem mentions the split (or whose parent
-    directory is named exactly like the split) rank first. Raises
-    ``_AmbiguousStagedDataset`` when more than one file survives at the same
-    rank and ``all_matches`` is False — silently picking the first would make
-    results depend on filesystem order. With ``all_matches=True`` the ranked
-    candidate list is returned instead of a single path (or None when empty).
+    directory is named exactly like the split) rank first, and files that
+    explicitly name a *different* split (``train.jsonl`` for ``split="test"``)
+    are never candidates: substituting another split would score the wrong data
+    without any error. Split-neutral names (``data.jsonl``) remain eligible.
+    Raises ``_StagedDatasetUnavailable`` when every staged file belongs to a
+    different split, and ``_AmbiguousStagedDataset`` when more than one file
+    survives at the same rank and ``all_matches`` is False — silently picking
+    the first would make results depend on filesystem order. With
+    ``all_matches=True`` the ranked candidate list is returned instead of a
+    single path (or None when empty).
     """
     try:
         candidates: list[str] = []
@@ -316,6 +365,26 @@ def _find_staged_rows_file(
         return None
 
     if split:
+        # Compare against the split name without a slice suffix ("test[:100]").
+        split_name = split.lower().split("[", 1)[0].strip()
+        requested_family = _split_family(split_name)
+
+        if requested_family is not None:
+            compatible = []
+            for path in candidates:
+                claimed = _claimed_splits(path)
+                if not claimed or requested_family in claimed:
+                    compatible.append(path)
+            if not compatible:
+                names = ", ".join(
+                    os.path.relpath(p, base) for p in sorted(candidates)[:8]
+                )
+                raise _StagedDatasetUnavailable(
+                    f"No staged dataset for split={split!r} under {root}: every "
+                    f"staged file belongs to another split ({names}). Stage the "
+                    f"{split!r} split or set dataset_path to the exact file."
+                )
+            candidates = compatible
 
         def _split_rank(path: str) -> int:
             stem = os.path.basename(path).lower()
@@ -324,11 +393,11 @@ def _find_staged_rows_file(
             # parent name is wrong: a "test_data" mount contains "test" and
             # would rank every file 0, defeating split-aware disambiguation.
             parent = os.path.basename(os.path.dirname(path)).lower()
-            return (
-                0
-                if (split.lower() in stem or parent == split.lower())
-                else 1
+            named = split_name in stem or parent == split_name
+            claimed = requested_family is not None and (
+                requested_family in _claimed_splits(path)
             )
+            return 0 if (named or claimed) else 1
 
         candidates.sort(key=lambda p: (_split_rank(p), p.count(os.sep), p))
     else:
@@ -423,7 +492,9 @@ def _load_staged_rows(config: dict, split: str) -> list[dict] | None:
 
     Resolution order: ``dataset_path`` in the dataset config, a staged directory
     named after the dataset (``<hf_name>`` basename), then split-aware discovery
-    over the whole root. Root-wide discovery is skipped for multi-dataset
+    over the whole root. An explicit ``dataset_path`` is authoritative: when it
+    is missing or holds no dataset files this raises instead of falling through
+    to discovery. Root-wide discovery is skipped for multi-dataset
     benchmarks (``_multi_dataset``): with several datasets sharing one staged
     root it would hand every dataset without its own directory the same rows
     (wrong data, no error). For a single-dataset benchmark it is split-aware and
@@ -433,18 +504,33 @@ def _load_staged_rows(config: dict, split: str) -> list[dict] | None:
     instead of silently falling back to the Hub.
     """
     explicit = config.get("dataset_path")
-    candidates: list[str] = []
     if isinstance(explicit, str) and explicit.strip():
+        # The caller named this path, so it is authoritative: when it cannot be
+        # loaded the job fails. Falling through to discovery would evaluate a
+        # dataset nobody selected.
         p = explicit.strip()
         if not os.path.isabs(p):
             p = os.path.join(_test_data_root(), p)
-        candidates.append(p)
-    else:
-        hf_name = str(config.get("hf_name", "")).split("/")[-1]
-        if hf_name:
-            candidates.append(os.path.join(_test_data_root(), hf_name))
+        if os.path.isfile(p):
+            return _read_staged_file(p)
+        if os.path.isdir(p):
+            found = _find_staged_rows_file(p, split)
+            if found:
+                return _read_staged_file(found[0])
+            raise _StagedDatasetUnavailable(
+                f"dataset_path {p!r} contains no staged dataset files "
+                f"({', '.join(_STAGED_EXTENSIONS)}) for "
+                f"{config.get('hf_name', 'unknown')!r}."
+            )
+        raise _StagedDatasetUnavailable(
+            f"dataset_path {p!r} does not exist for "
+            f"{config.get('hf_name', 'unknown')!r}. Stage the file there or fix "
+            "dataset_path."
+        )
 
-    for candidate in candidates:
+    hf_name = str(config.get("hf_name", "")).split("/")[-1]
+    if hf_name:
+        candidate = os.path.join(_test_data_root(), hf_name)
         if os.path.isfile(candidate):
             return _read_staged_file(candidate)
         if os.path.isdir(candidate):
