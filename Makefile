@@ -106,7 +106,7 @@ push-atif:
 	$(BUILD_TOOL) push $(IMAGE_ATIF)
 
 clean-atif:
-	$(BUILD_TOOL) rmi $(IMAGE_ATIF)
+	$(BUILD_TOOL) rmi $(IMAGE_ATIF) 2>/dev/null || true
 
 test-atif:
 	cd adapters/atif && \
