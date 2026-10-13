@@ -807,6 +807,29 @@ def test_invalid_training_threshold_fails_fast(job_spec, training_threshold):
         adapter.run_benchmark_job(job_spec, callbacks)
 
 
+def test_limit_parameter_errors_are_not_input_errors(job_spec, tmp_path):
+    # A bad limit parameter must fail the job as a parameter error, not be
+    # misreported as invalid input under skip_invalid.
+    trajectory_file = _write_json(tmp_path / "t.json", _valid_trajectory())
+    for parameter, value in (
+        ("max_steps_per_trajectory", 0),
+        ("max_subagent_depth", -1),
+    ):
+        updated = job_spec.model_copy(
+            update={
+                "parameters": {
+                    **(job_spec.parameters or {}),
+                    "trajectory_path": str(trajectory_file),
+                    "invalid_input_policy": "skip_invalid",
+                    parameter: value,
+                }
+            }
+        )
+        adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+        with pytest.raises(ValueError, match=parameter):
+            adapter.run_benchmark_job(updated, FakeCallbacks())
+
+
 def test_failure_categorization_for_low_scoring_step(job_spec):
     adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
     callbacks = FakeCallbacks()

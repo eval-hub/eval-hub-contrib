@@ -266,6 +266,10 @@ class ATIFAdapter(FrameworkAdapter):
         )
         max_subagent_depth = int(params.get("max_subagent_depth", MAX_SUBAGENT_DEPTH))
         max_total_steps = int(params.get("max_total_steps", MAX_TOTAL_STEPS))
+        if max_steps < 1:
+            raise ValueError("max_steps_per_trajectory must be positive")
+        if max_subagent_depth < 0:
+            raise ValueError("max_subagent_depth must be non-negative")
         partial_result_policy = str(
             params.get("partial_result_policy", "fail_fast")
         ).lower()
@@ -909,13 +913,8 @@ class ATIFAdapter(FrameworkAdapter):
         max_subagent_depth: int = MAX_SUBAGENT_DEPTH,
         max_total_steps: int = MAX_TOTAL_STEPS,
     ) -> None:
-        if max_steps_per_trajectory < 1:
-            raise ATIFLoadError("max_steps_per_trajectory must be positive")
-        if max_subagent_depth < 0:
-            raise ATIFLoadError("max_subagent_depth must be non-negative")
-        if max_total_steps < 1:
-            raise ATIFLoadError("max_total_steps must be positive")
-
+        # Parameter sanity is validated in run_benchmark_job before any input
+        # file is read; subagent depth is limited at scoring time, not here.
         seen_ids: set[str] = set()
         total_steps = 0
 
