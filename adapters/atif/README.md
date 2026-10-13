@@ -166,8 +166,9 @@ missing, or out-of-range scores are protocol failures, not low-quality scores.
 A node's own score is its mean step score. Its subtree aggregate is weighted by
 scored step counts: `(own_mean * own_steps + sum(child_aggregate * child_steps)) /
 (own_steps + sum(child_steps))`. Root depth is zero. Nodes beyond
-`max_subagent_depth` remain explicitly unscored; required failed/omitted children
-make ancestors `complete=false`. The all-failed-root case always fails the job.
+`max_subagent_depth` remain explicitly unscored; a child that fails or is omitted
+makes every ancestor `complete=false`. The all-failed-root case always fails the
+job.
 `partial_result_policy=skip_failed_trajectory` otherwise retains failed nodes and
 allows successful roots to contribute. Repeated agent names are not cycles.
 
