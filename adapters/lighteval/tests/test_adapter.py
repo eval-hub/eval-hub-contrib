@@ -901,7 +901,7 @@ def test_loglikelihood_patch_scores_all_choices(monkeypatch):
 
     fake_self = SimpleNamespace(
         base_url="http://fake-vllm:8000/v1",
-        model_name="openai/test-model",
+        model="openai/test-model",
         api_key="dummy",
     )
 
@@ -965,7 +965,7 @@ def test_loglikelihood_patch_wrong_argmax(monkeypatch):
 
     fake_self = SimpleNamespace(
         base_url="http://fake-vllm:8000/v1",
-        model_name="test-model",
+        model="test-model",
         api_key="dummy",
     )
 
@@ -979,82 +979,428 @@ def test_loglikelihood_patch_wrong_argmax(monkeypatch):
     )
 
 
-def test_loglikelihood_patch_empty_choices_returns_inf(monkeypatch):
-    """An empty choices array (IndexError on data["choices"][0]) returns -inf.
+# ── Failed requests must fail the evaluation, never become a likelihood ───────
 
-    Regression for the missing IndexError in the fallback handler.
-    """
-    import urllib.request as _urllib_request
-    import sys as _sys
-    from types import SimpleNamespace
 
-    _loglikelihood_via_completions = _load_patch_fn()
-
+def _stub_model_response(monkeypatch):
     class FakeModelResponse:
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
 
     stub_mr = MagicMock()
     stub_mr.ModelResponse = FakeModelResponse
-    monkeypatch.setitem(_sys.modules, "lighteval.models.model_output", stub_mr)
+    monkeypatch.setitem(sys.modules, "lighteval.models.model_output", stub_mr)
 
-    doc = SimpleNamespace(query="Q: ", choices=["yes", "no"], gold_index=0)
 
-    def fake_urlopen_empty_choices(req, timeout=60):
-        # Server returns choices: [] — accessing [0] raises IndexError
-        return _FakeHTTPResponse(json.dumps({"choices": []}).encode())
+def _load_patch_module():
+    import importlib.util
 
-    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen_empty_choices)
-
-    fake_self = SimpleNamespace(
-        base_url="http://fake-vllm:8000/v1",
-        model_name="test-model",
-        api_key="dummy",
+    patch_path = Path(__file__).parent.parent / "lighteval_logprob_patch.py"
+    spec = importlib.util.spec_from_file_location(
+        f"_logprob_patch_mod_{id(patch_path)}", patch_path
     )
-
-    responses = _loglikelihood_via_completions(fake_self, [doc])
-    resp = responses[0]
-
-    assert all(lp == float("-inf") for lp in resp.logprobs), (
-        f"Expected -inf for all choices on empty server response, got {resp.logprobs}"
-    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
-def test_loglikelihood_patch_socket_timeout_returns_inf(monkeypatch):
-    """A socket timeout (OSError subclass) from urlopen returns -inf.
-
-    Regression for the missing OSError in the fallback handler.
-    """
-    import urllib.request as _urllib_request
-    import sys as _sys
+def _fake_client():
     from types import SimpleNamespace
 
-    _loglikelihood_via_completions = _load_patch_fn()
+    return SimpleNamespace(
+        base_url="http://fake-vllm:8000/v1", model="openai/test-model", api_key="dummy"
+    )
 
-    class FakeModelResponse:
-        def __init__(self, **kwargs):
-            self.__dict__.update(kwargs)
 
-    stub_mr = MagicMock()
-    stub_mr.ModelResponse = FakeModelResponse
-    monkeypatch.setitem(_sys.modules, "lighteval.models.model_output", stub_mr)
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(lambda: TimeoutError("connection timed out"), id="timeout"),
+        pytest.param(
+            lambda: __import__("urllib.error").error.URLError("connection refused"),
+            id="connection-refused",
+        ),
+    ],
+)
+def test_loglikelihood_patch_transport_failure_raises(monkeypatch, failure):
+    """A timeout or refused connection fails the evaluation (no -inf, no accuracy).
 
+    With gold at index 0 the old -inf fallback made argmax pick index 0 and
+    score the doc as correct although nothing was ever scored.
+    """
+    import urllib.request as _urllib_request
+
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+
+    def fake_urlopen(req, timeout=60):
+        raise failure()
+
+    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
     doc = SimpleNamespace(query="Q: ", choices=["yes", "no"], gold_index=0)
 
-    def fake_urlopen_timeout(req, timeout=60):
-        raise TimeoutError("connection timed out")
+    with pytest.raises(mod.LoglikelihoodScoringError, match="attempts"):
+        mod._loglikelihood_via_completions(_fake_client(), [doc])
 
-    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen_timeout)
 
-    fake_self = SimpleNamespace(
-        base_url="http://fake-vllm:8000/v1",
-        model_name="test-model",
-        api_key="dummy",
+def test_loglikelihood_patch_http_400_fails_without_retry(monkeypatch):
+    """An endpoint that rejects echo (HTTP 400) is a configuration error: no retry."""
+    import io
+    import urllib.error
+    import urllib.request as _urllib_request
+
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    calls = []
+
+    def fake_urlopen(req, timeout=60):
+        calls.append(req.full_url)
+        raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {}, io.BytesIO(b""))
+
+    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
+    doc = SimpleNamespace(query="Q: ", choices=["yes", "no"], gold_index=0)
+
+    with pytest.raises(mod.LoglikelihoodScoringError, match="HTTP 400"):
+        mod._loglikelihood_via_completions(_fake_client(), [doc])
+    assert len(calls) == 1
+
+
+def test_loglikelihood_patch_retries_a_transient_failure(monkeypatch):
+    """One HTTP 503 followed by success scores normally."""
+    import io
+    import urllib.error
+    import urllib.request as _urllib_request
+
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    sleeps = []
+    monkeypatch.setattr(mod.time, "sleep", sleeps.append)
+    context = "Q: "
+    state = {"n": 0}
+
+    def fake_urlopen(req, timeout=60):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise urllib.error.HTTPError(req.full_url, 503, "busy", {}, io.BytesIO(b""))
+        body = json.loads(req.data.decode())
+        return _FakeHTTPResponse(_completions_json(context, body["prompt"][len(context):], -0.5))
+
+    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
+    doc = SimpleNamespace(query=context, choices=["yes"], gold_index=0)
+
+    (resp,) = mod._loglikelihood_via_completions(_fake_client(), [doc])
+    assert resp.logprobs == [-0.5]
+    assert sleeps == [1]
+
+
+def test_loglikelihood_patch_partial_failure_fails_the_whole_doc(monkeypatch):
+    """If any required choice cannot be scored the doc is not scored at all."""
+    import urllib.request as _urllib_request
+
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+    context = "Q: "
+
+    def fake_urlopen(req, timeout=60):
+        choice = json.loads(req.data.decode())["prompt"][len(context):]
+        if choice == "no":
+            raise TimeoutError("slow")
+        return _FakeHTTPResponse(_completions_json(context, choice, -0.1))
+
+    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
+    doc = SimpleNamespace(query=context, choices=["yes", "no"], gold_index=0)
+
+    with pytest.raises(mod.LoglikelihoodScoringError):
+        mod._loglikelihood_via_completions(_fake_client(), [doc])
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        pytest.param({"choices": []}, "malformed", id="empty-choices"),
+        pytest.param({"choices": [{"logprobs": None}]}, "no logprobs", id="null-logprobs"),
+        pytest.param({"choices": [{}]}, "no logprobs", id="missing-logprobs"),
+        pytest.param(
+            {"choices": [{"logprobs": {"tokens": ["Q: ", "yes"], "token_logprobs": [None, None], "text_offset": [0, 3]}}]},
+            "no usable logprob",
+            id="null-continuation-logprob",
+        ),
+        pytest.param(
+            {"choices": [{"logprobs": {"tokens": ["Q: yes"], "token_logprobs": [None], "text_offset": [0]}}]},
+            "No continuation tokens",
+            id="no-continuation-tokens",
+        ),
+    ],
+)
+def test_loglikelihood_patch_unusable_response_raises(monkeypatch, body, match):
+    import urllib.request as _urllib_request
+
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    monkeypatch.setattr(
+        _urllib_request,
+        "urlopen",
+        lambda req, timeout=60: _FakeHTTPResponse(json.dumps(body).encode()),
+    )
+    doc = SimpleNamespace(query="Q: ", choices=["yes", "no"], gold_index=0)
+
+    with pytest.raises(mod.LoglikelihoodScoringError, match=match):
+        mod._loglikelihood_via_completions(_fake_client(), [doc])
+
+
+def test_loglikelihood_patch_doc_without_choices_raises(monkeypatch):
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    doc = SimpleNamespace(query="Q: ", choices=[], gold_index=0)
+
+    with pytest.raises(mod.LoglikelihoodScoringError, match="no choices"):
+        mod._loglikelihood_via_completions(_fake_client(), [doc])
+
+
+# ── Real lighteval 0.13.0 client layout and metric consumption ───────────────
+
+
+def _multi_token_json(context: str, pieces: list[str], logprobs: list[float]) -> bytes:
+    """An echo response: one context token, then one token per continuation piece."""
+    offsets = [0]
+    pos = len(context)
+    for piece in pieces:
+        offsets.append(pos)
+        pos += len(piece)
+    return json.dumps(
+        {
+            "choices": [
+                {
+                    "logprobs": {
+                        "tokens": [context, *pieces],
+                        "token_logprobs": [None, *logprobs],
+                        "text_offset": offsets,
+                    }
+                }
+            ]
+        }
+    ).encode()
+
+
+def test_loglikelihood_patch_uses_model_from_the_real_litellm_client(monkeypatch):
+    """The model sent to /v1/completions comes from LiteLLMClient.model.
+
+    lighteval 0.13.0 keeps the configured model in ``self.model`` and has no
+    ``model_name`` attribute on the client, so reading ``model_name`` sent
+    ``"model": ""``.  The stubs used elsewhere in this file hid that.
+    """
+    import urllib.request as _urllib_request
+
+    pytest.importorskip("lighteval")
+    from lighteval.models.endpoints.litellm_model import (
+        LiteLLMClient,
+        LiteLLMModelConfig,
     )
 
-    responses = _loglikelihood_via_completions(fake_self, [doc])
-    resp = responses[0]
-
-    assert all(lp == float("-inf") for lp in resp.logprobs), (
-        f"Expected -inf for all choices on timeout, got {resp.logprobs}"
+    client = LiteLLMClient(
+        LiteLLMModelConfig(
+            model_name="openai/served-model",
+            base_url="http://fake-vllm:8000/v1",
+            api_key="secret",
+        )
     )
+    assert not hasattr(client, "model_name"), "layout assumption of lighteval 0.13.0"
+
+    mod = _load_patch_module()
+    seen = []
+    context = "Q: "
+
+    def fake_urlopen(req, timeout=60):
+        body = json.loads(req.data.decode())
+        seen.append((req.full_url, body["model"], req.get_header("Authorization")))
+        return _FakeHTTPResponse(_completions_json(context, body["prompt"][len(context):], -0.3))
+
+    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
+    doc = SimpleNamespace(query=context, choices=["a", "b"], gold_index=0)
+
+    responses = mod._loglikelihood_via_completions(client, [doc])  # real ModelResponse
+
+    assert len(responses) == 1
+    assert seen == [("http://fake-vllm:8000/v1/completions", "served-model", "Bearer secret")] * 2
+
+
+def test_loglikelihood_patch_missing_model_name_raises(monkeypatch):
+    """No resolvable model: fail instead of sending an empty "model"."""
+    from types import SimpleNamespace as NS
+
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    doc = NS(query="Q: ", choices=["yes"], gold_index=0)
+
+    with pytest.raises(mod.LoglikelihoodScoringError, match="model name"):
+        mod._loglikelihood_via_completions(
+            NS(base_url="http://fake-vllm:8000/v1", api_key="k"), [doc]
+        )
+
+
+def test_loglikelihood_patch_output_tokens_feed_token_normalisation(monkeypatch):
+    """LogProbTokenNorm divides by len(output_tokens[ix]); it must not be empty.
+
+    Empty token lists made lighteval raise ZeroDivisionError.  With real counts
+    the normalised argmax differs from the raw one here: "short" wins on the
+    raw sum, "long" wins per token, and the gold is "long".
+    """
+    import urllib.request as _urllib_request
+
+    pytest.importorskip("lighteval")
+    from lighteval.metrics.metrics_sample import LoglikelihoodAcc
+    from lighteval.metrics.normalizations import LogProbTokenNorm
+    from lighteval.tasks.requests import Doc
+
+    mod = _load_patch_module()
+    context = "Q: "
+    pieces = {"short": (["sh", "ort"], [-1.0, -1.0]), "long": (["lo", "n", "g"], [-0.9, -0.9, -0.9])}
+
+    def fake_urlopen(req, timeout=60):
+        choice = json.loads(req.data.decode())["prompt"][len(context):]
+        toks, lps = pieces[choice]
+        return _FakeHTTPResponse(_multi_token_json(context, toks, lps))
+
+    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
+    doc = Doc(query=context, choices=["short", "long"], gold_index=1)
+
+    (resp,) = mod._loglikelihood_via_completions(_fake_client(), [doc])
+
+    assert [len(t) for t in resp.output_tokens] == [2, 3]
+    assert resp.logprobs == pytest.approx([-2.0, -2.7])
+    # Raw: -2.0 beats -2.7 -> "short" (wrong).  Per token: -0.9 beats -1.0 -> "long".
+    assert LoglikelihoodAcc().compute(doc, resp) == 0
+    assert LoglikelihoodAcc(logprob_normalization=LogProbTokenNorm()).compute(doc, resp) == 1
+
+
+# ── provider.yaml primary metrics must equal the keys the adapter emits ──────
+#
+# EvalHub resolves ``primary_score.metric`` with an exact lookup against the
+# reported ``metric_name``, which the adapter builds as ``<task>.<metric>`` after
+# stripping ``|N`` and simplifying parameterised names (pass@k:k=1 -> pass@1).
+# The raw metric names below come from lighteval's own task registry, so a
+# lighteval upgrade that renames a metric fails here instead of silently
+# breaking the primary score.
+
+# Benchmarks whose primary metric cannot be asserted from the registry alone.
+# math:* emit a name that embeds a function repr, truthfulqa:mc emits one
+# metric object that fans out to several keys, and the group ids expand to
+# many tasks. They still declare bare metric names and need a live run to fix.
+_PRIMARY_METRIC_KNOWN_GAPS = {
+    "math",
+    "math:algebra",
+    "math:counting_and_probability",
+    "truthfulqa:mc",
+    "truthfulness",
+    "commonsense_reasoning",
+    "scientific_reasoning",
+    "physical_commonsense",
+    "knowledge",
+    "mmlu",
+    "language_understanding",
+}
+
+
+def _lighteval_task_metric_names() -> dict[str, list[str]]:
+    """Map task name -> raw metric names for every task in lighteval's registry."""
+    import importlib
+
+    import lighteval.tasks.tasks as tasks_pkg
+    from lighteval.tasks.lighteval_task import LightevalTaskConfig
+
+    found: dict[str, list[str]] = {}
+
+    def _collect(module) -> None:
+        for attr in dir(module):
+            obj = getattr(module, attr)
+            configs = []
+            if isinstance(obj, LightevalTaskConfig):
+                configs = [obj]
+            elif isinstance(obj, (list, tuple)) and obj:
+                configs = [c for c in obj if isinstance(c, LightevalTaskConfig)]
+            for cfg in configs:
+                found[cfg.name] = [
+                    getattr(m, "metric_name", None) or getattr(m, "name", "")
+                    for m in cfg.metrics
+                ]
+
+    # Walk the filesystem: pkgutil skips sub-directories without __init__.py
+    # (lighteval keeps lcb/ that way).
+    root = Path(tasks_pkg.__path__[0])
+    for py in sorted(root.rglob("*.py")):
+        rel = py.relative_to(root).with_suffix("")
+        name = ".".join((tasks_pkg.__name__, *rel.parts))
+        try:
+            _collect(importlib.import_module(name))
+        except Exception:  # noqa: BLE001 - optional task deps may be absent
+            continue
+    return found
+
+
+def _provider_benchmarks() -> list[dict]:
+    import yaml
+
+    path = Path(__file__).parent.parent / "provider.yaml"
+    return yaml.safe_load(path.read_text())["benchmarks"]
+
+
+@pytest.mark.parametrize(
+    ("task", "primary"),
+    [
+        ("gpqa:diamond", "gpqa:diamond.gpqa_pass@1"),
+        ("math_500", "math_500.pass@1"),
+        ("aime24", "aime24.pass@1"),
+        ("aime25", "aime25.pass@1"),
+        ("lcb:codegeneration_v6", "lcb:codegeneration_v6.codegen_pass@1"),
+    ],
+)
+def test_primary_metric_matches_emitted_key_for_reasoning_benchmarks(adapter, task, primary):
+    """Result-fixture check for the benchmarks whose lighteval names are parameterised."""
+    pytest.importorskip("lighteval")
+    raw_names = _lighteval_task_metric_names()[task]
+
+    results = {
+        "results": {
+            f"{task}|0": {
+                **{name: 0.5 for name in raw_names},
+                **{f"{name}_stderr": 0.01 for name in raw_names},
+            }
+        }
+    }
+    emitted, _ = adapter._extract_evaluation_results(results, task)
+    emitted_names = {r.metric_name for r in emitted}
+
+    bench = next(b for b in _provider_benchmarks() if b["id"] == task)
+    assert primary in emitted_names
+    assert bench["primary_score"]["metric"] == primary
+    assert set(bench["metrics"]) == emitted_names
+
+
+def test_every_resolvable_primary_metric_is_an_emitted_key(adapter):
+    """provider.yaml declares only metric names the adapter will actually report."""
+    pytest.importorskip("lighteval")
+    registry = _lighteval_task_metric_names()
+
+    checked = []
+    for bench in _provider_benchmarks():
+        task = bench["id"]
+        if task in _PRIMARY_METRIC_KNOWN_GAPS or task not in registry:
+            continue
+        raw_names = registry[task]
+        results = {"results": {f"{task}|0": {name: 0.5 for name in raw_names}}}
+        emitted, _ = adapter._extract_evaluation_results(results, task)
+        emitted_names = {r.metric_name for r in emitted}
+
+        primary = bench["primary_score"]["metric"]
+        assert primary in emitted_names, (
+            f"{task}: primary_score.metric {primary!r} is not an emitted key; "
+            f"adapter emits {sorted(emitted_names)}"
+        )
+        undeclared = [m for m in bench["metrics"] if m not in emitted_names]
+        assert not undeclared, f"{task}: metrics {undeclared} are never emitted"
+        checked.append(task)
+
+    # Guard against the registry walk silently finding nothing.
+    assert len(checked) >= 15, checked

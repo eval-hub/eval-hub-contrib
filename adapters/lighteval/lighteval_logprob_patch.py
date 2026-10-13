@@ -12,8 +12,19 @@ Usage (called by the adapter instead of bare ``lighteval``):
 
 The patch:
 - Imports lighteval internals and replaces the method before any task runs.
-- Falls back gracefully (log-prob = -inf) if the endpoint does not support
-  echo/logprobs, so generative-only evaluations are unaffected.
+- Fails the evaluation when any choice cannot be scored (HTTP error, timeout,
+  missing ``logprobs``, no continuation tokens).  A failed request is never
+  turned into a likelihood: scoring it as ``-inf`` lets the argmax fall back to
+  choice 0, which can be the gold answer, and the job would report an accuracy
+  for a model that was never actually evaluated.  Generative-only evaluations
+  never call ``loglikelihood`` and are unaffected.
+- Reports the number of scored continuation tokens per choice in
+  ``ModelResponse.output_tokens`` so token-normalised metrics
+  (``LogProbTokenNorm``) can divide by it.  The completions API returns token
+  strings, not IDs, so the entries are positions in the echoed sequence: only
+  their count is meaningful.
+- Does not support PMI-normalised metrics (``Doc.unconditioned_query`` is
+  ignored); lighteval rejects those with its own assertion.
 """
 
 from __future__ import annotations
@@ -22,6 +33,7 @@ import json
 import logging
 import math
 import sys
+import time
 import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING
@@ -33,9 +45,48 @@ if TYPE_CHECKING:
     from lighteval.tasks.lighteval_task import Doc
 
 
+class LoglikelihoodScoringError(RuntimeError):
+    """A (context, choice) pair could not be scored.
+
+    Raised instead of returning a likelihood so that a failed request cannot be
+    mistaken for a model preference and produce an accuracy.
+    """
+
+
+#: Attempts per (context, choice) request before the evaluation is failed.
+_MAX_ATTEMPTS = 3
+#: HTTP statuses worth retrying; anything else (e.g. 400 for an endpoint that
+#: rejects ``echo``) will not change on a second attempt.
+_RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
+
+
 # ---------------------------------------------------------------------------
 # loglikelihood implementation via /v1/completions echo + logprobs
 # ---------------------------------------------------------------------------
+
+def _post_completion(req: urllib.request.Request) -> dict:
+    """POST ``req`` and return the decoded JSON body, retrying transient failures."""
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            if exc.code not in _RETRYABLE_STATUS:
+                raise LoglikelihoodScoringError(
+                    f"{req.full_url} rejected the echo/logprobs request: HTTP {exc.code}"
+                ) from exc
+            last_exc = exc
+        except (OSError, json.JSONDecodeError) as exc:
+            # URLError, TimeoutError and connection resets are OSError subclasses.
+            last_exc = exc
+        if attempt + 1 < _MAX_ATTEMPTS:
+            time.sleep(2**attempt)
+    raise LoglikelihoodScoringError(
+        f"{req.full_url} did not return a usable response after "
+        f"{_MAX_ATTEMPTS} attempts: {last_exc}"
+    ) from last_exc
+
 
 def _score_one_choice(
     completions_url: str,
@@ -43,10 +94,15 @@ def _score_one_choice(
     api_key: str,
     context: str,
     choice: str,
-) -> float:
-    """POST a single (context + choice) prompt and return the summed continuation log-prob.
+) -> tuple[float, list[int]]:
+    """POST a single (context + choice) prompt and score the continuation.
 
-    Returns ``float("-inf")`` on any failure (endpoint error, missing logprobs).
+    Returns ``(summed_logprob, token_positions)`` where ``token_positions`` has
+    one entry per scored continuation token.
+
+    Raises ``LoglikelihoodScoringError`` on any failure (endpoint error, timeout,
+    missing logprobs, no continuation tokens).  Never returns ``-inf`` for a
+    failed request.
     """
     full_prompt = context + choice
     ctx_char_len = len(context)
@@ -67,25 +123,43 @@ def _score_one_choice(
         },
         method="POST",
     )
+    data = _post_completion(req)
+
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
-            data = json.loads(resp.read())
-        choice_resp = data["choices"][0]
-        logprobs_obj = choice_resp.get("logprobs") or {}
-        token_logprobs: list[float | None] = logprobs_obj.get("token_logprobs", [])
-        text_offsets: list[int] = logprobs_obj.get("text_offset", [])
-        cont_sum = 0.0
-        found = False
-        for i, offset in enumerate(text_offsets):
-            if offset >= ctx_char_len:
-                lp = token_logprobs[i] if i < len(token_logprobs) else None
-                if lp is not None and math.isfinite(lp):
-                    cont_sum += lp
-                    found = True
-        return cont_sum if found else float("-inf")
-    except (OSError, IndexError, KeyError, json.JSONDecodeError) as exc:
-        logger.warning("loglikelihood fallback (echo failed for choice %r): %s", choice[:40], exc)
-        return float("-inf")
+        logprobs_obj = data["choices"][0].get("logprobs")
+        if not logprobs_obj:
+            raise LoglikelihoodScoringError(
+                f"{completions_url} returned no logprobs for choice {choice[:40]!r}; "
+                "the endpoint must support echo=True with logprobs"
+            )
+        token_logprobs: list[float | None] = logprobs_obj["token_logprobs"]
+        text_offsets: list[int] = logprobs_obj["text_offset"]
+    except (IndexError, KeyError, TypeError, AttributeError) as exc:
+        raise LoglikelihoodScoringError(
+            f"{completions_url} returned a malformed completions response for "
+            f"choice {choice[:40]!r}: {exc!r}"
+        ) from exc
+
+    cont_sum = 0.0
+    positions: list[int] = []
+    for i, offset in enumerate(text_offsets):
+        if offset < ctx_char_len:
+            continue
+        lp = token_logprobs[i] if i < len(token_logprobs) else None
+        if lp is None or not math.isfinite(lp):
+            raise LoglikelihoodScoringError(
+                f"{completions_url} returned no usable logprob for continuation "
+                f"token {i} of choice {choice[:40]!r}"
+            )
+        cont_sum += lp
+        positions.append(i)
+
+    if not positions:
+        raise LoglikelihoodScoringError(
+            f"No continuation tokens to score for choice {choice[:40]!r}: the "
+            "endpoint's echoed tokens end before the choice begins"
+        )
+    return cont_sum, positions
 
 
 def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelResponse"]:  # noqa: N802
@@ -98,6 +172,8 @@ def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelRespon
 
     POSTs to ``{base_url}/completions`` for each (context, choice) pair with:
         max_tokens=0, echo=True, logprobs=1
+
+    Raises ``LoglikelihoodScoringError`` when any choice cannot be scored.
     """
     from lighteval.models.model_output import ModelResponse  # noqa: PLC0415
 
@@ -108,11 +184,26 @@ def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelRespon
     base_url = base_url.rstrip("/")
     if base_url.endswith("/v1"):
         base_url = base_url[:-3]
+    if not base_url:
+        raise LoglikelihoodScoringError(
+            "loglikelihood patch: the LiteLLM client has no base_url to score against"
+        )
     completions_url = f"{base_url}/v1/completions"
 
-    model_name: str = getattr(self, "model_name", "") or getattr(self, "_model_name", "")
+    # LiteLLMClient (lighteval 0.13.0) stores the configured model in
+    # ``self.model``; ``model_name`` only exists on its config object.
+    model_name: str = (
+        getattr(self, "model", "")
+        or getattr(self, "model_name", "")
+        or getattr(self, "_model_name", "")
+    )
     # Strip the openai/ prefix that the adapter adds for LiteLLM routing
     model_name = model_name.removeprefix("openai/")
+    if not model_name:
+        raise LoglikelihoodScoringError(
+            "loglikelihood patch: could not resolve the model name from the "
+            "LiteLLM client; refusing to send an empty \"model\" to the endpoint"
+        )
 
     api_key: str = getattr(self, "api_key", "") or getattr(self, "_api_key", "") or "dummy"
 
@@ -130,12 +221,16 @@ def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelRespon
         context: str = getattr(doc, "query", "") or ""
         choices: list[str] = list(getattr(doc, "choices", None) or [])
         if not choices:
-            choices = [""]  # generative fallback — shouldn't reach this path
+            raise LoglikelihoodScoringError(
+                f"loglikelihood patch: doc {getattr(doc, 'task_name', '?')!r} has "
+                "no choices to score"
+            )
 
-        choice_sums: list[float] = [
+        scored = [
             _score_one_choice(completions_url, model_name, api_key, context, ch)
             for ch in choices
         ]
+        choice_sums = [total for total, _ in scored]
 
         # Determine argmax and compare to gold.
         best_idx = max(range(len(choice_sums)), key=lambda i: choice_sums[i])
@@ -149,8 +244,9 @@ def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelRespon
                 logprobs=choice_sums,
                 argmax_logits_eq_gold=argmax_eq_gold,
                 input_tokens=[],
-                # output_tokens[:n_choices] — placeholder lists (no real token IDs available)
-                output_tokens=[[] for _ in choices],
+                # output_tokens[:n_choices] — one list per choice whose length is the
+                # number of scored continuation tokens (LogProbTokenNorm divides by it).
+                output_tokens=[positions for _, positions in scored],
             )
         )
 

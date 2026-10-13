@@ -118,10 +118,10 @@ benchmarks:
     name: GSM8K
     description: Grade-school math word problems requiring multi-step reasoning (8,500 problems).
     category: math
-    metrics: [extractive_match]
+    metrics: [gsm8k.extractive_match]
     tags: [math, reasoning, lighteval]
     primary_score:
-      metric: extractive_match
+      metric: gsm8k.extractive_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.5
@@ -154,10 +154,10 @@ benchmarks:
     name: MATH-500
     description: 500 competition math problems across all MATH difficulty levels.
     category: math
-    metrics: [extractive_match]
+    metrics: [math_500.pass@1]
     tags: [math, competition, lighteval]
     primary_score:
-      metric: extractive_match
+      metric: math_500.pass@1
       lower_is_better: false
     pass_criteria:
       threshold: 0.3
@@ -166,10 +166,10 @@ benchmarks:
     name: AIME 2024
     description: American Invitational Mathematics Examination 2024 — 30 competition problems.
     category: math
-    metrics: [pass@k]
+    metrics: [aime24.pass@1, aime24.avg@n:n=1]
     tags: [math, competition, aime, lighteval]
     primary_score:
-      metric: pass@k
+      metric: aime24.pass@1
       lower_is_better: false
     pass_criteria:
       threshold: 0.0
@@ -178,10 +178,10 @@ benchmarks:
     name: AIME 2025
     description: American Invitational Mathematics Examination 2025 — 30 competition problems.
     category: math
-    metrics: [pass@k]
+    metrics: [aime25.pass@1, aime25.avg@n:n=1]
     tags: [math, competition, aime, lighteval]
     primary_score:
-      metric: pass@k
+      metric: aime25.pass@1
       lower_is_better: false
     pass_criteria:
       threshold: 0.0
@@ -227,10 +227,10 @@ benchmarks:
     name: HellaSwag
     description: Everyday activity completion — commonsense NLI via loglikelihood scoring.
     category: reasoning
-    metrics: [em, accuracy]
+    metrics: [hellaswag.em]
     tags: [reasoning, commonsense, lighteval]
     primary_score:
-      metric: em
+      metric: hellaswag.em
       lower_is_better: false
     pass_criteria:
       threshold: 0.5
@@ -239,10 +239,10 @@ benchmarks:
     name: WinoGrande
     description: Pronoun commonsense reasoning (Winograd schema at scale).
     category: reasoning
-    metrics: [accuracy]
+    metrics: [winogrande.acc]
     tags: [reasoning, commonsense, lighteval]
     primary_score:
-      metric: accuracy
+      metric: winogrande.acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.6
@@ -251,10 +251,10 @@ benchmarks:
     name: ARC Easy
     description: Basic science Q&A — AI2 Reasoning Challenge easy split.
     category: reasoning
-    metrics: [accuracy, acc]
+    metrics: [arc:easy.acc]
     tags: [reasoning, science, lighteval]
     primary_score:
-      metric: acc
+      metric: arc:easy.acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.7
@@ -263,10 +263,10 @@ benchmarks:
     name: ARC Challenge
     description: Hard science Q&A — AI2 Reasoning Challenge challenge split.
     category: reasoning
-    metrics: [accuracy, acc]
+    metrics: [arc:challenge.acc]
     tags: [reasoning, science, lighteval]
     primary_score:
-      metric: acc
+      metric: arc:challenge.acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.5
@@ -275,10 +275,10 @@ benchmarks:
     name: PIQA
     description: Physical interaction intuition — two-choice physical world Q&A.
     category: reasoning
-    metrics: [accuracy]
+    metrics: [piqa.em]
     tags: [reasoning, commonsense, lighteval]
     primary_score:
-      metric: accuracy
+      metric: piqa.em
       lower_is_better: false
     pass_criteria:
       threshold: 0.7
@@ -287,10 +287,10 @@ benchmarks:
     name: GPQA Diamond
     description: Graduate-level GPQA Diamond split — expert-level biology, chemistry, and physics.
     category: reasoning
-    metrics: [accuracy]
+    metrics: [gpqa:diamond.gpqa_pass@1]
     tags: [reasoning, graduate, expert, lighteval]
     primary_score:
-      metric: accuracy
+      metric: gpqa:diamond.gpqa_pass@1
       lower_is_better: false
     pass_criteria:
       threshold: 0.3
@@ -324,10 +324,10 @@ benchmarks:
     name: TriviaQA
     description: Trivia factual recall — open-domain Q&A across 95k question-answer pairs.
     category: knowledge
-    metrics: [extractive_match]
+    metrics: [triviaqa.em]
     tags: [knowledge, factuality, lighteval]
     primary_score:
-      metric: extractive_match
+      metric: triviaqa.em
       lower_is_better: false
     pass_criteria:
       threshold: 0.5
@@ -336,10 +336,10 @@ benchmarks:
     name: OpenBookQA
     description: Open-book science reasoning — 4-choice Q&A with elementary science facts.
     category: knowledge
-    metrics: [accuracy]
+    metrics: [openbookqa.em]
     tags: [knowledge, science, lighteval]
     primary_score:
-      metric: accuracy
+      metric: openbookqa.em
       lower_is_better: false
     pass_criteria:
       threshold: 0.4
@@ -361,10 +361,10 @@ benchmarks:
     name: CoLA — Grammatical acceptability
     description: Corpus of Linguistic Acceptability — binary grammaticality classification.
     category: language_understanding
-    metrics: [mcc]
+    metrics: [glue:cola.acc, glue:cola.mcc]
     tags: [language, glue, lighteval]
     primary_score:
-      metric: mcc
+      metric: glue:cola.mcc
       lower_is_better: false
     pass_criteria:
       threshold: 0.3
@@ -373,10 +373,10 @@ benchmarks:
     name: SST-2 — Sentiment classification
     description: Stanford Sentiment Treebank — binary sentiment classification.
     category: language_understanding
-    metrics: [accuracy]
+    metrics: [glue:sst2.acc]
     tags: [language, sentiment, glue, lighteval]
     primary_score:
-      metric: accuracy
+      metric: glue:sst2.acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.8
@@ -385,10 +385,10 @@ benchmarks:
     name: MRPC — Paraphrase detection
     description: Microsoft Research Paraphrase Corpus — sentence pair paraphrase classification.
     category: language_understanding
-    metrics: [f1, accuracy]
+    metrics: [glue:mrpc.acc, glue:mrpc.loglikelihood_f1]
     tags: [language, nli, glue, lighteval]
     primary_score:
-      metric: f1
+      metric: glue:mrpc.loglikelihood_f1
       lower_is_better: false
     pass_criteria:
       threshold: 0.7
@@ -398,10 +398,10 @@ benchmarks:
     name: LiveCodeBench v6 — Code generation
     description: LiveCodeBench v6 competitive programming and code generation tasks.
     category: code
-    metrics: [pass@k]
+    metrics: [lcb:codegeneration_v6.codegen_pass@1]
     tags: [coding, competitive, lighteval]
     primary_score:
-      metric: pass@k
+      metric: lcb:codegeneration_v6.codegen_pass@1
       lower_is_better: false
     pass_criteria:
       threshold: 0.1
