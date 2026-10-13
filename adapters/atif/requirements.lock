@@ -17,7 +17,7 @@ charset-normalizer==3.5.1
     # via requests
 click==8.5.0
     # via olot
-eval-hub-sdk @ git+https://github.com/ruivieira/eval-hub-sdk.git@8c4d51a9e0c64ce226166be3977cb1dbe19c7107
+eval-hub-sdk @ git+https://github.com/eval-hub/eval-hub-sdk.git@8c4d51a9e0c64ce226166be3977cb1dbe19c7107
     # via -r eval-hub-contrib/adapters/atif/requirements.txt
 googleapis-common-protos==1.75.5
     # via opentelemetry-exporter-otlp-proto-grpc
