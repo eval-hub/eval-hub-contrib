@@ -1508,6 +1508,7 @@ class ATIFAdapter(FrameworkAdapter):
                         response,
                         trajectory_id=trajectory_id,
                         step_id=step.get("step_id"),
+                        criteria=criteria,
                     )
                     criterion_scores = None
             except JudgeResponseError:
@@ -1631,11 +1632,64 @@ class ATIFAdapter(FrameworkAdapter):
         return aggregate, normalized
 
     @staticmethod
+    def _criterion_score_fallback(
+        parsed: dict[str, Any], criteria: dict[str, Any]
+    ) -> float | None:
+        """Aggregate per-criterion scores some judges return instead of 'score'.
+
+        A judge asked for ``{"score": ...}`` may instead return one numeric
+        score per requested criterion, flat or nested under ``"scores"``.
+        When every criterion of the active rubric is covered by a finite
+        0-1 number, the weighted mean is the equivalent aggregate; anything
+        less remains a protocol error for the caller to report.
+        """
+        rubric = criteria.get("criteria")
+        if not isinstance(rubric, list) or not rubric:
+            return None
+        sources = [parsed.get("scores"), parsed]
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            values: list[float] = []
+            weights: list[float] = []
+            covered = True
+            for criterion in rubric:
+                if not isinstance(criterion, dict):
+                    covered = False
+                    break
+                name = criterion.get("name")
+                if not isinstance(name, str):
+                    covered = False
+                    break
+                raw = source.get(name)
+                if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                    covered = False
+                    break
+                value = float(raw)
+                if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                    covered = False
+                    break
+                weight = criterion.get("weight", 1.0)
+                if (
+                    isinstance(weight, bool)
+                    or not isinstance(weight, (int, float))
+                    or weight <= 0
+                ):
+                    covered = False
+                    break
+                values.append(value)
+                weights.append(float(weight))
+            if covered and values:
+                return sum(v * w for v, w in zip(values, weights)) / sum(weights)
+        return None
+
+    @staticmethod
     def _parse_score_response(
         response: str,
         *,
         trajectory_id: Any,
         step_id: Any,
+        criteria: dict[str, Any] | None = None,
     ) -> float:
         """Parse and validate one judge score without masking protocol errors."""
         try:
@@ -1647,10 +1701,15 @@ class ATIFAdapter(FrameworkAdapter):
             ) from exc
 
         if not isinstance(parsed, dict) or "score" not in parsed:
-            raise JudgeResponseError(
-                "judge score response is missing numeric 'score' "
-                f"for trajectory={trajectory_id!r}, step={step_id!r}"
-            )
+            fallback = None
+            if isinstance(parsed, dict) and criteria is not None:
+                fallback = ATIFAdapter._criterion_score_fallback(parsed, criteria)
+            if fallback is None:
+                raise JudgeResponseError(
+                    "judge score response is missing numeric 'score' "
+                    f"for trajectory={trajectory_id!r}, step={step_id!r}"
+                )
+            return fallback
 
         raw_score = parsed["score"]
         if isinstance(raw_score, bool):

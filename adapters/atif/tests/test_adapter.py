@@ -466,15 +466,15 @@ def test_benchmark_scoring_rejects_unknown_name(job_spec):
 
     with pytest.raises(ReferenceRegistryError, match="unknown benchmark") as error:
         adapter.run_benchmark_job(job_spec, FakeCallbacks())
-    assert "swe-bench-lite" in str(error.value)
+    assert "swebench-verified" in str(error.value)
 
 
 def test_benchmark_registry_returns_stable_independent_rubrics():
-    first = RubricRegistry.get("SWE-BENCH-LITE")
-    second = RubricRegistry.get("swe-bench-lite")
+    first = RubricRegistry.get("SWEBENCH-VERIFIED")
+    second = RubricRegistry.get("swebench-verified")
     assert first == second
     first["criteria"][0]["name"] = "changed"
-    assert RubricRegistry.get("swe-bench-lite")["criteria"][0]["name"] != "changed"
+    assert RubricRegistry.get("swebench-verified")["criteria"][0]["name"] != "changed"
 
 
 def test_benchmark_registry_validates_seed_rubrics():
@@ -487,13 +487,153 @@ def test_benchmark_registry_validates_seed_rubrics():
         assert all(criterion["weight"] > 0 for criterion in rubric["criteria"])
 
 
+def test_registry_seeds_are_harbor_benchmark_names():
+    # Seed names must exist in Harbor's benchmark registry under the exact
+    # same name (harbor-framework/harbor registry.json, commit 4778ceba,
+    # verified 2026-10-13).  Pins the confirmed seed set against drift.
+    assert RubricRegistry.names() == (
+        "swebench-verified",
+        "terminal-bench",
+        "humanevalfix",
+    )
+
+
+def _fallback_criteria():
+    return {
+        "criteria": [
+            {"name": "functional_correctness", "weight": 1.0},
+            {"name": "reasoning_quality", "weight": 3.0},
+            {"name": "code_quality", "weight": 1.0},
+        ]
+    }
+
+
+def test_score_response_aggregates_flat_per_criterion_scores():
+    # Real-judge shape observed in RHAI-469 validation: every criterion of
+    # the active rubric scored numerically, no top-level "score" key.
+    score = ATIFAdapter._parse_score_response(
+        json.dumps(
+            {
+                "functional_correctness": 0.2,
+                "reasoning_quality": 0.6,
+                "code_quality": 1.0,
+            }
+        ),
+        trajectory_id="t",
+        step_id=1,
+        criteria=_fallback_criteria(),
+    )
+    assert score == pytest.approx((0.2 * 1 + 0.6 * 3 + 1.0 * 1) / 5)
+
+
+def test_score_response_aggregates_nested_per_criterion_scores():
+    score = ATIFAdapter._parse_score_response(
+        json.dumps(
+            {
+                "scores": {
+                    "functional_correctness": 1.0,
+                    "reasoning_quality": 0.0,
+                    "code_quality": 0.5,
+                }
+            }
+        ),
+        trajectory_id="t",
+        step_id=1,
+        criteria=_fallback_criteria(),
+    )
+    assert score == pytest.approx((1.0 * 1 + 0.0 * 3 + 0.5 * 1) / 5)
+
+
+def test_score_response_prefers_top_level_score_over_criteria():
+    score = ATIFAdapter._parse_score_response(
+        json.dumps({"score": 0.9, "functional_correctness": 0.0}),
+        trajectory_id="t",
+        step_id=1,
+        criteria=_fallback_criteria(),
+    )
+    assert score == pytest.approx(0.9)
+
+
+def test_score_response_rejects_partial_criterion_coverage():
+    with pytest.raises(JudgeResponseError, match="missing numeric 'score'"):
+        ATIFAdapter._parse_score_response(
+            json.dumps({"functional_correctness": 0.5}),
+            trajectory_id="t",
+            step_id=1,
+            criteria=_fallback_criteria(),
+        )
+
+
+def test_score_response_rejects_non_numeric_criterion_score():
+    with pytest.raises(JudgeResponseError, match="missing numeric 'score'"):
+        ATIFAdapter._parse_score_response(
+            json.dumps(
+                {
+                    "functional_correctness": "high",
+                    "reasoning_quality": 0.5,
+                    "code_quality": 0.5,
+                }
+            ),
+            trajectory_id="t",
+            step_id=1,
+            criteria=_fallback_criteria(),
+        )
+
+
+def test_benchmark_scoring_accepts_per_criterion_judge_response(job_spec):
+    # End to end through benchmark mode: the judge returns per-criterion
+    # scores (fenced, as observed from real judges) instead of {"score": x};
+    # the job must complete with the weighted-mean aggregate.
+    job_spec = job_spec.model_copy(
+        update={
+            "parameters": {
+                **(job_spec.parameters or {}),
+                "scoring_mode": "benchmark",
+                "benchmark_name": "humanevalfix",
+            }
+        }
+    )
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+    with respx.mock(assert_all_called=False) as mock:
+        route = mock.post("http://localhost:8080/v1/chat/completions")
+        route.mock(
+            side_effect=[
+                Response(
+                    200,
+                    text="```json\n"
+                    + json.dumps(
+                        {
+                            "functional_correctness": 0.2,
+                            "reasoning_quality": 0.6,
+                            "code_quality": 1.0,
+                        }
+                    )
+                    + "\n```",
+                ),
+                Response(
+                    200,
+                    text=json.dumps(
+                        {
+                            "functional_correctness": 0.4,
+                            "reasoning_quality": 0.8,
+                            "code_quality": 0.9,
+                        }
+                    ),
+                ),
+            ]
+        )
+        result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+    # humanevalfix weights are all 1.0: step means 0.6 and 0.7.
+    assert result.overall_score == pytest.approx(0.65)
+
+
 def test_benchmark_scoring_is_reproducible_for_equivalent_input(job_spec):
     job_spec = job_spec.model_copy(
         update={
             "parameters": {
                 **(job_spec.parameters or {}),
                 "scoring_mode": "benchmark",
-                "benchmark_name": "swe-bench-lite",
+                "benchmark_name": "swebench-verified",
             }
         }
     )

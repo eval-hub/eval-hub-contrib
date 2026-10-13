@@ -2,6 +2,13 @@
 
 The registry contains scoring instructions only.  It does not contain the
 benchmark datasets and it never executes a benchmark verifier.
+
+Seed names are the benchmark names in Harbor's public benchmark registry
+(https://github.com/harbor-framework/harbor/blob/main/registry.json,
+commit 4778ceba, verified 2026-10-13).  Every seed must exist there under
+the exact same name: the seeds are rubrics *for* Harbor benchmarks, so a
+name that Harbor does not recognize would silently score the wrong
+population of trajectories.
 """
 
 from __future__ import annotations
@@ -20,7 +27,7 @@ class RubricRegistry:
     VERSION = 1
 
     _RUBRICS: dict[str, dict[str, Any]] = {
-        "swe-bench-lite": {
+        "swebench-verified": {
             "description": "Assess software-engineering agent trajectories.",
             "criteria": [
                 {
@@ -60,17 +67,17 @@ class RubricRegistry:
                 },
             ],
         },
-        "humaneval": {
-            "description": "Assess code-generation agent trajectories.",
+        "humanevalfix": {
+            "description": "Assess code-repair agent trajectories.",
             "criteria": [
                 {
                     "name": "functional_correctness",
-                    "description": "The produced solution satisfies the programming task.",
+                    "description": "The produced repair satisfies the programming task.",
                     "weight": 1.0,
                 },
                 {
                     "name": "reasoning_quality",
-                    "description": "The agent's reasoning and implementation choices are technically sound.",
+                    "description": "The agent's diagnosis and repair choices are technically sound.",
                     "weight": 1.0,
                 },
                 {

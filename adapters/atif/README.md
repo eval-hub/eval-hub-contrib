@@ -102,8 +102,10 @@ registry version when applicable, and judge model/settings are persisted.
 ### Benchmark and reference
 
 `scoring_mode=benchmark` requires `benchmark_name`:
-`swe-bench-lite`, `terminal-bench`, or `humaneval`. These are built-in assessment
+`swebench-verified`, `terminal-bench`, or `humanevalfix`. These are built-in assessment
 rubrics, **not benchmark execution or verifier-equivalent correctness claims**.
+Seed names match the benchmark names in Harbor's public
+[benchmark registry](https://github.com/harbor-framework/harbor/blob/main/registry.json).
 Domain-owner approval and real-judge quality measurement remain release gates.
 
 `scoring_mode=reference` requires a local `reference_registry_path`:
