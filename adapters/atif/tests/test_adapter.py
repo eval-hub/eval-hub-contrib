@@ -6,6 +6,7 @@ import logging
 import ssl
 from pathlib import Path
 
+import certifi
 import httpx
 import pytest
 import respx
@@ -1632,7 +1633,7 @@ def test_local_judge_uses_configured_endpoint_and_ca_bundle(
         }
     )
     ca_cert_path = tmp_path / "ca.pem"
-    ca_cert_path.write_bytes(Path(ssl.get_default_verify_paths().cafile).read_bytes())
+    ca_cert_path.write_bytes(Path(certifi.where()).read_bytes())
     client_options = {}
     real_async_client = httpx.AsyncClient
 
