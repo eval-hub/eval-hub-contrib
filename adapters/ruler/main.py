@@ -39,6 +39,8 @@ from evalhub.adapter import (
 
 from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 
+from prepare_assets import prepare_assets
+
 logger = logging.getLogger(__name__)
 
 # Maps provider.yaml benchmark IDs → internal RULER task keys (from synthetic.yaml)
@@ -173,16 +175,18 @@ class RulerAdapter(FrameworkAdapter):
                     progress=0.1,
                     message=MessageInfo(
                         message=(
-                            f"Generating RULER datasets: {len(tasks)} task(s) × "
+                            f"Preparing RULER data: {len(tasks)} task(s) × "
                             f"{len(context_lengths)} context length(s)"
                         ),
                         message_code="loading_data",
                     ),
-                    current_step="Generating synthetic datasets",
+                    current_step="Preparing required data assets",
                     total_steps=total_pairs + 2,
                     completed_steps=0,
                 )
             )
+
+            self._prepare_task_assets(tasks, data_dir, timeout=data_gen_timeout)
 
             for task_id in tasks:
                 for ctx_len in context_lengths:
@@ -595,10 +599,6 @@ class RulerAdapter(FrameworkAdapter):
             logger.info(f"Reusing existing dataset: {output_file}")
             return output_file
 
-        task_config = self._load_task_config(task_id)
-        if task_config.get("args", {}).get("type_haystack") == "essay":
-            self._ensure_essay_haystack(timeout=timeout)
-
         prepare_script = self.SCRIPTS_DIR / "data" / "prepare.py"
         pythonpath = os.pathsep.join(
             filter(None, [
@@ -607,7 +607,11 @@ class RulerAdapter(FrameworkAdapter):
                 os.environ.get("PYTHONPATH", ""),
             ])
         )
-        env = {**os.environ, "PYTHONPATH": pythonpath}
+        env = {
+            **os.environ,
+            "PYTHONPATH": pythonpath,
+            "RULER_DATA_DIR": str(data_dir / "assets"),
+        }
 
         cmd = [
             sys.executable,
@@ -634,33 +638,18 @@ class RulerAdapter(FrameworkAdapter):
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"Data generation failed for {task_id}/{context_length}:\n{result.stderr}"
+                f"Data generation failed for {task_id}/{context_length}:\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
         logger.debug(f"Data generation stdout: {result.stdout}")
         return output_file
 
-    def _ensure_essay_haystack(self, timeout: int) -> None:
-        """Download the essay haystack lazily when an essay task needs it."""
-        essay_file = self.SCRIPTS_DIR / "data" / "synthetic" / "json" / "PaulGrahamEssays.json"
-        if essay_file.exists() and essay_file.stat().st_size > 0:
-            return
-
-        downloader = essay_file.parent / "download_paulgraham_essay.py"
-        logger.info("Essay haystack is missing; downloading RULER essay data")
-        result = subprocess.run(
-            [sys.executable, str(downloader)],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+    def _prepare_task_assets(self, tasks: list[str], data_dir: Path, timeout: int) -> None:
+        """Prepare this job's required inputs in one shared writable cache."""
+        prepare_assets(
+            [self._load_task_config(task) for task in tasks],
+            data_dir / "assets", self.SCRIPTS_DIR, timeout,
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                "Failed to download RULER essay haystack. "
-                "The runtime must have network access to GitHub and Paul Graham.\n"
-                f"{result.stderr}"
-            )
-        if not essay_file.exists() or essay_file.stat().st_size == 0:
-            raise RuntimeError("RULER essay downloader completed without creating essay data")
 
     def _run_api_inference(
         self,
@@ -689,6 +678,10 @@ class RulerAdapter(FrameworkAdapter):
 
         Returns:
             List of prediction dicts with 'pred' key added.
+
+        Raises:
+            RuntimeError: An inference call failed after the client's retries.
+                API failures are not converted into scored predictions.
         """
         samples: list[dict] = []
         with open(data_file) as fh:
@@ -700,7 +693,6 @@ class RulerAdapter(FrameworkAdapter):
         predictions: list[dict] = []
         n_samples = len(samples)
         log_interval = max(1, batch_size)
-        failure_count = 0
 
         for i, sample in enumerate(samples):
             try:
@@ -712,28 +704,23 @@ class RulerAdapter(FrameworkAdapter):
                 )
                 pred_text: str = response.choices[0].message.content or ""
             except Exception as exc:
-                # Re-raise auth/connection errors immediately; swallow only per-sample
-                # transient errors (e.g., timeout on a single long prompt).
+                # The shared OpenAI client handles retries. A remaining failure
+                # must fail the job rather than become an empty, scored answer.
                 import openai as _openai  # noqa: PLC0415
-                if isinstance(exc, (_openai.AuthenticationError, _openai.PermissionDeniedError)):
-                    raise RuntimeError(
-                        f"API authentication failed for {model_name}: {exc}. "
-                        "Check model.auth.secret_ref or the model API credential environment."
-                    ) from exc
-                logger.warning(
-                    f"Inference failed for sample {sample.get('index', '?')}: {exc}"
+
+                detail = type(exc).__name__
+                status_code = getattr(exc, "status_code", None)
+                if status_code is not None:
+                    detail += f" (HTTP {status_code})"
+                error_msg = (
+                    f"Inference failed for {pred_file.stem}, "
+                    f"sample {sample.get('index', '?')} on model {model_name}: {detail}."
                 )
-                pred_text = ""
-                failure_count += 1
-                # Abort early if more than half the samples have failed — a dead
-                # endpoint would otherwise run to completion with a 0.0 score.
-                failure_threshold = max(5, n_samples // 2)
-                if failure_count >= failure_threshold:
-                    raise RuntimeError(
-                        f"{failure_count}/{n_samples} inference calls failed "
-                        f"(threshold={failure_threshold}). "
-                        "Check that model.url is reachable and the model is loaded."
-                    ) from exc
+                if isinstance(exc, (_openai.AuthenticationError, _openai.PermissionDeniedError)):
+                    error_msg += (
+                        " Check model.auth.secret_ref or the model API credential environment."
+                    )
+                raise RuntimeError(error_msg) from exc
 
             predictions.append(
                 {
@@ -761,12 +748,6 @@ class RulerAdapter(FrameworkAdapter):
                             ),
                         )
                     )
-
-        if failure_count > 0 and failure_count == n_samples:
-            raise RuntimeError(
-                f"All {n_samples} inference calls failed. "
-                "Check that model.url is reachable and the model is loaded."
-            )
 
         pred_file.parent.mkdir(parents=True, exist_ok=True)
         with open(pred_file, "w") as fh:
@@ -984,9 +965,9 @@ class RulerAdapter(FrameworkAdapter):
     ) -> EvalCardMetadata:
         """Build a RULER EvalCard (Dhar et al. arXiv:2511.21695) from scored results.
 
-        Produces one CapabilityEvalEntry per evaluated category (NIAH, variable
-        tracking, aggregation, QA) with the zero-shot average score for that
-        category across all context lengths.
+        Groups task overall scores by category and actual shot count. Worked
+        examples remain in the official prompts; only zero-shot groups populate
+        zero_shot. Few-shot groups use alt_prompting and describe their shot count.
         """
         CATEGORY_ABILITIES = {
             "needle_in_a_haystack": "Long-context retrieval (NIAH)",
@@ -999,25 +980,40 @@ class RulerAdapter(FrameworkAdapter):
         }
         DEFAULT_METRIC = "string_match_all (% exact ref recall)"
 
-        # Collect per-category overall scores from .overall EvaluationResult entries
-        category_scores: dict[str, list[float]] = {}
+        # Keep different prompting conditions separate within each category.
+        category_scores: dict[tuple[str, int], list[float]] = {}
         for result in evaluation_results:
             if not result.metric_name.endswith(".overall"):
                 continue
             meta = result.metadata or {}
-            cat = meta.get("category", "unknown")
-            category_scores.setdefault(cat, []).append(float(result.metric_value))
+            task_id = meta.get("task_id") or result.metric_name.removesuffix(".overall")
+            task_config = self._load_task_config(task_id)
+            if task_config["task"] == "common_words_extraction":
+                num_shots = max(0, int(task_config["args"].get("num_fewshot", 1)))
+            elif task_config["task"] == "variable_tracking":
+                # main() always supplies one ICL example; the CLI flag is unused.
+                num_shots = 1
+            else:
+                num_shots = 0
+            cat = meta.get("category") or self._get_category(task_id)
+            category_scores.setdefault((cat, num_shots), []).append(float(result.metric_value))
 
         capability_evaluations: list[CapabilityEvalEntry] = []
-        for cat in sorted(category_scores):
-            scores = category_scores[cat]
-            avg = sum(scores) / len(scores)
+        for (cat, num_shots), scores in sorted(category_scores.items()):
+            avg = round(sum(scores) / len(scores), 4)
+            if num_shots == 0:
+                prompting = {"zero_shot": avg}
+            else:
+                prompting = {
+                    "alt_prompting": avg,
+                    "alt_prompting_description": f"{num_shots}-shot prompting (worked examples)",
+                }
             capability_evaluations.append(
                 CapabilityEvalEntry(
                     ability=CATEGORY_ABILITIES.get(cat, cat),
                     benchmark=f"RULER 1.0 / {benchmark_id}",
                     metric=CATEGORY_METRICS.get(cat, DEFAULT_METRIC),
-                    zero_shot=round(avg, 4),
+                    **prompting,
                 )
             )
 
@@ -1034,7 +1030,10 @@ class RulerAdapter(FrameworkAdapter):
                 "Datasets are generated deterministically (fixed random_seed); "
                 "scores reflect synthetic retrieval/tracking/aggregation tasks, "
                 "not real-world document understanding performance. "
-                "All tasks use zero-shot prompting with task-specific answer-prefix templates. "
+                "CWE uses num_fewshot from its task configuration (default 1); "
+                "variable tracking includes one worked example. "
+                "NIAH, frequency-words extraction and QA use zero-shot prompting. "
+                "EvalCard category averages are grouped by shot count. "
                 "Scoring: string_match_all (fraction of expected references found in "
                 "prediction) for NIAH, variable-tracking, and aggregation tasks; "
                 "string_match_part (any expected reference in prediction) for QA tasks. "

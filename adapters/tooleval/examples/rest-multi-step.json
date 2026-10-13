@@ -1,0 +1,40 @@
+{
+  "name": "tooleval-multi-step-smoke",
+  "timeout_minutes": 30,
+  "model": {
+    "name": "my-model",
+    "url": "https://my-vllm.example.com/v1",
+    "auth": {
+      "secret_ref": "my-model-auth"
+    }
+  },
+  "benchmarks": [
+    {
+      "id": "multi-step",
+      "provider_id": "tooleval",
+      "parameters": {
+        "tool_server_url": "http://toolbench-server.my-tenant.svc:8080",
+        "num_tasks": 1,
+        "max_steps": 5,
+        "instruction": "Solve this in steps: (1) echo the message hello, (2) uppercase the message hello, (3) finish with a short confirmation. Use tools one step at a time and observe each result before the next call.",
+        "enable_judge": true,
+        "probe_models": true,
+        "debug_io": true,
+        "reference_calls": [
+          {
+            "category": "Tools",
+            "tool_name": "echo",
+            "api_name": "echo_message",
+            "tool_input": { "message": "hello" }
+          },
+          {
+            "category": "Tools",
+            "tool_name": "uppercase",
+            "api_name": "uppercase_message",
+            "tool_input": { "message": "hello" }
+          }
+        ]
+      }
+    }
+  ]
+}
