@@ -190,11 +190,11 @@ The promptfoo adapter integrates [promptfoo](https://github.com/promptfoo/prompt
 | Parameter | Benchmark | Default | Description |
 |---|---|---|---|
 | `plugins` | promptfoo-redteam | OWASP LLM Top 10 subset | Plugin IDs or category aliases to run; use `promptfoo redteam plugins` to list all 155 |
-| `redteam_purpose` | promptfoo-redteam | _(none)_ | Plain-language description of what the application does; used to generate contextually relevant attacks rather than generic ones |
-| `num_tests` | promptfoo-redteam | `5` | Number of test cases per plugin |
+| `purpose` | promptfoo-redteam | `An AI assistant` | Plain-language description of what the application does; used to generate contextually relevant attacks rather than generic ones |
+| `num_tests_per_plugin` | promptfoo-redteam | `5` | Number of test cases per plugin |
 | `generation_provider` | promptfoo-redteam | promptfoo default (unreachable on self-hosted) | promptfoo provider ID of the model that generates adversarial content **and** grades results (passed to `redteam generate --provider` and `eval --grader`) — set this to avoid silent all-failed results |
-| `generation_provider_url` | promptfoo-redteam | target model URL | Base URL of the OpenAI-compatible endpoint serving `generation_provider`; only used when `generation_provider` is set |
-| `generation_provider_api_key` | promptfoo-redteam | `GENERATION_PROVIDER_API_KEY` env var, then the target model's key | API key for the `generation_provider` endpoint; only used when `generation_provider` is set |
+| `generation_provider_url` | promptfoo-redteam | target model URL (`/v1` appended if missing) | Base URL of the OpenAI-compatible endpoint serving `generation_provider`; only used when `generation_provider` is set |
+| `generation_provider_api_key` | promptfoo-redteam | `GENERATION_PROVIDER_API_KEY` env var | API key for the `generation_provider` endpoint; only used when `generation_provider` is set. The target model's key is reused only when `generation_provider_url` is not set. With an explicit `generation_provider_url` and no key from the parameter or env var, the adapter sends `not-required`, so an authenticated endpoint needs its own key |
 | `prompts` / `tests` | promptfoo-eval | _(none)_ | Generate a promptfoo config from these instead of `config_yaml` |
 | `config_yaml` | promptfoo-eval | _(none)_ | Base promptfoo project config: `targets` is removed, `providers` is replaced with the EvalHub model endpoint, and `evaluateOptions.timeoutMs` / `maxConcurrency` are set from `request_timeout` / `max_concurrency`; other `evaluateOptions` keys are preserved |
 | `max_concurrency` | both | `4` | Maximum concurrent API calls |
