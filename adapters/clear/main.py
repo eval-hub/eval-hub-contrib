@@ -38,7 +38,7 @@ from evalhub.adapter import (
 )
 from evalhub.adapter.mlflow import MlflowClient as EvalHubMlflowClient
 from evalhub.adapter.auth import resolve_model_credentials
-from evalhub.adapter.mlflow import MlflowArtifact, TracesNamespace
+from evalhub.adapter.mlflow import MlflowArtifact, MlflowFileArtifact, TracesNamespace
 
 from themes import RED_HAT_CLEAR_DASHBOARD_CSS, RED_HAT_DASHBOARD_JS_PATCHES
 
@@ -1071,10 +1071,10 @@ class ClearAdapter(FrameworkAdapter):
 
         summary_bytes = json.dumps(metrics_summary, indent=2, default=str).encode("utf-8")
 
-        mlflow_artifacts: list[MlflowArtifact] = [
-            MlflowArtifact(
+        mlflow_artifacts: list[MlflowArtifact | MlflowFileArtifact] = [
+            MlflowFileArtifact(
                 "clear_results.json",
-                clear_path.read_bytes(),
+                clear_path,
                 "application/json",
             ),
             MlflowArtifact(
@@ -1086,9 +1086,9 @@ class ClearAdapter(FrameworkAdapter):
         for h in clear_html_artifacts or []:
             if h.is_file():
                 mlflow_artifacts.append(
-                    MlflowArtifact(
+                    MlflowFileArtifact(
                         h.name,
-                        h.read_bytes(),
+                        h,
                         "text/html",
                     )
                 )

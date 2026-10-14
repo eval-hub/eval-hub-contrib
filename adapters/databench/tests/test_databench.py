@@ -189,6 +189,14 @@ def test_adapter_http_generation_scoring_and_diagnostics(
         )
     adapter = object.__new__(main.DataBenchAdapter)
     result = adapter.run_benchmark_job(config, callbacks)
+    from evalhub.adapter.mlflow import MlflowFileArtifact
+
+    artifacts = adapter.mlflow_artifacts
+    assert {artifact.path for artifact in artifacts} == {"samples.jsonl", "results.json"}
+    for artifact in artifacts:
+        assert isinstance(artifact, MlflowFileArtifact)
+        assert artifact.local_path == tmp_path / artifact.path
+        assert artifact.local_path.is_file()
     phases = [call.args[0].phase for call in callbacks.report_status.call_args_list]
     assert phases == [
         main.JobPhase.INITIALIZING,
@@ -317,12 +325,19 @@ def test_missing_answer_fails_job(monkeypatch, tmp_path, content):
 def test_entrypoint_reports_result_via_callbacks(monkeypatch):
     adapter = MagicMock()
     callbacks = MagicMock()
+    callbacks.mlflow.save.return_value = "databench-run"
     monkeypatch.setattr(main, "configure_telemetry", lambda: None)
     monkeypatch.setattr(main, "DataBenchAdapter", lambda **kwargs: adapter)
     monkeypatch.setattr(
         main.DefaultCallbacks, "from_adapter", lambda instance: callbacks
     )
     main.main()
+    callbacks.mlflow.save.assert_called_once_with(
+        adapter.run_benchmark_job.return_value,
+        adapter.job_spec,
+        artifacts=adapter.mlflow_artifacts,
+    )
+    assert adapter.run_benchmark_job.return_value.mlflow_run_id == "databench-run"
     callbacks.report_results.assert_called_once_with(
         adapter.run_benchmark_job.return_value
     )
