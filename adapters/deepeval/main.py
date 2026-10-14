@@ -707,7 +707,7 @@ def _run_json_correctness(
     """Validate JSON output correctness without a DeepEval metric or LLM judge.
 
     Uses json.loads() for validity and jsonschema.validate() (if a schema is
-    provided) for schema conformance.
+    provided) for schema conformance, including ``format`` keywords.
     """
     schema = params.get("json_schema")
     if schema and isinstance(schema, str):
@@ -718,6 +718,16 @@ def _run_json_correctness(
                 "parameters.json_schema could not be parsed; falling back to validity-only"
             )
             schema = None
+
+    if schema:
+        # A malformed schema is a configuration error, not a model failure:
+        # fail the job instead of scoring every record 0 as a "Schema violation".
+        try:
+            jsonschema.validators.validator_for(schema).check_schema(schema)
+        except jsonschema.SchemaError as exc:
+            raise ValueError(
+                f"parameters.json_schema is not a valid JSON Schema: {exc.message}"
+            ) from exc
 
     results: list[EvaluationResult] = []
     scores: list[float] = []
@@ -732,7 +742,11 @@ def _run_json_correctness(
             parsed = json.loads(str(output) if not isinstance(output, str) else output)
             if schema:
                 try:
-                    jsonschema.validate(instance=parsed, schema=schema)
+                    jsonschema.validate(
+                        instance=parsed,
+                        schema=schema,
+                        format_checker=jsonschema.FormatChecker(),
+                    )
                     score = 1.0
                     reason = "Valid JSON conforming to schema"
                 except Exception as exc:  # noqa: BLE001
@@ -1024,6 +1038,12 @@ class DeepEvalAdapter(FrameworkAdapter):
             )
             overall_score = _compute_overall_score(evaluation_results, benchmark_id)
 
+            # json-correctness validates every record directly and runs no judge;
+            # all other benchmarks use the filtered test_cases and a judge model.
+            is_direct = benchmark_id == "json-correctness"
+            num_evaluated = len(records) if is_direct else len(test_cases)
+            judge_label = "none (direct validation)" if is_direct else judge_name
+
             # Build EvalCard — separate capability and safety entries
             capability_entries = [
                 e for e in card_entries if isinstance(e, CapabilityEvalEntry)
@@ -1040,8 +1060,8 @@ class DeepEvalAdapter(FrameworkAdapter):
                 developer_footnotes=(
                     f"DeepEval {deepeval_ver} | "
                     f"benchmark={benchmark_id} | "
-                    f"judge={judge_name} | "
-                    f"samples={len(test_cases)} | "
+                    f"judge={judge_label} | "
+                    f"samples={num_evaluated} | "
                     f"threshold={threshold}"
                 ),
             )
@@ -1051,9 +1071,7 @@ class DeepEvalAdapter(FrameworkAdapter):
                 {
                     "benchmark_id": benchmark_id,
                     "overall_score": overall_score,
-                    "num_examples_evaluated": len(records)
-                    if benchmark_id == "json-correctness"
-                    else len(test_cases),
+                    "num_examples_evaluated": num_evaluated,
                     "results": [
                         {"metric_name": r.metric_name, "metric_value": r.metric_value}
                         for r in evaluation_results
@@ -1109,10 +1127,7 @@ class DeepEvalAdapter(FrameworkAdapter):
                 model_name=config.model.name,
                 results=evaluation_results,
                 overall_score=overall_score,
-                # json-correctness evaluates all records directly; all others use filtered test_cases.
-                num_examples_evaluated=len(records)
-                if benchmark_id == "json-correctness"
-                else len(test_cases),
+                num_examples_evaluated=num_evaluated,
                 duration_seconds=duration,
                 completed_at=datetime.now(UTC),
                 evaluation_metadata={
