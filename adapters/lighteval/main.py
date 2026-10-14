@@ -38,7 +38,7 @@ from evalhub.adapter import (
     resolve_model_credentials,
 )
 from evalhub.models import MetricSchema, ResultType
-from evalhub.adapter.mlflow import MlflowArtifact
+from evalhub.adapter.mlflow import MlflowFileArtifact
 
 logger = logging.getLogger(__name__)
 
@@ -137,15 +137,6 @@ class LightEvalAdapter(FrameworkAdapter):
                 evaluation_results=evaluation_results,
                 additional_info=additional_info,
             )
-            self.mlflow_artifacts = [
-                MlflowArtifact(
-                    file.name,
-                    file.read_bytes(),
-                    "application/json" if file.suffix == ".json" else "text/plain",
-                )
-                for file in output_files
-            ]
-
             if config.parameters.get("save_sample_results"):
                 from sample_results import save_sample_results
 
@@ -156,6 +147,20 @@ class LightEvalAdapter(FrameworkAdapter):
                 )
                 output_files.append(sample_file)
                 logger.info("Saved %d per-example results to %s", sample_count, sample_file)
+
+            # Keep files available until the synchronous MLflow save in main()
+            # returns. The SDK streams these files without loading them into memory.
+            self.mlflow_artifacts = [
+                MlflowFileArtifact(
+                    path=file.name,
+                    local_path=file,
+                    content_type={
+                        ".json": "application/json",
+                        ".jsonl": "application/x-ndjson",
+                    }.get(file.suffix, "text/plain"),
+                )
+                for file in output_files
+            ]
 
             logger.info(
                 f"Post-processing complete. Overall score: {overall_score}, "
