@@ -6,3 +6,4 @@ pydantic>=2.0.0
 certifi>=2026.10.23
 pip>=26.2.2
 jsonschema>=4.0.0
+jsonschema[format-nongpl]>=4.0.0

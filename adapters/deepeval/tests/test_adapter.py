@@ -655,6 +655,41 @@ def test_json_correctness_happy_path(tmp_path, monkeypatch):
     assert not judge_called, "json-correctness must not invoke _resolve_judge_model"
 
 
+@pytest.mark.integration
+def test_json_correctness_footnote_reports_direct_path(tmp_path, monkeypatch):
+    """EvalCard footnote names no judge and counts every record, not just test_cases."""
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    with open(Path("meta/job.json")) as f:
+        job = json.load(f)
+    job["benchmark_id"] = "json-correctness"
+    job["parameters"]["dataset_format"] = "jsonl"
+    job["parameters"]["eval_model_name"] = "some-judge"
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    # The second record lacks the `input` column, so it is skipped when building
+    # test_cases but is still validated directly.
+    (data_dir / "data.jsonl").write_text(
+        '{"input": "q", "actual_output": "{\\"a\\": 1}"}\n'
+        '{"actual_output": "{\\"b\\": 2}"}\n'
+    )
+    job["parameters"]["data_dir"] = str(data_dir)
+    (meta_dir / "job.json").write_text(json.dumps(job))
+
+    adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
+    callbacks = create_autospec(JobCallbacks)
+    callbacks.mlflow = MagicMock()
+    callbacks.mlflow.save.return_value = None
+
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    footnotes = results.eval_card.developer_footnotes
+    assert results.num_examples_evaluated == 2
+    assert "samples=2" in footnotes
+    assert "judge=none (direct validation)" in footnotes
+    assert "some-judge" not in footnotes
+
+
 # ---------------------------------------------------------------------------
 # Tool correctness — tools_called column handling
 # ---------------------------------------------------------------------------
@@ -952,6 +987,41 @@ def test_json_correctness_bad_schema_string_falls_back():
     scores = {r.metric_name: r.metric_value for r in results}
     # Falls back to validity-only: valid JSON → 1.0
     assert scores["json_correctness_score"] == 1.0
+
+
+@pytest.mark.integration
+def test_json_correctness_invalid_schema_raises():
+    """A structurally invalid schema is a config error, not a per-record failure."""
+    from main import _run_json_correctness
+
+    records = [{"input": "q", "actual_output": '{"ok": true}'}]
+    with pytest.raises(ValueError, match="not a valid JSON Schema"):
+        _run_json_correctness(records, {"json_schema": {"type": 5}})
+
+
+@pytest.mark.integration
+def test_json_correctness_enforces_format_keywords():
+    """`format` keywords are checked, not silently ignored."""
+    from main import _run_json_correctness
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "when": {"type": "string", "format": "date-time"},
+            "ip": {"type": "string", "format": "ipv4"},
+        },
+        "required": ["when", "ip"],
+    }
+    good = '{"when": "2026-10-14T02:11:44Z", "ip": "10.0.0.1"}'
+    bad_date = '{"when": "yesterday", "ip": "10.0.0.1"}'
+    bad_ip = '{"when": "2026-10-14T02:11:44Z", "ip": "999.1.1.1"}'
+    records = [{"actual_output": o} for o in (good, bad_date, bad_ip)]
+
+    results, _ = _run_json_correctness(records, {"json_schema": schema})
+    per_case = {r.metric_name: r.metric_value for r in results}
+    assert per_case["case_0.json_valid"] == 1.0
+    assert per_case["case_1.json_valid"] == 0.0
+    assert per_case["case_2.json_valid"] == 0.0
 
 
 # ---------------------------------------------------------------------------

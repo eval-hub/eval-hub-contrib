@@ -600,7 +600,8 @@ parameters:
     default: null
     description: >
       For json-correctness only. JSON Schema dict (or JSON string) the output must conform to.
-      When omitted, only JSON validity is checked.
+      `format` keywords (date-time, email, ipv4, ...) are enforced. An invalid schema fails
+      the job instead of scoring every record 0. When omitted, only JSON validity is checked.
 
   - name: advice_types
     type: array
