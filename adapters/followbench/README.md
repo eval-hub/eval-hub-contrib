@@ -58,6 +58,7 @@ evaluation loop.
 The following parameters are supported:
 
 - `judge_model`
+- `judge_route` (`target` or `judge`)
 - `judge_url`
 - `judge_api_key`
 - `num_examples`
@@ -68,6 +69,15 @@ The following parameters are supported:
 Credentials must be injected through configuration or environment variables.
 Credentials must not be committed to source code, job specifications, or
 container images.
+
+For the bundled Instruction & Output Reliability collection, set `judge_model`
+and `judge_route` on the FollowBench benchmark in each job. `target` uses
+`model.url` and its credential. `judge` reads `judge_api-key` and optional
+`judge_url` from `model.auth.secret_ref`; in Kubernetes these are projected as
+a synthetic reference and loopback URL, and the sidecar supplies the real
+credential and upstream route. Do not combine `judge_route` with the legacy
+`judge_url` or `judge_api_key` job parameters. Other jobs retain the legacy
+behavior described below.
 
 When `judge_url` is omitted, the judge uses `model.url` and reuses the
 evaluated model credential, including the credential resolved from

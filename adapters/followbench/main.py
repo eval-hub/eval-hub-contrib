@@ -26,7 +26,7 @@ from evalhub.adapter import (
     MessageInfo,
     configure_telemetry,
 )
-from evalhub.adapter.auth import resolve_model_credentials
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 
 from _evaluation import (
     FollowBenchExample,
@@ -217,8 +217,32 @@ def _build_judge_client(
     request_timeout: int,
 ) -> tuple[Any, str]:
     model_url = str(config.model.url or "").strip().rstrip("/")
-    judge_url = str(parameters.get("judge_url") or model_url).strip().rstrip("/")
-    judge_model = str(parameters.get("judge_model") or config.model.name).strip()
+    route = parameters.get("judge_route")
+    if route is not None:
+        if not isinstance(route, str) or route not in ("target", "judge"):
+            raise ValueError("parameters.judge_route must be target or judge")
+        if any(parameters.get(key) for key in ("judge_url", "judge_api_key")):
+            raise ValueError("judge_route cannot be combined with judge_url or judge_api_key")
+        judge_model = parameters.get("judge_model")
+        if not isinstance(judge_model, str) or not judge_model.strip():
+            raise ValueError("parameters.judge_model must be a non-empty model name")
+        judge_model = judge_model.strip()
+        if route == "judge":
+            # Kubernetes mounts synthetic reference values; the sidecar resolves
+            # the real judge key and routes to judge_url when that key is present.
+            api_key = read_model_auth_key("judge_api-key")
+            if not api_key:
+                raise ValueError("judge_route=judge requires judge_api-key in model.auth.secret_ref")
+            judge_url = read_model_auth_key("judge_url") or model_url
+        else:
+            judge_url = model_url
+            api_key = _resolve_model_api_key(config)
+    else:
+        judge_url = str(parameters.get("judge_url") or model_url).strip().rstrip("/")
+        judge_model = str(parameters.get("judge_model") or config.model.name).strip()
+        api_key = _resolve_judge_api_key(config, parameters, judge_url, model_url)
+
+    judge_url = str(judge_url or "").strip().rstrip("/")
 
     if not judge_url:
         raise ValueError("judge_url or config.model.url is required")
@@ -228,12 +252,7 @@ def _build_judge_client(
 
     client = openai.OpenAI(
         base_url=judge_url,
-        api_key=_resolve_judge_api_key(
-            config,
-            parameters,
-            judge_url,
-            model_url,
-        ),
+        api_key=api_key,
         timeout=request_timeout,
     )
 

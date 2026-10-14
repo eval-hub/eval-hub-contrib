@@ -257,6 +257,22 @@ Global client selection priority for roles without explicit routing:
 2. `ANTHROPIC_API_KEY` or `ANTHROPIC_BASE_URL` set → Anthropic client
 3. `OPENAI_BASE_URL` or `OPENAI_API_KEY` set → OpenAI-compatible client
 
+### Curated HLE and CyberSecEval 2 judge routing
+
+For `inspect/hle` and `inspect/cyberseceval-2-pi`, set flat benchmark parameters
+`judge_model` and `judge_route` (`target` or `judge`). The adapter maps both to
+Inspect's `grader` role. For CyberSecEval 2 it also disables the task's built-in
+`judge_llm` default, which would otherwise bypass that role. The existing
+`task_args` scorer settings remain in place.
+
+`target` reuses the evaluated model endpoint and credential. `judge` reads
+`judge_api-key` and optional `judge_url` from the Secret named by
+`model.auth.secret_ref`. In Kubernetes the adapter receives only the projected
+reference and loopback URL; the sidecar injects the real key and selects the
+judge upstream. A missing judge key fails before launching Inspect. Do not put
+an endpoint or API key in job parameters when using `judge_route`. Jobs without
+`judge_route` retain their existing `model_roles` and task-argument behavior.
+
 ### Independent StrongREJECT grader
 
 For `inspect/strong-reject`, set `parameters.grader_model` to route scoring to

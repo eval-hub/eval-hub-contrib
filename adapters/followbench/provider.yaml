@@ -58,7 +58,13 @@ benchmarks:
 parameters:
   - name: judge_model
     type: string
-    description: External judge model identifier.
+    description: Judge model identifier; required when judge_route is set.
+
+  - name: judge_route
+    type: string
+    description: >
+      target reuses the evaluated model endpoint and credential; judge uses
+      judge_api-key and optional judge_url from model.auth.secret_ref via the sidecar.
 
   - name: judge_url
     type: string

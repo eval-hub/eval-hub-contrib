@@ -6,6 +6,7 @@ import copy
 import re
 from unittest.mock import MagicMock, create_autospec
 
+import pytest
 from evalhub.adapter import JobCallbacks, JobPhase
 
 import main as main_module
@@ -82,6 +83,61 @@ def test_build_judge_client_does_not_reuse_model_credential_for_other_endpoint(
 
     assert openai_constructor.call_args.kwargs["api_key"] == "DUMMY"
     resolve_model_api_key.assert_not_called()
+
+
+def test_collection_target_route_reuses_target_connection(monkeypatch):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+    monkeypatch.setenv("FOLLOWBENCH_JUDGE_API_KEY", "unrelated-key")
+    monkeypatch.setattr(main_module, "_resolve_model_api_key", lambda _: "api-key:ref")
+    constructor = MagicMock()
+    monkeypatch.setattr(main_module.openai, "OpenAI", constructor)
+
+    _, name = main_module._build_judge_client(
+        config, {"judge_model": "deployed-judge", "judge_route": "target"}, 30
+    )
+
+    assert name == "deployed-judge"
+    assert constructor.call_args.kwargs["base_url"] == config.model.url
+    assert constructor.call_args.kwargs["api_key"] == "api-key:ref"
+
+
+@pytest.mark.parametrize("projected_url", [None, "http://localhost:8080/judge/v1"])
+def test_collection_judge_route_uses_projected_connection(monkeypatch, projected_url):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+    projected = {"judge_api-key": "judge_api-key:ref", "judge_url": projected_url}
+    monkeypatch.setattr(main_module, "read_model_auth_key", projected.get)
+    constructor = MagicMock()
+    monkeypatch.setattr(main_module.openai, "OpenAI", constructor)
+
+    _, name = main_module._build_judge_client(
+        config, {"judge_model": "deployed-judge", "judge_route": "judge"}, 30
+    )
+
+    assert name == "deployed-judge"
+    assert constructor.call_args.kwargs["base_url"] == (projected_url or config.model.url)
+    assert constructor.call_args.kwargs["api_key"] == "judge_api-key:ref"
+
+
+@pytest.mark.parametrize("parameters, error", [
+    ({"judge_model": "judge", "judge_route": "other"}, "judge_route"),
+    ({"judge_route": "target"}, "judge_model"),
+    ({"judge_model": "judge", "judge_route": "target", "judge_api_key": "raw-key"}, "cannot be combined"),
+])
+def test_collection_judge_route_rejects_invalid_or_conflicting_inputs(monkeypatch, parameters, error):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+
+    with pytest.raises(ValueError, match=error):
+        main_module._build_judge_client(config, parameters, 30)
+
+
+def test_collection_judge_route_requires_projected_key(monkeypatch):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+    monkeypatch.setattr(main_module, "read_model_auth_key", lambda key: None)
+
+    with pytest.raises(ValueError, match="judge_api-key"):
+        main_module._build_judge_client(
+            config, {"judge_model": "deployed-judge", "judge_route": "judge"}, 30
+        )
 
 
 def test_malformed_judge_response_is_scored_as_no(monkeypatch):
