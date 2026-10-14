@@ -1,0 +1,77 @@
+# Lighteval — Math Collection
+#
+# ⚠️  gsm8k via lighteval uses generative scoring → works with standard image.
+#     math, math:algebra, math:counting_and_probability, math_500 use exact-match
+#     generative scoring → should work with standard image.
+#     See lighteval-reasoning for AIME benchmarks.
+#
+# ── Threshold Justification ──────────────────────────────────────────────────
+# GSM8K (Cobbe et al. 2021): Top-10 <80B: 90–96%. Typical 8B: 77–91%.
+#   Threshold 0.70 = lower bound competitive 8B per Open LLM Leaderboard v2.
+# MATH (Hendrycks et al. 2021): Full competition math dataset.
+#   Top-10 <80B: 84–97% (saturating for 70B+). Typical 8B: 50–87%.
+#   Threshold 0.50 = lower bound competitive 8B.
+# MATH:algebra: Easiest MATH category. Top-10 <80B: 88–97%. Threshold 0.60.
+# MATH:counting_and_probability: Harder. Top-10 <80B: 72–92%. Threshold 0.45.
+# MATH-500 (Lightman et al. 2023): Representative 500-problem subset of MATH.
+#   Top-10 <80B: 84–97%. Typical 8B: 50–87%. Threshold 0.50.
+#
+# ── Weight Rationale ─────────────────────────────────────────────────────────
+# Weight 2.0 → gsm8k, math_500: Primary math signals; broadest calibration.
+# Weight 1.5 → math, math:algebra, math:counting: Domain-specific; high discrimination.
+#
+# ── Global Pass Criteria ─────────────────────────────────────────────────────
+# gsm8k ≥ 0.70 (mandatory gate) AND math_500 ≥ 0.50.
+
+name: lighteval-math
+description: >
+  Math suite via Lighteval. GSM8K (Cobbe et al. 2021, threshold 0.70 = leaderboard lower
+  bound, weight 2.0 — primary gate), MATH (Hendrycks et al. 2021, threshold 0.50,
+  weight 1.5), MATH:algebra (threshold 0.60, weight 1.5), MATH:counting_and_probability
+  (threshold 0.45, weight 1.5 — harder), MATH-500 (Lightman et al. 2023, threshold
+  0.50 = lower bound competitive 8B, weight 2.0). Global PASS: gsm8k>=0.70 AND
+  math_500>=0.50. GSM8K and MATH use generative scoring — work with standard image.
+category: math
+tags: [math, reasoning, competition, lighteval]
+
+benchmarks:
+  # GSM8K: grade-school math. Generative. Top-10 <80B: 90–96%. Threshold 0.70. Mandatory gate.
+  - id: gsm8k
+    provider_id: lighteval
+    weight: 2.0
+    parameters: {max_samples: 100}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.70}
+
+  # MATH full dataset: competition math across 7 categories.
+  # Top-10 <80B: 84–97% (saturating). Typical 8B: 50–87%. Threshold 0.50.
+  - id: math
+    provider_id: lighteval
+    weight: 1.5
+    parameters: {max_samples: 100}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.50}
+
+  # MATH:algebra: easiest MATH category. Top-10 <80B: 88–97%. Threshold 0.60.
+  - id: math:algebra
+    provider_id: lighteval
+    weight: 1.5
+    parameters: {max_samples: 50}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.60}
+
+  # MATH:counting_and_probability: harder category. Top-10 <80B: 72–92%. Threshold 0.45.
+  - id: math:counting_and_probability
+    provider_id: lighteval
+    weight: 1.5
+    parameters: {max_samples: 50}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.45}
+
+  # MATH-500: representative 500-problem subset (Lightman et al. 2023). Threshold 0.50.
+  - id: math_500
+    provider_id: lighteval
+    weight: 2.0
+    parameters: {max_samples: 100}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.50}
