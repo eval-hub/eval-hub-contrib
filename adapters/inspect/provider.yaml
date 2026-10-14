@@ -767,6 +767,16 @@ benchmarks:
     metrics: [accuracy/accuracy]
     tags: [knowledge, factuality, inspect-evals]
 
+  - id: inspect/docvqa
+    name: DocVQA
+    description: Visual question answering over document images, scored with Average Normalized Levenshtein Similarity (ANLS).
+    category: multimodal
+    metrics: [anls]
+    primary_score:
+      metric: anls
+      lower_is_better: false
+    tags: [multimodal, vision, document-understanding, inspect-evals]
+
   # Agent capabilities
   - id: inspect/gaia
     name: GAIA

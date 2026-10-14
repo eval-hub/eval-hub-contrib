@@ -744,6 +744,41 @@ def test_standard_results_extracted_correctly(job_spec_path, standard_eval_log):
     assert num == 10
 
 
+def test_docvqa_accuracy_is_published_as_anls(job_spec_path):
+    """DocVQA's accuracy aggregate is ANLS; preserve its value under the canonical key."""
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    eval_log = {
+        "results": {
+            "scores": [
+                {
+                    "scorer": "docvqa_scorer",
+                    "name": "docvqa_scorer",
+                    "metrics": {
+                        "accuracy": {"value": 0.82},
+                        "stderr": {"value": 0.04},
+                    },
+                }
+            ],
+            "total_samples": 5,
+        },
+        "samples": [{"id": i} for i in range(5)],
+    }
+
+    results, capabilities, num = adapter._extract_results(
+        eval_log, "inspect/docvqa", "standard"
+    )
+
+    by_name = {result.metric_name: result for result in results}
+    assert by_name["anls"].metric_value == pytest.approx(0.82)
+    assert by_name["anls"].metadata["native_metric_name"] == "docvqa_scorer/accuracy"
+    assert by_name["docvqa_scorer/stderr"].metric_value == pytest.approx(0.04)
+    assert [(entry.metric, entry.zero_shot) for entry in capabilities] == [
+        ("anls", pytest.approx(0.82)),
+        ("docvqa_scorer/stderr", pytest.approx(0.04)),
+    ]
+    assert num == 5
+
+
 def _metric(name: str, value: float) -> EvaluationResult:
     """Build a float EvaluationResult for overall-score tests."""
     return EvaluationResult(metric_name=name, metric_value=value, metric_type="float", num_samples=10)
