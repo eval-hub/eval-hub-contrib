@@ -33,7 +33,7 @@ MLflow `Yes` means both metrics and artifacts; `Yes (metrics only)` indicates pa
 
 | Adapter name | MLflow | OCI export |
 | --- | --- | --- |
-| [atif](adapters/atif/main.py) | Yes | No |
+| [atif](adapters/atif/main.py) | Yes (development SDK required) | No |
 | [clear](adapters/clear/main.py) | Yes | Yes |
 | [databench](adapters/databench/main.py) | Yes | Yes |
 | [deepeval](adapters/deepeval/main.py) | Yes | Yes |
