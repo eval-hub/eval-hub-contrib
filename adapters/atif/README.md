@@ -281,9 +281,9 @@ The container includes every application module and tests installed-image import
 JobSpec parsing, scoring, and artifact construction without host mounts. The smoke
 judge/backend are mocked; this is not a live inference or upload test. PR CI runs
 unit/contract tests and the container smoke. Python runtime dependencies are pinned
-in `requirements.lock`; the SDK is pinned to release `1.0.6`, satisfying the
-`~=1.0.6` requirement. The UBI base tag/build toolchain also need
-release-managed provenance.
+in `requirements.lock`; the SDK uses an immutable public HTTPS Git commit rather
+than an SSH development branch. **That integration commit is not an approved SDK
+release.** The UBI base tag/build toolchain also need release-managed provenance.
 
 Inputs and results are retained in memory under collection budgets, not streamed
 or sharded. Large-collection memory/throughput sizing, real-judge categorization,
