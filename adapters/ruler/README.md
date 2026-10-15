@@ -18,6 +18,8 @@ of *effective* context utilisation rather than a simple token-count ceiling.
 | `Containerfile` | Container image definition (UBI9 Python 3.12) |
 | `requirements.txt` | Runtime Python dependencies |
 | `requirements-test.txt` | Test-only dependencies |
+| `prepare_assets.py` | Prepare and verify required runtime data assets |
+| `DATA_LICENSES.md` | Data sources, attribution and licenses |
 | `scripts/` | Vendored NVIDIA RULER data-generation and evaluation scripts |
 | `meta/job.json` | Sample `JobSpec` for local testing |
 
@@ -62,6 +64,7 @@ Set `model.url` in the JobSpec to the `/v1` endpoint and `model.name` to the mod
 | `tokens_to_generate` | integer | null | Max generation tokens (defaults to per-task value) |
 | `batch_size` | integer | 1 | Inference batch / log interval |
 | `random_seed` | integer | 42 | Seed for reproducible data generation |
+| `data_gen_timeout_seconds` | integer | 600 | Timeout for the essay downloader and each task-generation subprocess; each word-list/QA download uses this value capped at 60 seconds |
 
 ## Example Job Spec
 
@@ -118,9 +121,49 @@ and NeMo-based evaluation pipeline (`scripts/eval/evaluate.py`) are not called b
 adapter — the adapter implements its own OpenAI-compatible inference loop and invokes
 only the metric functions from `scripts/eval/synthetic/constants.py`.
 
+## Data-generation assets
+
+All external datasets use the same runtime preparation flow. Before any task
+datasets are generated, `prepare_assets.py` resolves the inputs required by the
+selected tasks, validates existing cache files, and downloads only missing or
+invalid inputs. The image contains the preparation code and source URLs;
+dataset payloads are excluded from its build context.
+
+| Selected task | Required input |
+|---|---|
+| Common words extraction (CWE) | `english_words.json` |
+| SQuAD QA | `squad.json` |
+| HotpotQA QA | `hotpotqa.json` |
+| NIAH or VT configured with an essay haystack | `PaulGrahamEssays.json` |
+| FWE, default VT, noise/needle NIAH | No external dataset |
+
+All inputs are stored in the job's temporary `data/assets/` directory, under
+`/tmp` by default. Generators read this shared directory via `RULER_DATA_DIR`.
+Inputs are prepared once and reused across tasks and context lengths within
+the job. The cache is removed with the job's temporary data, so a new job
+downloads its required inputs again. Directly invoking `_generate_task_data`
+requires preparing the inputs first; `run_benchmark_job` handles this order.
+
+The word list and QA JSON files are checked against fixed SHA-256 digests and
+valid JSON before replacement. The NVIDIA word-list URL pins commit
+`c3f5e3b4f87f97e048793bb510a3a6b19a46bf3a`; HotpotQA uses the fixed Hugging Face
+revision in NVIDIA's official downloader. Essays use the vendored NVIDIA URL
+list and must produce non-empty JSON text. Remote essay contents can change
+between runs. A failed download or invalid completed input stops preparation
+before inference; the vendored essay downloader still logs and continues after
+individual URL failures, so its download counts should be checked.
+
+Runtime network access to the required sources is needed for a cold cache.
+Tokenizer resources and NLTK sentence-tokenization data are separate runtime
+dependencies and may also require network access on first use.
+
+Sources, attribution and licensing information for all four inputs are in
+[DATA_LICENSES.md](DATA_LICENSES.md), installed at `/app/DATA_LICENSES.md`.
+
 ## License
 
-Apache 2.0 — see repository root `LICENSE`.
+Adapter code: Apache 2.0 — see repository root `LICENSE`.
+Downloaded data retains its upstream licensing; see [DATA_LICENSES.md](DATA_LICENSES.md).
 Vendored NVIDIA RULER scripts retain their original NVIDIA copyright.
 
 ## Model and tokenizer authentication
@@ -144,3 +187,47 @@ synthetic data-generation subprocesses as `HF_TOKEN` and
 For direct model endpoints, `MODEL_API_KEY` or `OPENAI_API_KEY` remains supported
 when no SDK credential is available. Existing HF token environment variables
 remain supported when no mounted `hf-token` is available.
+
+## Inference failures
+
+Inference uses the OpenAI client's built-in retries. If a request still fails,
+the job reports `FAILED` and stops before scoring or exporting result artifacts.
+The error identifies the task/context pair, sample index, exception type and
+HTTP status when available. API failures are never recorded as empty answers or
+included in the score. A successful response containing an empty or incorrect
+answer is still scored normally and remains in the sample count.
+
+## EvalCard prompting metadata
+
+The official CWE and variable-tracking prompts include one worked example by
+default. Their EvalCard scores use `alt_prompting`, with a `1-shot` description;
+`zero_shot` is omitted. CWE follows `num_fewshot` in its generator task
+configuration. NIAH, FWE and QA scores use `zero_shot`.
+
+Each EvalCard row averages task overall scores within the same category and
+shot count. For example, a job containing CWE and FWE produces separate
+aggregation rows for their 1-shot and zero-shot scores. This metadata does not
+change the generated prompts, per-task metrics or job `overall_score`.
+
+## Per-example diagnostics
+
+The result directory includes `samples.jsonl` alongside `summary.csv` and
+`results.json`. When OCI export is configured, all three files are included in
+the result artifact before temporary predictions are deleted.
+
+Each JSONL row contains `job_id`, `benchmark_id`, `model_name`, `task_id`,
+`context_length`, the original sample `index`, `input` (full prompt), `outputs`
+(expected answers, including expected variable names for variable tracking), and
+`pred` (model answer). It also includes `metric_name`, `scorer`, `score` (0–1),
+and `reference_matches` (one case-insensitive substring-match flag per expected
+answer, in the same order as `outputs`). Indices can repeat across tasks/context
+lengths; use `(task_id, context_length, index)` to identify a sample.
+
+Scores use the same upstream metric function as aggregate scoring:
+`string_match_all` gives partial credit for the fraction of expected answers
+found, while QA uses `string_match_part` and gives credit when any expected
+answer is found. These are substring metrics, not exact answer comparisons.
+The upstream scorer rounds percentages to two decimals, so averaging rounded
+sample scores can differ slightly from the aggregate score. Diagnostics are
+saved for successfully completed evaluations; they do not recover samples from
+previous runs whose temporary prediction files were already deleted.

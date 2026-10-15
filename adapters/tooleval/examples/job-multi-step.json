@@ -1,0 +1,35 @@
+{
+  "id": "tooleval-multi-step-example",
+  "provider_id": "tooleval",
+  "benchmark_id": "multi-step",
+  "benchmark_index": 0,
+  "model": {
+    "name": "my-model",
+    "url": "http://localhost:8080",
+    "auth": {
+      "secret_ref": "my-model-auth"
+    }
+  },
+  "parameters": {
+    "tool_server_url": "http://toolbench-server.my-tenant.svc:8080",
+    "num_tasks": 2,
+    "max_steps": 5,
+    "enable_judge": true,
+    "probe_models": true,
+    "reference_calls": [
+      {
+        "category": "Tools",
+        "tool_name": "echo",
+        "api_name": "echo_message",
+        "tool_input": {"message": "hello"}
+      },
+      {
+        "category": "Tools",
+        "tool_name": "uppercase",
+        "api_name": "uppercase_message",
+        "tool_input": {"message": "hello"}
+      }
+    ]
+  },
+  "callback_url": "http://localhost:8080"
+}

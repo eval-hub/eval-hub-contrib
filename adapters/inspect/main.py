@@ -69,6 +69,52 @@ from _routing import (
 logger = logging.getLogger(__name__)
 
 
+_FEWSHOT_COUNT_ARGUMENTS = {
+    "fewshot",
+    "few_shot",
+    "num_fewshot",
+    "num_fewshots",
+    "num_shots",
+    "n_shots",
+}
+_FEWSHOT_LIST_ARGUMENTS = {"few_shots", "fewshot_examples", "few_shot_examples"}
+
+
+def _has_confirmed_zero_shot(eval_log: dict[str, Any]) -> bool:
+    """Return true only when the resolved Inspect task args explicitly show zero shots."""
+    eval_spec = eval_log.get("eval")
+    task_args = eval_spec.get("task_args") if isinstance(eval_spec, dict) else None
+    if not isinstance(task_args, dict):
+        return False
+
+    shot_arguments = [
+        (str(name).lower().replace("-", "_"), value)
+        for name, value in task_args.items()
+        if str(name).lower().replace("-", "_")
+        in _FEWSHOT_COUNT_ARGUMENTS | _FEWSHOT_LIST_ARGUMENTS
+    ]
+    if not shot_arguments:
+        return False
+
+    for name, value in shot_arguments:
+        if name in _FEWSHOT_LIST_ARGUMENTS:
+            if not isinstance(value, (list, tuple)) or value:
+                return False
+        elif isinstance(value, bool):
+            if value:
+                return False
+        elif isinstance(value, (int, float)):
+            if value != 0:
+                return False
+        elif isinstance(value, str):
+            if value.strip().lower() not in {"0", "false"}:
+                return False
+        else:
+            return False
+
+    return True
+
+
 class InspectAdapter(FrameworkAdapter):
     """Inspect AI framework adapter for Petri, Bloom, Dish, and inspect-evals tasks."""
 
@@ -139,7 +185,7 @@ class InspectAdapter(FrameworkAdapter):
             )
 
             evaluation_results, _, num_samples = extract_results(eval_log, config.benchmark_id, mode)
-            overall_score = compute_overall_score(evaluation_results, mode)
+            overall_score = compute_overall_score(evaluation_results, mode, config.benchmark_id)
             logger.info(f"Post-processing complete | samples={num_samples} | overall_score={overall_score}")
 
             oci_artifact = None
@@ -168,6 +214,7 @@ class InspectAdapter(FrameworkAdapter):
                 overall_score=overall_score,
                 eval_status=eval_log.get("status"),
                 num_samples=num_samples,
+                eval_log=eval_log,
             )
             self._run_info = additional_info
 
@@ -291,6 +338,7 @@ class InspectAdapter(FrameworkAdapter):
         overall_score: float | None,
         eval_status: str | None,
         num_samples: int,
+        eval_log: dict[str, Any],
     ) -> dict[str, Any]:
         """Build additional_info delta for EvalHub (not duplicated from request/metrics).
 
@@ -307,8 +355,11 @@ class InspectAdapter(FrameworkAdapter):
         if eval_status is not None:
             info["inspect_status"] = eval_status
 
-        # Standard / Open-Telco tasks are generate-or-MCQ without few-shot demos.
-        if mode == "standard" and overall_score is not None:
+        if (
+            mode == "standard"
+            and overall_score is not None
+            and _has_confirmed_zero_shot(eval_log)
+        ):
             info["zero_shot"] = overall_score
         elif mode in ("petri", "bloom") and overall_score is not None:
             # Multi-turn auditor/target/judge pipelines — not zero-shot MCQ.
@@ -336,8 +387,8 @@ class InspectAdapter(FrameworkAdapter):
     def _extract_results(self, eval_log, benchmark_id, mode):
         return extract_results(eval_log, benchmark_id, mode)
 
-    def _compute_overall_score(self, results, mode):
-        return compute_overall_score(results, mode)
+    def _compute_overall_score(self, results, mode, benchmark_id=None):
+        return compute_overall_score(results, mode, benchmark_id)
 
     def _get_inspect_version(self):
         return get_inspect_version()
