@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
+import httpx
 from evalhub.adapter import JobCallbacks, JobPhase, JobSpec, JobStatus, JobStatusUpdate
 
 from .config import ci_config, object_value, text_value
@@ -25,6 +26,7 @@ class Context:
     directory: Path
 
     def phase(self, phase: JobPhase) -> None:
+        """Report progress for the active operation."""
         self.callbacks.report_status(JobStatusUpdate(status=JobStatus.RUNNING, phase=phase))
 
 
@@ -33,7 +35,10 @@ OPERATIONS: dict[str, Operation] = {}
 
 
 def register(name: str):
+    """Register an operation under its job-spec name."""
+
     def decorator(operation: Operation) -> Operation:
+        """Reject duplicate operation names before storing the callable."""
         if name in OPERATIONS:
             raise ValueError(f"Operation {name!r} is already registered")
         OPERATIONS[name] = operation
@@ -43,6 +48,7 @@ def register(name: str):
 
 
 def identity(benchmark: dict) -> tuple:
+    """Return the provider, benchmark, and index identity of a stored result."""
     index = benchmark.get("benchmark_index")
     if isinstance(index, bool) or not isinstance(index, int) or index < 0:
         raise ValueError("Benchmark metadata must include a nonnegative benchmark_index")
@@ -54,6 +60,7 @@ def identity(benchmark: dict) -> tuple:
 
 
 def source_job(context: Context, job_id: str) -> dict:
+    """Fetch a completed source job and validate its benchmark identities."""
     if job_id == context.spec.id:
         raise ValueError("A post-processing job cannot reference itself")
     job = context.sidecar.get(f"/api/v1/evaluations/jobs/{quote(job_id, safe='')}")
@@ -80,6 +87,7 @@ def source_job(context: Context, job_id: str) -> dict:
 
 
 def primary_metric(context: Context, job: dict, result: dict) -> str:
+    """Resolve the numeric metric actually used by a source benchmark."""
     # The stored test records the metric actually used when the source job ran.
     metric = result.get("test", {}).get("primary_score_metric")
     if not metric:
@@ -161,6 +169,7 @@ def artifact_sources(job: dict, benchmark: dict) -> list[dict]:
 
 
 def result_config(config: dict, target: dict) -> dict:
+    """Select one result-data mapping for a benchmark."""
     reference = config["results_data_ref"]
     if "data_config" in reference and "results_data_config" in config:
         raise ValueError("Specify result mappings only in results_data_ref.data_config")
@@ -188,23 +197,36 @@ def result_config(config: dict, target: dict) -> dict:
 
 
 def interval(results, calibration, target: dict, *, shared: bool, alpha: float) -> dict:
-    from ppi_py import ppi_mean_ci
+    """Compute an original-PPI mean interval and its audit metadata."""
+    from ppi_py import ppi_mean_ci, ppi_mean_pointestimate
 
     labels, predicted, unlabeled = ppi_arrays(results, calibration, target, shared=shared)
     # Original PPI (lambda=1), rather than estimating a PPI++ tuning parameter.
     lower, upper = ppi_mean_ci(labels, predicted, unlabeled, alpha=alpha, lam=1)
+    estimate = ppi_mean_pointestimate(labels, predicted, unlabeled, lam=1)
     # PPI returns length-one ndarrays for scalar mean estimation.
     lower = lower.item() if hasattr(lower, "item") else lower
     upper = upper.item() if hasattr(upper, "item") else upper
+    estimate = estimate.item() if hasattr(estimate, "item") else estimate
     lower = numeric(lower, "PPI lower bound")
     upper = numeric(upper, "PPI upper bound")
     if lower > upper:
         raise ValueError("PPI returned inverted confidence bounds")
-    return {"lower": lower, "upper": upper}
+    return {
+        "lower": lower,
+        "upper": upper,
+        "point_estimate": numeric(estimate, "PPI point estimate"),
+        "n_labeled": len(labels),
+        "n_unlabeled": len(unlabeled),
+        "alpha": alpha,
+        "method": "original_ppi",
+        "lambda": 1,
+    }
 
 
 @register("confidence_interval")
 def confidence_interval(context: Context, raw: dict) -> dict:
+    """Compute intervals for external data or each completed source benchmark."""
     config = ci_config(raw)
     reference = config["results_data_ref"]
     context.phase(JobPhase.LOADING_DATA)
@@ -240,6 +262,7 @@ def confidence_interval(context: Context, raw: dict) -> dict:
     context.phase(JobPhase.RUNNING_EVALUATION)
 
     def compute(entry: tuple) -> dict:
+        """Fetch one benchmark's data and compute its interval."""
         benchmark, target, candidates = entry
         errors = []
         for index, candidate in enumerate(candidates):
@@ -247,24 +270,23 @@ def confidence_interval(context: Context, raw: dict) -> dict:
                 context.directory / f"benchmark-{target['benchmark_index']}" / f"source-{index}"
             )
             try:
-                data = read_table(
-                    context.sources.download(candidate, directory), result_config(config, target)
-                )
-                bounds = interval(
-                    data, calibration, target, shared=len(benchmarks) > 1, alpha=alpha
-                )
-                return {
-                    "id": benchmark["id"],
-                    "provider_id": benchmark["provider_id"],
-                    "benchmark_index": benchmark["benchmark_index"],
-                    "confidence_interval": bounds,
-                }
-            except Exception as exc:
+                downloaded = context.sources.download(candidate, directory)
+            except (httpx.HTTPError, FileNotFoundError) as exc:
                 errors.append(f"{next(iter(candidate))}: {type(exc).__name__}: {exc}")
-        raise ValueError(
-            f"Cannot compute CI for benchmark index {target['benchmark_index']}: "
-            + "; ".join(errors)
-        )
+                if index + 1 == len(candidates):
+                    raise ValueError(
+                        f"Cannot fetch results for benchmark index {target['benchmark_index']}: "
+                        + "; ".join(errors)
+                    ) from exc
+                continue
+            data = read_table(downloaded, result_config(config, target))
+            bounds = interval(data, calibration, target, shared=len(benchmarks) > 1, alpha=alpha)
+            return {
+                "id": benchmark["id"],
+                "provider_id": benchmark["provider_id"],
+                "benchmark_index": benchmark["benchmark_index"],
+                "confidence_interval": bounds,
+            }
 
     # executor.map preserves source result order even when downloads finish out of order.
     with ThreadPoolExecutor(max_workers=config["num_parallel_threads"]) as executor:

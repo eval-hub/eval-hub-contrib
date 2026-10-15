@@ -19,6 +19,7 @@ from .transport import Sidecar
 
 
 def copy_data(source: Path, destination: Path) -> Path:
+    """Copy a mounted data tree while rejecting symlinks and path escapes."""
     if not source.exists():
         raise ValueError("Referenced data mount or sub_path does not exist")
     files = [source] if source.is_file() else sorted(source.rglob("*"))
@@ -36,10 +37,12 @@ def copy_data(source: Path, destination: Path) -> Path:
 
 class Sources:
     def __init__(self, sidecar: Sidecar, *, exports: dict | None = None):
+        """Keep the sidecar and export settings shared by all source handlers."""
         self.sidecar = sidecar
         self.exports = exports or {}
 
     def secret(self, name: str) -> dict[str, str]:
+        """Read a named Secret from the trusted projection root."""
         name = text_value(name, "secret_ref")
         if "/" in name or name in {".", ".."}:
             raise ValueError("secret_ref must name a Secret, not a filesystem path")
@@ -55,6 +58,7 @@ class Sources:
         return {p.name: p.read_text().strip() for p in directory.iterdir() if p.is_file()}
 
     def download(self, ref: dict, destination: Path) -> Path:
+        """Materialize one validated reference into an isolated directory."""
         kind = source_type(ref)
         if kind == "eval_job":
             raise ValueError("eval_job must first be resolved into individual benchmark artifacts")
@@ -66,6 +70,7 @@ class Sources:
         return getattr(self, f"_{kind}")(ref[kind], destination)
 
     def _pvc(self, ref: dict, destination: Path) -> Path:
+        """Copy a declared read-only PVC mount or subpath."""
         claim = text_value(ref.get("claim_name"), "pvc.claim_name")
         mounts = json.loads(os.getenv("EVALHUB_POST_PROCESSOR_PVC_MOUNTS", "{}"))
         if claim not in mounts:
@@ -74,6 +79,7 @@ class Sources:
         return copy_data(within(root, ref.get("sub_path", "")), destination)
 
     def _s3(self, ref: dict, destination: Path) -> Path:
+        """Download one S3 object or a prefix with projected credentials."""
         import boto3
         from botocore.exceptions import ClientError
 
@@ -132,6 +138,7 @@ class Sources:
         return destination
 
     def _hf(self, ref: dict, destination: Path) -> Path:
+        """Fetch a dataset revision and copy its selected subpath."""
         from huggingface_hub import snapshot_download
 
         repo = text_value(ref.get("repo_id"), "hf.repo_id")
@@ -150,6 +157,7 @@ class Sources:
         return copy_data(selected, destination / "data")
 
     def _git(self, ref: dict, destination: Path) -> Path:
+        """Fetch a Git revision without executing repository code."""
         url = text_value(ref.get("url"), "git.url")
         parsed = urlsplit(url)
         if (
@@ -210,6 +218,7 @@ class Sources:
         return copy_data(selected, destination / "data")
 
     def _mlflow(self, ref: dict, destination: Path) -> Path:
+        """List and stream MLflow artifacts through the local sidecar."""
         run_id = text_value(ref.get("run_id"), "mlflow.run_id")
         requested = ref.get("artifact_path", "")
         within(destination, requested)  # Validate before putting the path in any HTTP request.
@@ -220,6 +229,7 @@ class Sources:
         client = self.sidecar.client
 
         def get(path: str, params: dict) -> dict:
+            """Fetch JSON from the sidecar's MLflow proxy."""
             response = client.get(
                 base + path, params=params, headers=headers, follow_redirects=False
             )
@@ -243,6 +253,7 @@ class Sources:
         within(destination, run_root)
 
         def entries(path: str) -> list[dict]:
+            """Collect paginated artifact entries for one MLflow path."""
             page_token = None
             found = []
             seen_tokens = set()
@@ -293,7 +304,7 @@ class Sources:
                     files = selected
                     break
         if not files:
-            raise ValueError("MLflow run has no artifacts at the requested path")
+            raise FileNotFoundError("MLflow run has no artifacts at the requested path")
         for path in files:
             target = within(destination, path)
             target.parent.mkdir(parents=True, exist_ok=True)

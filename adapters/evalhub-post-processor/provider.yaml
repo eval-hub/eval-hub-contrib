@@ -1,16 +1,10 @@
 id: evalhub-internal
-internal_only: true
 name: EvalHub Post Processor
 description: Ordered post-processing operations on completed evaluation results.
-type: internal
 runtime:
   k8s:
     image: quay.io/evalhub/evalhub-post-processor:latest
     entrypoint: [python, main.py]
-    cpu_request: 500m
-    memory_request: 1Gi
-    cpu_limit: '4'
-    memory_limit: 8Gi
   local:
     entrypoint: [python, main.py]
 benchmarks:

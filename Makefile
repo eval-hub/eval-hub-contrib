@@ -479,7 +479,7 @@ tag-evalhub-post-processor:
 	$(BUILD_TOOL) tag $(SOURCE_IMAGE) $(IMAGE_EVALHUB_POST_PROCESSOR)
 
 clean-evalhub-post-processor:
-	$(BUILD_TOOL) rmi $(IMAGE_EVALHUB_POST_PROCESSOR)
+	$(BUILD_TOOL) rmi $(IMAGE_EVALHUB_POST_PROCESSOR) 2>/dev/null || true
 
 build-and-push-evalhub-post-processor: image-evalhub-post-processor
 	$(MAKE) push-evalhub-post-processor
@@ -588,7 +588,7 @@ image-databench:
 push-databench:
 	$(BUILD_TOOL) push $(IMAGE_DATABENCH)
 clean-databench:
-	$(BUILD_TOOL) rmi $(IMAGE_DATABENCH)
+	$(BUILD_TOOL) rmi $(IMAGE_DATABENCH) 2>/dev/null || true
 test-databench:
 	cd adapters/databench && \
 	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \

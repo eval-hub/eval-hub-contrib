@@ -49,14 +49,10 @@ jobs:
             exit 1
           fi
           declare -A IMAGE_MAP=(
-            [clear]=ibm-clear
+            [clear]=community-ibm-clear
+            [evalhub-post-processor]=evalhub-post-processor
           )
-          suffix="${IMAGE_MAP[$ADAPTER]:-$ADAPTER}"
-          if [[ "$ADAPTER" == "evalhub-post-processor" ]]; then
-            echo "name=evalhub-post-processor" >> "$GITHUB_OUTPUT"
-          else
-            echo "name=community-${suffix}" >> "$GITHUB_OUTPUT"
-          fi
+          echo "name=${IMAGE_MAP[$ADAPTER]:-community-$ADAPTER}" >> "$GITHUB_OUTPUT"
           if [[ "$BRANCH" == "main" ]]; then
             echo "channel=latest" >> "$GITHUB_OUTPUT"
           else

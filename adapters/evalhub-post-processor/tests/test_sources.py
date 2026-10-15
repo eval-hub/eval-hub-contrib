@@ -34,6 +34,47 @@ def test_sidecar_requests_include_projected_tenant(tmp_path, monkeypatch):
     assert [request.headers["X-Tenant"] for request in requests] == ["sagar", "sagar"]
 
 
+@pytest.mark.parametrize("failure", ["server", "connection"])
+def test_sidecar_event_retries_transient_failures(tmp_path, monkeypatch, failure):
+    from post_processor import transport
+
+    monkeypatch.setattr(transport, "NAMESPACE_PATH", tmp_path / "missing-namespace")
+    monkeypatch.setenv("EVALHUB_TENANT", "team")
+    delays = []
+    monkeypatch.setattr(transport.time, "sleep", delays.append)
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if len(requests) < 3:
+            if failure == "connection":
+                raise httpx.ConnectError("temporary outage", request=request)
+            return httpx.Response(503)
+        return httpx.Response(204)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        Sidecar("http://sidecar", client=client).event("job", {"status": "completed"})
+    assert len(requests) == 3
+    assert delays == pytest.approx([0.2, 0.4])
+
+
+def test_sidecar_event_does_not_retry_client_error(tmp_path, monkeypatch):
+    from post_processor import transport
+
+    monkeypatch.setattr(transport, "NAMESPACE_PATH", tmp_path / "missing-namespace")
+    monkeypatch.setenv("EVALHUB_TENANT", "team")
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(400)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            Sidecar("http://sidecar", client=client).event("job", {"status": "running"})
+    assert len(requests) == 1
+
+
 def digest(data):
     return "sha256:" + hashlib.sha256(data).hexdigest()
 

@@ -42,6 +42,7 @@ def within(root: Path, name: str) -> Path:
 
 
 def field_value(row: dict, key: str) -> Any:
+    """Read a literal or dotted field name from one record."""
     # Prefer literal keys: benchmark metric names frequently contain dots.
     if key in row:
         return row[key]
@@ -54,6 +55,7 @@ def field_value(row: dict, key: str) -> Any:
 
 
 def numeric(value: Any, name: str) -> float:
+    """Convert a score to a finite float or reject it."""
     if isinstance(value, dict) and set(value) == {"value"}:
         value = value["value"]
     if value is None or isinstance(value, (bool, list, dict)):
@@ -75,6 +77,7 @@ class Table:
     estimand: str = "mean"
 
     def get(self, row: dict, role: str) -> Any:
+        """Read a configured column and apply its category mapping."""
         columns = self.config.get("columns", {})
         if role in columns:
             value = field_value(row, columns[role])
@@ -85,6 +88,7 @@ class Table:
         return self.map_value(value, role)
 
     def map_value(self, value: Any, role: str) -> Any:
+        """Translate a configured category into its numeric score."""
         mapping = self.config.get("value_mappings", {}).get(role)
         if mapping is None or value is None:
             return value
@@ -94,6 +98,7 @@ class Table:
 
 
 def read_table(root: Path, config: dict | None = None) -> Table:
+    """Load per-example records from supported files under a source path."""
     config = config or {}
     if not isinstance(config, dict):
         raise ValueError("data_config must be an object")
@@ -190,6 +195,7 @@ def read_table(root: Path, config: dict | None = None) -> Table:
 
 
 def sample_id(table: Table, row: dict) -> str:
+    """Return a stable string key for a sample record."""
     value = table.get(row, "sample_id")
     if isinstance(value, bool) or not isinstance(value, (str, int)) or str(value) == "":
         raise ValueError("sample_id must be a nonempty string or integer")
@@ -197,6 +203,7 @@ def sample_id(table: Table, row: dict) -> str:
 
 
 def matching(table: Table, row: dict, target: dict, *, shared: bool) -> bool:
+    """Check whether a record belongs to the selected benchmark and metric."""
     selection = table.config.get("selection", {})
     selectors = {
         role: selection.get(role, table.get(row, role))
@@ -216,6 +223,7 @@ def matching(table: Table, row: dict, target: dict, *, shared: bool) -> bool:
 
 
 def prediction(table: Table, row: dict, metric: str) -> Any:
+    """Find a prediction in mapped columns or framework metric fields."""
     value = table.get(row, "prediction")
     if value is not None or "prediction" in table.config.get("columns", {}):
         return value
@@ -229,6 +237,7 @@ def prediction(table: Table, row: dict, metric: str) -> Any:
 def ppi_arrays(
     results: Table, calibration: list[Table], target: dict, *, shared: bool
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Pair trusted labels with predictions and exclude them from unlabeled data."""
     metric = target["metric"]
     scores: dict[str, float] = {}
     for row in results.rows:

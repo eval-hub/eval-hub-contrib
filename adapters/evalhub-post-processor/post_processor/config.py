@@ -10,18 +10,21 @@ CALIBRATION_SOURCES = frozenset({"s3", "pvc", "git", "hf"})
 
 
 def object_value(value: Any, name: str) -> dict:
+    """Require an object without coercing other JSON values."""
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be an object")
     return value
 
 
 def text_value(value: Any, name: str) -> str:
+    """Require a nonempty text field."""
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a nonempty string")
     return value
 
 
 def source_type(ref: Any, *, calibration: bool = False) -> str:
+    """Validate a data reference and return its single source kind."""
     ref = object_value(ref, "data reference")
     keys = SOURCES.intersection(ref)
     if len(keys) != 1:
@@ -51,6 +54,7 @@ def source_type(ref: Any, *, calibration: bool = False) -> str:
 
 
 def ci_config(raw: Any) -> dict:
+    """Normalize and validate confidence-interval operation parameters."""
     config = dict(object_value(raw, "confidence_interval"))
     source = object_value(config.get("results_data_ref"), "results_data_ref")
     kind = source_type(source)
@@ -92,6 +96,7 @@ def ci_config(raw: Any) -> dict:
 
 
 def operations(parameters: dict) -> list[tuple[str, dict]]:
+    """Return configured operations in execution order."""
     raw = parameters.get("operations")
     if raw is None and "results_data_ref" in parameters:
         # Compatibility with eval-hub/postprocessing.ToEvaluationJob's current mapping.

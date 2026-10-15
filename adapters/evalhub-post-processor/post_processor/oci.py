@@ -21,6 +21,7 @@ MAX_EXPANDED_BYTES = 10 * 1024**3
 
 
 def extract_layer(blob: Path, destination: Path, descriptor: dict, used: set[Path]) -> None:
+    """Extract one verified OCI layer without unsafe or duplicate paths."""
     media_type = descriptor.get("mediaType", "")
     if "tar" in media_type:
         size = 0
@@ -54,6 +55,7 @@ def extract_layer(blob: Path, destination: Path, descriptor: dict, used: set[Pat
 
 
 def download_oci(ref: dict, destination: Path, sources: Sources) -> Path:
+    """Fetch and verify OCI artifact layers through the configured sidecar."""
     coords = object_value(ref.get("coordinates"), "oci.coordinates")
     host = text_value(coords.get("oci_host"), "oci.coordinates.oci_host")
     repository = text_value(coords.get("oci_repository"), "oci.coordinates.oci_repository")
@@ -61,6 +63,7 @@ def download_oci(ref: dict, destination: Path, sources: Sources) -> Path:
     configured = (sources.exports.get("oci") or {}).get("coordinates") or {}
 
     def normalize_host(value: str) -> str:
+        """Compare configured registry hosts independent of URL scheme."""
         return value.removeprefix("https://").removeprefix("http://").rstrip("/").lower()
 
     if not configured.get("oci_host") or not configured.get("oci_repository"):

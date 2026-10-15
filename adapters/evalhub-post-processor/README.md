@@ -7,7 +7,10 @@ The initial operation computes prediction-powered confidence intervals with
 endpoint under `benchmark_status_event.additional_info`.
 
 The provider/benchmark identifiers are `evalhub-internal` and
-`evaluation-post-processor`, matching eval-hub's post-processing API mapping. The provider is marked internal-only and is omitted from the public provider API.
+`evaluation-post-processor`, matching eval-hub's post-processing API mapping.
+EvalHub registers this workload as internal in its server code and uses an
+in-memory runtime provider; `provider.yaml` is repository metadata, not the
+source of the running pod's image or resource limits.
 This adapter uses the SDK's `FrameworkAdapter` and `JobSpec`, with its own
 callbacks for metric-free events and strict delivery failure handling. A model
 URL is optional for this adapter. Other adapters and SDK parsing are unchanged.
@@ -229,10 +232,12 @@ never a local path to open. MLflow artifacts must be served through the sidecar'
 artifact proxy. `MLFLOW_TRACKING_URI` and `MLFLOW_TRACKING_TOKEN` are not used;
 the optional workspace header and workspace artifact URI are supported.
 
-If OCI export metadata is also available, it is tried when MLflow cannot produce
-usable per-example data. OCI uses each benchmark's `artifacts.oci_reference` or
+If OCI export metadata is also available, it is tried when MLflow fetching
+fails or finds no artifacts. Invalid sample data fails the job so the error is
+visible. OCI uses each benchmark's `artifacts.oci_reference` or
 `oci_digest` together with `exports.oci`; the job-level tag is never guessed as
-the benchmark's tag.
+the benchmark's tag. An OCI tag can change, so the manifest is verified only
+when an immutable digest is supplied; layer digests are always verified.
 
 ### Runtime integration requirements
 
@@ -259,6 +264,10 @@ runtime must arrange these before launching the post-processing pod:
    parameters, including `results_data_ref.data_config` and each calibration
    reference's `data_config`. The Eval Hub standalone API carries these into
    the generated execution job.
+5. Restrict egress from post-processing pods with a NetworkPolicy or egress
+   proxy when using Git sources. `git.url` accepts HTTP(S) hosts, including
+   in-cluster hosts; the network policy must allow only approved repository
+   endpoints and the required sidecar traffic.
 
 The Eval Hub runtime mounts calibration PVCs for its internal post-processing
 job using the dedicated PVC mapping above. Other source types need their own
@@ -281,7 +290,9 @@ operation names. Source-job results preserve each benchmark's identity:
       "confidence_interval": {
         "benchmarks": [
           {"id":"benchmark-a","provider_id":"provider-a","benchmark_index":0,
-           "confidence_interval":{"lower":0.75,"upper":0.85}}
+           "confidence_interval":{"lower":0.75,"upper":0.85,
+             "point_estimate":0.8,"n_labeled":100,"n_unlabeled":1000,
+             "alpha":0.05,"method":"original_ppi","lambda":1}}
         ]
       }
     },
@@ -295,6 +306,7 @@ operation names. Source-job results preserve each benchmark's identity:
 A direct external reference has a single `confidence_interval` under the
 operation, without a `benchmarks` array. Failures report `failed`, stop later
 operations, and exit nonzero. Event delivery failures also exit nonzero.
+Event posts retry up to three times on connection errors and HTTP 5xx responses.
 The adapter sends `duration_seconds`; eval-hub's current typed event schema may
 discard that field, so server schema support is needed to persist it. Started
 and completed timestamps are supported.

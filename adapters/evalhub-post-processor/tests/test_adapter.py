@@ -74,6 +74,8 @@ def runtime(tmp_path, monkeypatch):
     events = []
     gets = []
     registry = {}
+    event_status = {}
+    mlflow_status = {"code": 200}
 
     def handler(request):
         assert request.url.host == "sidecar"
@@ -81,8 +83,9 @@ def runtime(tmp_path, monkeypatch):
             assert request.headers["X-Tenant"] == "test-tenant"
         if request.method == "POST":
             assert request.url.path == "/api/v1/evaluations/jobs/post-processing-job-001/events"
-            events.append(json.loads(request.content)["benchmark_status_event"])
-            return httpx.Response(200, json={})
+            event = json.loads(request.content)["benchmark_status_event"]
+            events.append(event)
+            return httpx.Response(event_status.get(event["status"], 200), json={})
         gets.append(str(request.url))
         if request.url.path in registry:
             return httpx.Response(200, content=registry[request.url.path])
@@ -105,6 +108,8 @@ def runtime(tmp_path, monkeypatch):
         if request.url.path == "/api/2.0/mlflow/artifacts/list":
             return httpx.Response(200, json={"files": [{"path": "samples.json", "is_dir": False}]})
         if request.url.path.endswith("/samples.json"):
+            if mlflow_status["code"] != 200:
+                return httpx.Response(mlflow_status["code"])
             return httpx.Response(200, json=result_data)
         raise AssertionError(f"Unexpected HTTP request: {request.method} {request.url}")
 
@@ -133,6 +138,8 @@ def runtime(tmp_path, monkeypatch):
         "path": path,
         "client": client,
         "registry": registry,
+        "event_status": event_status,
+        "mlflow_status": mlflow_status,
     }
     client.close()
 
@@ -206,9 +213,7 @@ def test_completed_job_oci_pipeline_and_mlflow_fallback(runtime, mlflow_fallback
     runtime["spec"]["exports"] = exports
     runtime["job"]["exports"] = exports
     if mlflow_fallback:
-        # Aggregate-only MLflow data is insufficient; usable OCI samples exist.
-        runtime["data"].clear()
-        runtime["data"]["metrics"] = {"accuracy": 0.8}
+        runtime["mlflow_status"]["code"] = 404
     else:
         runtime["job"].pop("experiment")
     for benchmark in runtime["job"]["results"]["benchmarks"]:
@@ -220,6 +225,19 @@ def test_completed_job_oci_pipeline_and_mlflow_fallback(runtime, mlflow_fallback
     assert runtime["events"][-1]["status"] == "completed"
     assert sum("/manifests/" in path for path in runtime["gets"]) == 2
     assert any("/runs/get" in path for path in runtime["gets"]) == mlflow_fallback
+
+
+def test_invalid_mlflow_samples_do_not_fall_back_to_oci(runtime):
+    coordinates = {"oci_host": "quay.io", "oci_repository": "org/results"}
+    exports = {"oci": {"coordinates": coordinates}}
+    runtime["spec"]["exports"] = exports
+    runtime["job"]["exports"] = exports
+    for benchmark in runtime["job"]["results"]["benchmarks"]:
+        benchmark["artifacts"] = {"oci_digest": "sha256:" + "a" * 64}
+    runtime["data"]["samples"].append(copy.deepcopy(runtime["data"]["samples"][0]))
+    with pytest.raises(ValueError, match="Duplicate evaluation sample_id"):
+        runtime["run"]()
+    assert not any("/manifests/" in path for path in runtime["gets"])
 
 
 @pytest.mark.parametrize(
@@ -422,8 +440,25 @@ def test_cli_exit_code_and_terminal_event(runtime, monkeypatch, broken):
         runtime["spec"]["parameters"] = {"operations": {"not-registered": {}}}
     runtime["path"].write_text(json.dumps(runtime["spec"]))
     monkeypatch.setenv("EVALHUB_JOB_SPEC_PATH", str(runtime["path"]))
+    created = []
+    sidecar_factory = main.Sidecar
+
+    def make_sidecar(url):
+        created.append(url)
+        return sidecar_factory(url)
+
+    monkeypatch.setattr(main, "Sidecar", make_sidecar)
     assert main.main() == int(broken)
+    assert created == ["http://sidecar"]
     assert runtime["events"][-1]["status"] == ("failed" if broken else "completed")
+
+
+def test_cli_reports_failed_when_completed_event_is_rejected(runtime, monkeypatch):
+    runtime["path"].write_text(json.dumps(runtime["spec"]))
+    runtime["event_status"]["completed"] = 400
+    monkeypatch.setenv("EVALHUB_JOB_SPEC_PATH", str(runtime["path"]))
+    assert main.main() == 1
+    assert [event["status"] for event in runtime["events"][-2:]] == ["completed", "failed"]
 
 
 @pytest.mark.parametrize("alpha", [0, 1, -0.5, float("nan"), float("inf"), None])

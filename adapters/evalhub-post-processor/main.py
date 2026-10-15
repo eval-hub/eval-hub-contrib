@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 class PostProcessorAdapter(FrameworkAdapter):
     def _load_job_spec(self) -> JobSpec:
+        """Supply the SDK's required model URL for an internal model-free job."""
         # The internal provider has no model endpoint. The SDK still requires
         # ModelConfig.url, so normalize that field only for this adapter.
         with self.settings.resolved_job_spec_path.open() as stream:
@@ -40,11 +41,13 @@ class PostProcessorAdapter(FrameworkAdapter):
         return JobSpec.model_validate(raw)
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
+        """Run configured operations in order and return their structured outputs."""
         started = time.monotonic()
         callbacks.report_status(
             JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
         )
-        sidecar = Sidecar(config.callback_url)
+        owns_sidecar = not isinstance(callbacks, PostProcessorCallbacks)
+        sidecar = Sidecar(config.callback_url) if owns_sidecar else callbacks.sidecar
         try:
             requested = operations(config.parameters)
             for name, _ in requested:
@@ -88,10 +91,12 @@ class PostProcessorAdapter(FrameworkAdapter):
                 logger.exception("Failed to deliver post-processing failure event")
             raise
         finally:
-            sidecar.close()
+            if owns_sidecar:
+                sidecar.close()
 
 
 def main() -> int:
+    """Run the adapter from its mounted job spec and report a terminal event."""
     logging.basicConfig(
         level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s"
     )
@@ -104,7 +109,21 @@ def main() -> int:
         sidecar = Sidecar(adapter.job_spec.callback_url)
         callbacks = PostProcessorCallbacks(adapter.job_spec, sidecar)
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
-        callbacks.report_results(results)
+        try:
+            callbacks.report_results(results)
+        except Exception as exc:
+            try:
+                callbacks.report_status(
+                    JobStatusUpdate(
+                        status=JobStatus.FAILED,
+                        error_message=MessageInfo(
+                            message=str(exc), message_code="post_processing_failed"
+                        ),
+                    )
+                )
+            except Exception:
+                logger.exception("Failed to deliver post-processing failure event")
+            raise
         logger.info("Completed %d post-processing operation(s)", len(results.additional_info or {}))
         return 0
     except Exception:

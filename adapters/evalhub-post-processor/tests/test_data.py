@@ -24,7 +24,18 @@ def test_real_ppi_matches_analytical_original_mean_interval():
     predicted = np.array([0.2, 0.4, 0.8, 0.9])
     center = predicted.mean() + residual.mean()
     width = norm.ppf(0.975) * np.sqrt(predicted.var() / 4 + residual.var() / 3)
-    assert bounds == pytest.approx({"lower": center - width, "upper": center + width})
+    assert bounds["lower"] == pytest.approx(center - width)
+    assert bounds["upper"] == pytest.approx(center + width)
+    assert bounds["point_estimate"] == pytest.approx(center)
+    assert {
+        key: bounds[key] for key in ("n_labeled", "n_unlabeled", "alpha", "method", "lambda")
+    } == {
+        "n_labeled": 3,
+        "n_unlabeled": 4,
+        "alpha": 0.05,
+        "method": "original_ppi",
+        "lambda": 1,
+    }
 
 
 def test_join_labels_by_id_and_remove_calibration_overlap():
