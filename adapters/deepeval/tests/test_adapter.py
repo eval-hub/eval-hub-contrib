@@ -1000,6 +1000,40 @@ def test_json_correctness_invalid_schema_raises():
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("schema", [False, "false"])
+def test_json_correctness_false_schema_rejects_everything(schema):
+    """A supplied `false` schema is applied, not skipped as falsy."""
+    from main import _run_json_correctness
+
+    records = [{"input": "q", "actual_output": '{"ok": true}'}]
+    results, _ = _run_json_correctness(records, {"json_schema": schema})
+    scores = {r.metric_name: r.metric_value for r in results}
+    assert scores["json_correctness_score"] == 0.0
+
+
+@pytest.mark.integration
+def test_json_correctness_true_and_empty_schema_accept_valid_json():
+    from main import _run_json_correctness
+
+    records = [{"input": "q", "actual_output": '{"ok": true}'}]
+    for schema in (True, {}, "true", "{}"):
+        results, _ = _run_json_correctness(records, {"json_schema": schema})
+        scores = {r.metric_name: r.metric_value for r in results}
+        assert scores["json_correctness_score"] == 1.0, schema
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("schema", ["5", "[1]", '"text"'])
+def test_json_correctness_non_object_schema_raises(schema):
+    """Schemas that are neither an object nor a boolean are config errors."""
+    from main import _run_json_correctness
+
+    records = [{"input": "q", "actual_output": '{"ok": true}'}]
+    with pytest.raises(ValueError, match="not a valid JSON Schema"):
+        _run_json_correctness(records, {"json_schema": schema})
+
+
+@pytest.mark.integration
 def test_json_correctness_enforces_format_keywords():
     """`format` keywords are checked, not silently ignored."""
     from main import _run_json_correctness

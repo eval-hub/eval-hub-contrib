@@ -710,18 +710,29 @@ def _run_json_correctness(
     provided) for schema conformance, including ``format`` keywords.
     """
     schema = params.get("json_schema")
-    if schema and isinstance(schema, str):
-        try:
-            schema = json.loads(schema)
-        except json.JSONDecodeError:
-            logger.warning(
-                "parameters.json_schema could not be parsed; falling back to validity-only"
-            )
+    if isinstance(schema, str):
+        if not schema.strip():
             schema = None
+        else:
+            try:
+                schema = json.loads(schema)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "parameters.json_schema could not be parsed; falling back to validity-only"
+                )
+                schema = None
 
-    if schema:
+    # Test for "supplied", not truthiness: `false` is a valid JSON Schema that
+    # rejects every instance, and `{}` / `true` accept every instance.
+    has_schema = schema is not None
+    if has_schema:
         # A malformed schema is a configuration error, not a model failure:
         # fail the job instead of scoring every record 0 as a "Schema violation".
+        if not isinstance(schema, (dict, bool)):
+            raise ValueError(
+                "parameters.json_schema is not a valid JSON Schema: "
+                f"expected an object or boolean, got {type(schema).__name__}"
+            )
         try:
             jsonschema.validators.validator_for(schema).check_schema(schema)
         except jsonschema.SchemaError as exc:
@@ -740,7 +751,7 @@ def _run_json_correctness(
             if output is None:
                 raise ValueError("actual_output is null")
             parsed = json.loads(str(output) if not isinstance(output, str) else output)
-            if schema:
+            if has_schema:
                 try:
                     jsonschema.validate(
                         instance=parsed,
