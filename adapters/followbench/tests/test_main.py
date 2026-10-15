@@ -137,6 +137,18 @@ def test_collection_judge_url_requires_projected_key(monkeypatch):
         )
 
 
+@pytest.mark.parametrize("legacy_parameter", ["judge_url", "judge_api_key"])
+def test_collection_judge_rejects_legacy_connection_parameters(legacy_parameter):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+
+    with pytest.raises(ValueError, match="judge_model cannot be combined with the legacy"):
+        main_module._build_judge_client(
+            config,
+            {"judge_model": "deployed-judge", legacy_parameter: "legacy-value"},
+            30,
+        )
+
+
 def test_malformed_judge_response_is_scored_as_no(monkeypatch):
     example = FollowBenchExample(1, "content", "target", 1, "instruction", "source")
     monkeypatch.setattr(

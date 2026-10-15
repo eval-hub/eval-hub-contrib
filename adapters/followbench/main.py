@@ -217,12 +217,12 @@ def _build_judge_client(
     request_timeout: int,
 ) -> tuple[Any, str]:
     model_url = str(config.model.url or "").strip().rstrip("/")
-    if parameters.get("judge_url") or parameters.get("judge_api_key"):
-        # Preserve standalone jobs using legacy explicit connection overrides.
-        judge_url = str(parameters.get("judge_url") or model_url).strip().rstrip("/")
-        judge_model = str(parameters.get("judge_model") or config.model.name).strip()
-        api_key = _resolve_judge_api_key(config, parameters, judge_url, model_url)
-    elif "judge_model" in parameters:
+    if "judge_model" in parameters:
+        if parameters.get("judge_url") or parameters.get("judge_api_key"):
+            raise ValueError(
+                "judge_model cannot be combined with the legacy judge_url or judge_api_key job parameters; "
+                "use judge_url and judge_api-key in model.auth.secret_ref"
+            )
         judge_model = parameters["judge_model"]
         if not isinstance(judge_model, str) or not judge_model.strip():
             raise ValueError("parameters.judge_model must be a non-empty model name")
@@ -236,8 +236,9 @@ def _build_judge_client(
         judge_url = projected_url or model_url
         api_key = projected_key or _resolve_model_api_key(config)
     else:
-        judge_url = model_url
-        judge_model = str(config.model.name or "").strip()
+        # Preserve standalone jobs using legacy explicit connection overrides.
+        judge_url = str(parameters.get("judge_url") or model_url).strip().rstrip("/")
+        judge_model = str(parameters.get("judge_model") or config.model.name).strip()
         api_key = _resolve_judge_api_key(config, parameters, judge_url, model_url)
 
     judge_url = str(judge_url or "").strip().rstrip("/")

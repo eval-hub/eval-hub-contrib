@@ -77,8 +77,11 @@ on the FollowBench benchmark in each job. With no judge-specific entries in
 the sidecar routes `api-key:ref` only to the target. To use a different URL with
 the same credential, copy the target key into `judge_api-key`. In Kubernetes
 the adapter receives projected references and loopback URLs; the sidecar
-supplies the real credential and upstream route. Standalone jobs using the
-legacy `judge_url` or `judge_api_key` job parameters retain their behavior.
+supplies the real credential and upstream route. Jobs that omit `judge_model`
+and use the legacy `judge_url` or `judge_api_key` job parameters retain their
+behavior. When `judge_model` is set, do not set those legacy parameters; the
+adapter rejects them so the Secret fields determine the connection
+unambiguously.
 
 For legacy standalone jobs, when `judge_url` is omitted, the judge uses `model.url` and reuses the
 evaluated model credential, including the credential resolved from

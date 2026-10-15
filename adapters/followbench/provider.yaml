@@ -63,14 +63,15 @@ parameters:
   - name: judge_url
     type: string
     description: >
-      Legacy endpoint override for standalone jobs. For bundled collection jobs,
-      use judge_url in model.auth.secret_ref together with judge_api-key instead.
+      Legacy endpoint override for standalone jobs that omit judge_model. When
+      judge_model is set, do not set this or judge_api_key as job parameters;
+      use judge_url and judge_api-key in model.auth.secret_ref instead.
 
   - name: judge_api_key
     type: string
     description: >
-      Optional external judge credential. Prefer injecting
-      FOLLOWBENCH_JUDGE_API_KEY from a Secret.
+      Legacy standalone judge credential. When judge_model is set, use
+      judge_api-key in model.auth.secret_ref instead.
 
   - name: num_examples
     type: integer
