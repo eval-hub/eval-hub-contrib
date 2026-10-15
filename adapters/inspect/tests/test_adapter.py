@@ -248,12 +248,12 @@ def test_standard_model_roles_injected(job_spec_path, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("benchmark_id", ["inspect/hle", "inspect/cyberseceval-2-pi"])
-@pytest.mark.parametrize("route", ["target", "judge"])
-def test_collection_judge_routes_to_grader(job_spec_path, tmp_path, monkeypatch, benchmark_id, route):
+@pytest.mark.parametrize("separate", [False, True])
+def test_collection_judge_routes_to_grader(job_spec_path, tmp_path, monkeypatch, benchmark_id, separate):
     monkeypatch.setattr(
         _execution, "resolve_model_credentials", lambda: SimpleNamespace(api_key="api-key:ref")
     )
-    projected = {"judge_api-key": "judge_api-key:ref", "judge_url": "http://localhost:8080/judge/v1"}
+    projected = {"judge_api-key": "judge_api-key:ref", "judge_url": "http://localhost:8080/judge/v1"} if separate else {}
     monkeypatch.setattr(_execution, "read_model_auth_key", projected.get)
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     config = adapter.job_spec
@@ -261,7 +261,6 @@ def test_collection_judge_routes_to_grader(job_spec_path, tmp_path, monkeypatch,
     config.model.url = "http://localhost:8080/v1"
     config.parameters = {
         "judge_model": "deployed-judge",
-        "judge_route": route,
         "model_args": {"responses_api": False},
         "task_args": (
             {"judge_llm": "null"}
@@ -274,7 +273,7 @@ def test_collection_judge_routes_to_grader(job_spec_path, tmp_path, monkeypatch,
     cmd = adapter._build_command(config, "standard", "inspect_evals/task", tmp_path, None, env)
     roles = _parse_model_roles(cmd)
 
-    if route == "judge":
+    if separate:
         assert roles["grader"] == "openai-api/openai_judge/deployed-judge"
         assert env["OPENAI_JUDGE_API_KEY"] == "judge_api-key:ref"
         assert env["OPENAI_JUDGE_BASE_URL"] == "http://localhost:8080/judge/v1"
@@ -289,7 +288,7 @@ def test_collection_judge_routes_to_grader(job_spec_path, tmp_path, monkeypatch,
     assert "api-key:ref" not in " ".join(cmd)
 
 
-def test_collection_judge_route_without_projected_url_uses_target_proxy(job_spec_path, monkeypatch):
+def test_collection_judge_key_without_projected_url_uses_target_proxy(job_spec_path, monkeypatch):
     monkeypatch.setattr(
         _execution, "read_model_auth_key", {"judge_api-key": "judge_api-key:ref"}.get
     )
@@ -297,25 +296,26 @@ def test_collection_judge_route_without_projected_url_uses_target_proxy(job_spec
     config = adapter.job_spec
     config.benchmark_id = "inspect/hle"
     config.model.url = "http://localhost:8080/v1"
-    config.parameters = {"judge_model": "deployed-judge", "judge_route": "judge"}
+    config.parameters = {"judge_model": "deployed-judge"}
 
     env = adapter._build_env(config, "standard")
 
     assert env["OPENAI_JUDGE_BASE_URL"] == config.model.url
+    assert env["OPENAI_JUDGE_API_KEY"] == "judge_api-key:ref"
 
 
-def test_collection_judge_route_requires_projected_key(job_spec_path, monkeypatch):
-    monkeypatch.setattr(_execution, "read_model_auth_key", lambda key: None)
+def test_collection_judge_url_requires_projected_key(job_spec_path, monkeypatch):
+    monkeypatch.setattr(_execution, "read_model_auth_key", {"judge_url": "http://localhost:8080/judge/v1"}.get)
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     config = adapter.job_spec
     config.benchmark_id = "inspect/hle"
-    config.parameters = {"judge_model": "deployed-judge", "judge_route": "judge"}
+    config.parameters = {"judge_model": "deployed-judge"}
 
     with pytest.raises(ValueError, match="judge_api-key"):
         adapter._build_env(config, "standard")
 
 
-def test_cyberseceval_without_judge_route_keeps_legacy_task_defaults(job_spec_path, tmp_path):
+def test_cyberseceval_without_judge_model_keeps_legacy_task_defaults(job_spec_path, tmp_path):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     config = adapter.job_spec
     config.benchmark_id = "inspect/cyberseceval-2-pi"
@@ -331,12 +331,10 @@ def test_cyberseceval_without_judge_route_keeps_legacy_task_defaults(job_spec_pa
 
 
 @pytest.mark.parametrize("parameters, error", [
-    ({"judge_model": "deployed-judge", "judge_route": "other"}, "judge_route"),
-    ({"judge_route": "target"}, "judge_model"),
-    ({"judge_model": "deployed-judge", "judge_route": "target", "judge_url": "https://external.example/v1"}, "cannot be combined"),
-    ({"judge_model": "deployed-judge", "judge_route": "target", "grader_model": "other"}, "parameters.grader_model"),
-    ({"judge_model": "deployed-judge", "judge_route": "target", "model_roles": {"grader": "openai/other"}}, "model_roles.grader"),
-    ({"judge_model": "deployed-judge", "judge_route": "target", "task_args": {"judge_llm": "openai/other"}}, "task_args.judge_llm"),
+    ({"judge_model": "  "}, "judge_model"),
+    ({"judge_model": "deployed-judge", "judge_url": "https://external.example/v1"}, "cannot be combined"),
+    ({"judge_model": "deployed-judge", "grader_model": "other"}, "parameters.grader_model"),
+    ({"judge_model": "deployed-judge", "task_args": {"judge_llm": "openai/other"}}, "task_args.judge_llm"),
 ])
 def test_collection_judge_rejects_invalid_or_conflicting_inputs(
     job_spec_path, tmp_path, parameters, error

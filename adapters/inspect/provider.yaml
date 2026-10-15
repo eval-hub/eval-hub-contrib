@@ -939,15 +939,10 @@ parameters:
     default: "claude-opus-4-7"
     description: >
       Petri/Bloom judge model name. For HLE and CyberSecEval 2 in the bundled
-      collections, provide a non-empty per-job judge_model and judge_route.
-
-  - name: judge_route
-    type: string
-    description: >
-      For HLE and CyberSecEval 2 in the bundled collections, value `target` reuses
-      model.url and its credential; value `judge` uses judge_api-key and optional
-      judge_url in model.auth.secret_ref. Other Inspect benchmarks retain their
-      existing routing.
+      collections, provide a non-empty per-job judge_model. With no judge-specific
+      entries in model.auth.secret_ref, this reuses the target connection;
+      judge_api-key selects a separate credential and optional judge_url a
+      separate endpoint.
 
   - name: judge_base_url
     type: string

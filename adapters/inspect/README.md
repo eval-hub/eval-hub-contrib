@@ -260,18 +260,21 @@ Global client selection priority for roles without explicit routing:
 ### Curated HLE and CyberSecEval 2 judge routing
 
 For `inspect/hle` and `inspect/cyberseceval-2-pi`, set flat benchmark parameters
-`judge_model` and `judge_route` (`target` or `judge`). The adapter maps both to
+`judge_model`. The adapter maps it to
 Inspect's `grader` role. For CyberSecEval 2 it also disables the task's built-in
 `judge_llm` default, which would otherwise bypass that role. The existing
 `task_args` scorer settings remain in place.
 
-`target` reuses the evaluated model endpoint and credential. `judge` reads
-`judge_api-key` and optional `judge_url` from the Secret named by
-`model.auth.secret_ref`. In Kubernetes the adapter receives only the projected
-reference and loopback URL; the sidecar injects the real key and selects the
-judge upstream. A missing judge key fails before launching Inspect. Do not put
-an endpoint or API key in job parameters when using `judge_route`. Jobs without
-`judge_route` retain their existing `model_roles` and task-argument behavior.
+With no judge-specific fields in the Secret named by `model.auth.secret_ref`,
+the judge reuses the evaluated model endpoint and credential. `judge_api-key`
+selects a separate credential at the target endpoint, and optional `judge_url`
+selects a separate endpoint. `judge_url` alone is invalid because the sidecar
+routes `api-key:ref` only to the target; copy the target key into `judge_api-key`
+when only the URL differs. In Kubernetes the adapter receives projected
+references and loopback URLs; the sidecar injects the real key and selects the
+judge upstream. Do not put an endpoint or API key in job parameters for these
+collection jobs. Jobs without `judge_model` retain their existing `model_roles`
+and task-argument behavior.
 
 ### Independent StrongREJECT grader
 

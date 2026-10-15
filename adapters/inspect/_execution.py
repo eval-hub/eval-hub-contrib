@@ -54,16 +54,18 @@ _KILL_GRACE_S = 10.0
 _COLLECTION_JUDGE_BENCHMARKS = frozenset({"inspect/hle", "inspect/cyberseceval-2-pi"})
 
 
-def _collection_judge_route(config: JobSpec) -> str | None:
+def _collection_judge_enabled(config: JobSpec) -> bool:
     """Validate the opt-in flat judge inputs without changing legacy jobs."""
     parameters = config.parameters
-    route = parameters.get("judge_route")
-    if route is None:
-        return None
     if config.benchmark_id not in _COLLECTION_JUDGE_BENCHMARKS:
-        raise ValueError(f"judge_route is not supported for {config.benchmark_id}")
-    if not isinstance(route, str) or route not in ("target", "judge"):
-        raise ValueError("parameters.judge_route must be target or judge")
+        return False
+    if "judge_model" not in parameters:
+        return False
+    # Existing standalone HLE jobs may carry a provider-level judge_model
+    # alongside an explicit grader role; keep that role authoritative.
+    model_roles = parameters.get("model_roles")
+    if isinstance(model_roles, dict) and "grader" in model_roles:
+        return False
     name = parameters.get("judge_model")
     if not isinstance(name, str) or not name.strip():
         raise ValueError("parameters.judge_model must be a non-empty model name")
@@ -74,14 +76,14 @@ def _collection_judge_route(config: JobSpec) -> str | None:
     )
     for key in conflicting_keys:
         if parameters.get(key):
-            raise ValueError(f"judge_route cannot be combined with parameters.{key}")
-    return route
+            raise ValueError(f"judge_model cannot be combined with parameters.{key}")
+    return True
 
 
-def _collection_grader_spec(config: JobSpec, env: dict[str, str], route: str) -> str:
+def _collection_grader_spec(config: JobSpec, env: dict[str, str]) -> str:
     """Bind Inspect's grader role without putting credentials in CLI arguments."""
     name = config.parameters["judge_model"].strip()
-    if route == "judge":
+    if read_model_auth_key("judge_api-key"):
         return grader_model_spec(name)
     client = select_client(env, endpoint_url=config.model.url)
     model = route_model(name, client)
@@ -111,7 +113,7 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
     """
     env = os.environ.copy()
     p = config.parameters
-    collection_judge_route = _collection_judge_route(config)
+    collection_judge_enabled = _collection_judge_enabled(config)
 
     if config.model.url:
         if _is_ollama_endpoint(config.model.url):
@@ -150,17 +152,19 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
             or "https://api.openai.com/v1"
         )
 
-    if collection_judge_route == "judge":
+    if collection_judge_enabled:
         # The adapter receives only synthetic reference values in Kubernetes;
         # the sidecar resolves the real credential and optional upstream URL.
         judge_key = read_model_auth_key("judge_api-key")
-        if not judge_key:
-            raise ValueError("judge_route=judge requires judge_api-key in model.auth.secret_ref")
-        judge_url = read_model_auth_key("judge_url") or config.model.url
-        if not judge_url:
-            raise ValueError("judge_route=judge requires judge_url or config.model.url")
-        env["OPENAI_JUDGE_API_KEY"] = judge_key
-        env["OPENAI_JUDGE_BASE_URL"] = judge_url
+        projected_url = read_model_auth_key("judge_url")
+        if projected_url and not judge_key:
+            raise ValueError("judge_url in model.auth.secret_ref requires judge_api-key")
+        if judge_key:
+            judge_url = projected_url or config.model.url
+            if not judge_url:
+                raise ValueError("judge_api-key requires judge_url or config.model.url")
+            env["OPENAI_JUDGE_API_KEY"] = judge_key
+            env["OPENAI_JUDGE_BASE_URL"] = judge_url
 
     # ANTHROPIC_BASE_URL passes through from host env.
 
@@ -265,12 +269,9 @@ def build_command(
                 f"parameters.model_roles must be a dict (got {type(model_roles).__name__}). "
                 "Example: model_roles: {grader: openai/gpt-4o-mini}"
             )
-        collection_judge_route = _collection_judge_route(config)
-        if collection_judge_route is not None:
-            if "grader" in model_roles:
-                raise ValueError("judge_route cannot be combined with model_roles.grader")
+        if _collection_judge_enabled(config):
             model_roles = dict(model_roles)
-            model_roles["grader"] = _collection_grader_spec(config, env, collection_judge_route)
+            model_roles["grader"] = _collection_grader_spec(config, env)
         for role, spec in model_roles.items():
             cmd += ["--model-role", f"{role}={spec}"]
 
@@ -305,9 +306,9 @@ def build_command(
     cmd += ["--log-level", config.parameters.get("log_level", "info")]
 
     task_args = _task_args(config)
-    if config.benchmark_id == "inspect/cyberseceval-2-pi" and _collection_judge_route(config) is not None:
+    if config.benchmark_id == "inspect/cyberseceval-2-pi" and _collection_judge_enabled(config):
         if task_args.get("judge_llm") not in (None, "null"):
-            raise ValueError("judge_route cannot be combined with task_args.judge_llm")
+            raise ValueError("judge_model cannot be combined with task_args.judge_llm")
         # The task's built-in judge_llm would otherwise bypass the grader role.
         task_args["judge_llm"] = "null"
     if config.benchmark_id == "inspect/strong-reject" and config.parameters.get("grader_model"):

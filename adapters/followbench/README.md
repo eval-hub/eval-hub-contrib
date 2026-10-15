@@ -58,7 +58,6 @@ evaluation loop.
 The following parameters are supported:
 
 - `judge_model`
-- `judge_route` (`target` or `judge`)
 - `judge_url`
 - `judge_api_key`
 - `num_examples`
@@ -71,15 +70,17 @@ Credentials must not be committed to source code, job specifications, or
 container images.
 
 For the bundled Instruction & Output Reliability collection, set `judge_model`
-and `judge_route` on the FollowBench benchmark in each job. `target` uses
-`model.url` and its credential. `judge` reads `judge_api-key` and optional
-`judge_url` from `model.auth.secret_ref`; in Kubernetes these are projected as
-a synthetic reference and loopback URL, and the sidecar supplies the real
-credential and upstream route. Do not combine `judge_route` with the legacy
-`judge_url` or `judge_api_key` job parameters. Other jobs retain the legacy
-behavior described below.
+on the FollowBench benchmark in each job. With no judge-specific entries in
+`model.auth.secret_ref`, it reuses `model.url` and its credential. A
+`judge_api-key` entry selects a separate credential at `model.url`; adding
+`judge_url` selects a separate endpoint. `judge_url` alone is invalid because
+the sidecar routes `api-key:ref` only to the target. To use a different URL with
+the same credential, copy the target key into `judge_api-key`. In Kubernetes
+the adapter receives projected references and loopback URLs; the sidecar
+supplies the real credential and upstream route. Standalone jobs using the
+legacy `judge_url` or `judge_api_key` job parameters retain their behavior.
 
-When `judge_url` is omitted, the judge uses `model.url` and reuses the
+For legacy standalone jobs, when `judge_url` is omitted, the judge uses `model.url` and reuses the
 evaluated model credential, including the credential resolved from
 `model.auth.secret_ref`. A separate judge endpoint must receive its own
 credential through `judge_api_key`, `FOLLOWBENCH_JUDGE_API_KEY`, or the
