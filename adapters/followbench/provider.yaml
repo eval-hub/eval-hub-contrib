@@ -58,13 +58,13 @@ benchmarks:
 parameters:
   - name: judge_model
     type: string
-    description: Judge model identifier; required when judge_route is set.
+    description: Judge model identifier. Required for the bundled collection.
 
   - name: judge_route
     type: string
     description: >
-      target reuses the evaluated model endpoint and credential; judge uses
-      judge_api-key and optional judge_url from model.auth.secret_ref via the sidecar.
+      For the bundled collection, value `target` reuses model.url and its credential;
+      value `judge` uses judge_api-key and optional judge_url in model.auth.secret_ref.
 
   - name: judge_url
     type: string

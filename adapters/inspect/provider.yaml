@@ -938,15 +938,16 @@ parameters:
     type: string
     default: "claude-opus-4-7"
     description: >
-      Petri/Bloom judge model name, or the required per-job grader model name
-      for HLE and CyberSecEval 2 when judge_route is set.
+      Petri/Bloom judge model name. For HLE and CyberSecEval 2 in the bundled
+      collections, provide a non-empty per-job judge_model and judge_route.
 
   - name: judge_route
     type: string
     description: >
-      For HLE and CyberSecEval 2, target reuses the evaluated model connection;
-      judge uses judge_api-key and optional judge_url from model.auth.secret_ref
-      via the sidecar. Other Inspect benchmarks retain their existing routing.
+      For HLE and CyberSecEval 2 in the bundled collections, value `target` reuses
+      model.url and its credential; value `judge` uses judge_api-key and optional
+      judge_url in model.auth.secret_ref. Other Inspect benchmarks retain their
+      existing routing.
 
   - name: judge_base_url
     type: string

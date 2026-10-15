@@ -121,6 +121,7 @@ def test_collection_judge_route_uses_projected_connection(monkeypatch, projected
 @pytest.mark.parametrize("parameters, error", [
     ({"judge_model": "judge", "judge_route": "other"}, "judge_route"),
     ({"judge_route": "target"}, "judge_model"),
+    ({"judge_model": "judge", "judge_route": "target", "judge_url": "https://judge.example/v1"}, "cannot be combined"),
     ({"judge_model": "judge", "judge_route": "target", "judge_api_key": "raw-key"}, "cannot be combined"),
 ])
 def test_collection_judge_route_rejects_invalid_or_conflicting_inputs(monkeypatch, parameters, error):
