@@ -619,7 +619,7 @@ def main() -> None:
     """Load the job, execute FollowBench, and report results."""
     configure_telemetry()
 
-    job_spec_path = os.environ["EVALHUB_JOB_SPEC_PATH"]
+    job_spec_path = os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")
     adapter = FollowBenchAdapter(job_spec_path=job_spec_path)
     callbacks = DefaultCallbacks.from_adapter(adapter)
 
