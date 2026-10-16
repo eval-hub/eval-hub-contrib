@@ -20,6 +20,7 @@ IMAGE_RAGAS = $(REGISTRY)/community-ragas:$(VERSION)
 IMAGE_SWEBENCH = $(REGISTRY)/community-swebench:$(VERSION)
 IMAGE_RULER = $(REGISTRY)/community-ruler:$(VERSION)
 IMAGE_NEMO_GUARDRAILS = $(REGISTRY)/community-nemo-guardrails:$(VERSION)
+IMAGE_EVALHUB_POST_PROCESSOR = $(REGISTRY)/evalhub-post-processor:$(VERSION)
 IMAGE_TOOLEVAL = $(REGISTRY)/community-tooleval:$(VERSION)
 # Fixture image tag matches tool-server/deploy.yaml; full-cache appends -full.
 # Use evalhub (not REGISTRY's eval-hub) so Makefile output matches deploy.yaml / CI.
@@ -27,6 +28,7 @@ TOOLBENCH_SERVER_REGISTRY ?= quay.io/evalhub
 TOOLBENCH_SERVER_VERSION ?= 0.3.0
 IMAGE_TOOLBENCH_SERVER = $(TOOLBENCH_SERVER_REGISTRY)/community-toolbench-server:$(TOOLBENCH_SERVER_VERSION)
 IMAGE_PROMPTFOO = $(REGISTRY)/community-promptfoo:$(VERSION)
+IMAGE_WILDGUARD = $(REGISTRY)/community-wildguard:$(VERSION)
 
 # Default target
 .PHONY: help
@@ -47,6 +49,7 @@ help:
 	@echo "  make image-toolbench-server - Build ToolBench tool server ($(TOOLBENCH_SERVER_VERSION); FETCH_FULL_CACHE=1 -> $(TOOLBENCH_SERVER_VERSION)-full)"
 	@echo "  make image-swebench     - Build SWE-bench adapter image"
 	@echo "  make image-ruler        - Build RULER adapter image"
+	@echo "  make image-evalhub-post-processor - Build post-processing runtime"
 	@echo "  make images             - Build all adapter images"
 	@echo ""
 	@echo "Image Push:"
@@ -60,6 +63,7 @@ help:
 	@echo "  make push-toolbench-server - Push ToolBench tool server image"
 	@echo "  make push-swebench      - Push SWE-bench adapter image"
 	@echo "  make push-ruler         - Push RULER adapter image"
+	@echo "  make push-evalhub-post-processor - Push post-processing runtime"
 	@echo "  make push-images        - Push all adapter images"
 	@echo ""
 	@echo "Clean:"
@@ -86,6 +90,7 @@ help:
 	@echo "  make test-ragas        - Run RAGAS adapter tests"
 	@echo "  make test-tooleval     - Run ToolEval adapter tests"
 	@echo "  make test-ruler        - Run RULER adapter tests"
+	@echo "  make test-evalhub-post-processor - Run post-processing tests"
 	@echo "  make tests             - Run all adapter tests"
 	@echo ""
 	@echo "Variables:"
@@ -187,7 +192,7 @@ image-swebench:
 	@echo "✅ Built: $(IMAGE_SWEBENCH)"
 
 .PHONY: images
-images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler image-nemo-guardrails image-promptfoo image-tooleval image-toolbench-server
+images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler image-nemo-guardrails image-promptfoo image-followbench image-tooleval image-toolbench-server
 	@echo "✅ All adapter images built"
 
 # Push targets
@@ -461,6 +466,35 @@ test-nemo-guardrails:
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ NeMo Guardrails tests passed"
 
+# Internal post-processing runtime (does not call a model).
+.PHONY: image-evalhub-post-processor push-evalhub-post-processor tag-evalhub-post-processor clean-evalhub-post-processor build-and-push-evalhub-post-processor test-evalhub-post-processor
+image-evalhub-post-processor:
+	$(BUILD_TOOL) build -t $(IMAGE_EVALHUB_POST_PROCESSOR) -f adapters/evalhub-post-processor/Containerfile adapters/evalhub-post-processor
+
+push-evalhub-post-processor:
+	$(BUILD_TOOL) push $(IMAGE_EVALHUB_POST_PROCESSOR)
+
+# SOURCE_IMAGE can be a local build tag or an immutable image ID.
+tag-evalhub-post-processor:
+	@test -n "$(SOURCE_IMAGE)" || (echo "Set SOURCE_IMAGE to the image to tag"; exit 1)
+	$(BUILD_TOOL) tag $(SOURCE_IMAGE) $(IMAGE_EVALHUB_POST_PROCESSOR)
+
+clean-evalhub-post-processor:
+	$(BUILD_TOOL) rmi $(IMAGE_EVALHUB_POST_PROCESSOR) 2>/dev/null || true
+
+build-and-push-evalhub-post-processor: image-evalhub-post-processor
+	$(MAKE) push-evalhub-post-processor
+
+test-evalhub-post-processor:
+	cd adapters/evalhub-post-processor && \
+	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/pytest tests/ -v
+
+images: image-evalhub-post-processor
+push-images: push-evalhub-post-processor
+clean-images: clean-evalhub-post-processor
+tests: test-evalhub-post-processor
 .PHONY: image-promptfoo
 image-promptfoo:
 	@echo "Building promptfoo adapter image..."
@@ -492,6 +526,45 @@ test-promptfoo:
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ promptfoo tests passed"
+
+.PHONY: image-wildguard
+image-wildguard:
+	@echo "Building WildGuard adapter image..."
+	cd adapters/wildguard && \
+	$(BUILD_TOOL) build -t $(IMAGE_WILDGUARD) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_WILDGUARD)"
+
+.PHONY: push-wildguard
+push-wildguard:
+	@echo "Pushing WildGuard adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_WILDGUARD)
+	@echo "✅ Pushed: $(IMAGE_WILDGUARD)"
+
+.PHONY: clean-wildguard
+clean-wildguard:
+	@echo "Removing WildGuard adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_WILDGUARD) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_WILDGUARD)"
+
+.PHONY: build-and-push-wildguard
+build-and-push-wildguard: image-wildguard
+	$(MAKE) push-wildguard
+	@echo "✅ WildGuard adapter built and pushed"
+
+# Offline by design (matches CI): tests that need the HuggingFace Hub carry the live_hf marker.
+.PHONY: test-wildguard
+test-wildguard:
+	@echo "Running WildGuard adapter tests..."
+	cd adapters/wildguard && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v -m "not live_hf"
+	@echo "✅ WildGuard tests passed"
+
+images: image-wildguard
+push-images: push-wildguard
+clean-images: clean-wildguard
+tests: test-wildguard
 
 .PHONY: image-tooleval
 image-tooleval:
@@ -555,7 +628,7 @@ image-databench:
 push-databench:
 	$(BUILD_TOOL) push $(IMAGE_DATABENCH)
 clean-databench:
-	$(BUILD_TOOL) rmi $(IMAGE_DATABENCH)
+	$(BUILD_TOOL) rmi $(IMAGE_DATABENCH) 2>/dev/null || true
 test-databench:
 	cd adapters/databench && \
 	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \

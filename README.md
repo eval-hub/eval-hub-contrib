@@ -10,6 +10,7 @@ This repository contains adapters that integrate various evaluation frameworks w
 
 | Framework | Container Image | Kubernetes | Notes |
 |-----------|----------------|------------|-------|
+| [EvalHub Post Processor](adapters/evalhub-post-processor/README.md) | `quay.io/evalhub/evalhub-post-processor:latest` | ✓ | Ordered post-processing of completed evaluations; PPI confidence intervals and sidecar-only MLflow/OCI access |
 | [LightEval](https://github.com/huggingface/lighteval) | `quay.io/evalhub/community-lighteval:latest` | ✓ | Lightweight evaluation framework for language models |
 | [GuideLLM](https://github.com/vllm-project/guidellm) | `quay.io/evalhub/community-guidellm:latest` | ✓ | Performance benchmarking for LLM inference servers |
 | [MTEB](https://github.com/embeddings-benchmark/mteb) | `quay.io/evalhub/community-mteb:latest` | ✓ | Massive Text Embedding Benchmark for embedding models |
@@ -24,6 +25,7 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) | `quay.io/eval-hub/community-nemo-guardrails:latest` | ✓ | Safety rail evaluation — prompt injection and toxicity detection benchmarks |
 | [ToolEval](https://github.com/OpenBMB/ToolBench) | `quay.io/evalhub/community-tooleval:latest` | ✓ | Tool-use sequencing / multi-step planning (tool server image separate) |
 | [FollowBench](https://github.com/YJiangcm/FollowBench) | `quay.io/evalhub/community-followbench:latest` | ✓ | Multi-level instruction-following benchmark with HSR, SSR, and CSL metrics |
+| [promptfoo](https://github.com/promptfoo/promptfoo) | `quay.io/evalhub/community-promptfoo:latest` | ✓ | Assertion-based prompt regression testing (`promptfoo-eval`) and adversarial red-team scanning (`promptfoo-redteam`) — 155 plugins covering the OWASP LLM Top 10 plus industry-vertical compliance packs (financial, medical, insurance, telecom, and more) |
 
 ## Inspect AI Adapter
 
@@ -153,6 +155,55 @@ Score guide: GPT-4o scores ~34% on this benchmark; pass threshold in curated col
 
 See [adapters/ifbench/README.md](adapters/ifbench/README.md) for full documentation and example job specs.
 
+## promptfoo Adapter
+
+The promptfoo adapter integrates [promptfoo](https://github.com/promptfoo/promptfoo) (MIT license) into eval-hub, exposing two evaluation families against any OpenAI-compatible model endpoint.
+
+**2 benchmarks:**
+
+- **`promptfoo-eval`** — assertion-based prompt/model regression testing. Loads prompts and assertions from CSV, JSONL, or JSON; scores each test case against configurable assertion types (`contains`, `llm-rubric`, `javascript`, and more) and reports overall pass rate.
+- **`promptfoo-redteam`** — adversarial red-team scanning using promptfoo's plugin catalog (155 plugins as of promptfoo 0.123.1). Plugins are mapped to the OWASP LLM Top 10 and extend into RAG-specific attacks (`rag-poisoning`, `rag-document-exfiltration`, `rag-source-attribution`), API/access-control attacks (`bola`, `bfla`, `rbac`, `debug-access`), MCP-specific attacks (`mcp`), and industry-vertical compliance packs (financial, medical, insurance, telecom, real estate, pharmacy, e-commerce, coding-agent) that complement rather than duplicate Garak's probe set.
+
+**Two model roles for red-team runs** — the target model (under test) and a shared generation and grading model (produces the adversarial inputs and scores whether each attack succeeded). The shared model can use a different endpoint and credential from the target: `generation_provider` selects it, and `generation_provider_url` and `generation_provider_api_key` configure its endpoint and credential.
+
+> **Required: configure a grading model.** Without an explicit `generation_provider`, the grader defaults to a promptfoo-hosted model that is unreachable on a self-hosted or air-gapped deployment. When unreachable, every red-team result silently reports as `pass=false` regardless of the target model's actual behavior — the grading pipeline is broken, not the target. This is a verified behavior, confirmed on a live OpenShift cluster (September 2026): results were 100% "failed" until `generation_provider` was passed as the grader endpoint. Pass the `generation_provider` parameter to route both attack generation and result grading to the same operator-configured model.
+
+**Native `eval.json` export** — every completed job can persist promptfoo's own `eval.json` through three independent paths so results can be reopened in promptfoo's own viewer (`promptfoo import`) or fed into CI tooling. The embedded path is size-gated and the other two depend on the configured exports, so an oversized `eval.json` is not retained when neither export is configured:
+
+1. Embedded in `JobResults.additional_info["promptfoo_eval_json"]` when it is within `PROMPTFOO_EVAL_JSON_MAX_BYTES`; otherwise omitted and flagged with `promptfoo_eval_json_omitted`
+2. Attached as an MLflow artifact when `experiment_name` is set — verified end-to-end against a running RHOAI MLflow deployment; see [adapters/promptfoo/README.md](adapters/promptfoo/README.md) for required RBAC
+3. Attached as an OCI artifact when `config.exports.oci` is set
+
+**Metrics:**
+
+| Metric | Description |
+|---|---|
+| `pass_rate` | `successes / (successes + failures + errors)` (`overall_score`) |
+| `n_evaluated` | Total test cases run |
+| `n_passed` | Test cases where all assertions passed |
+| `n_failed` | Test cases with a failed assertion |
+| `n_errors` | Test cases where the provider call itself failed (not an assertion failure) |
+
+`promptfoo-redteam` additionally reports `pass_rate_by_plugin` and `severity_by_plugin` in `additional_info`.
+
+**Key parameters:**
+
+| Parameter | Benchmark | Default | Description |
+|---|---|---|---|
+| `plugins` | promptfoo-redteam | OWASP LLM Top 10 subset | Plugin IDs or category aliases to run; use `promptfoo redteam plugins` to list all 155 |
+| `purpose` | promptfoo-redteam | `An AI assistant` | Plain-language description of what the application does; used to generate contextually relevant attacks rather than generic ones |
+| `num_tests_per_plugin` | promptfoo-redteam | `5` | Number of test cases per plugin |
+| `generation_provider` | promptfoo-redteam | promptfoo default (unreachable on self-hosted) | promptfoo provider ID of the model that generates adversarial content **and** grades results (passed to `redteam generate --provider` and `eval --grader`) — set this to avoid silent all-failed results |
+| `generation_provider_url` | promptfoo-redteam | target model URL (`/v1` appended if missing) | Base URL of the OpenAI-compatible endpoint serving `generation_provider`; only used when `generation_provider` is set |
+| `generation_provider_api_key` | promptfoo-redteam | `GENERATION_PROVIDER_API_KEY` env var | API key for the `generation_provider` endpoint; only used when `generation_provider` is set. The target model's key is reused only when `generation_provider_url` is not set. With an explicit `generation_provider_url` and no key from the parameter or env var, the adapter sends `not-required`, so an authenticated endpoint needs its own key |
+| `prompts` / `tests` | promptfoo-eval | _(none)_ | Generate a promptfoo config from these instead of `config_yaml` |
+| `config_yaml` | promptfoo-eval | _(none)_ | Base promptfoo project config: `targets` is removed, `providers` is replaced with the EvalHub model endpoint, and `evaluateOptions.timeoutMs` / `maxConcurrency` are set from `request_timeout` / `max_concurrency`; other `evaluateOptions` keys are preserved |
+| `max_concurrency` | both | `4` | Maximum concurrent API calls |
+| `request_timeout` | both | `120` | Per-request timeout in seconds |
+| `experiment_name` | both | _(none)_ | MLflow experiment name; when set, results and `eval.json` are logged as an MLflow run |
+
+See [adapters/promptfoo/README.md](adapters/promptfoo/README.md) for full documentation, verified operational constraints, MLflow RBAC requirements, and Garak overlap analysis.
+
 ## JobPhase Lifecycle
 
 Every adapter must report progress through the `JobPhase` lifecycle via `callbacks.report_status()`. The server validates phases against a fixed set, so adapters must emit them in order and use only the values listed below.
@@ -204,7 +255,7 @@ if oci_exports is not None and output_files:
 ## Building Adapters
 
 ```bash
-# Build a specific adapter
+# Build a specific adapter image
 make image-lighteval
 make image-guidellm
 make image-mteb
@@ -212,29 +263,39 @@ make image-inspect
 make image-deepeval
 make image-ragas
 make image-swebench
+make image-ruler
 make image-nemo-guardrails
+make image-promptfoo
+make image-followbench
 
-# Build all adapters
+# Build all adapter images
 make images
 
 # Run adapter tests
 make test-lighteval
+make test-guidellm
+make test-mteb
+make test-clear
 make test-inspect
 make test-deepeval
 make test-ragas
 make test-swebench
-make test-clear
+make test-ruler
 make test-nemo-guardrails
+make test-promptfoo
 make tests
 
 # Push to registry
 make push-lighteval REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-guidellm REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-mteb REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-deepeval REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-ragas REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-swebench REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-ruler REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-nemo-guardrails REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-promptfoo REGISTRY=quay.io/your-org VERSION=v1.0.0
 ```
 
 ## Publishing a Versioned Framework Image
