@@ -13,6 +13,35 @@ import main as main_module
 from _evaluation import FollowBenchExample
 
 
+@pytest.mark.parametrize("job_spec_path", [None, "/custom/job.json"])
+def test_main_loads_job_and_reports_results(monkeypatch, job_spec_path):
+    if job_spec_path is None:
+        monkeypatch.delenv("EVALHUB_JOB_SPEC_PATH", raising=False)
+    else:
+        monkeypatch.setenv("EVALHUB_JOB_SPEC_PATH", job_spec_path)
+
+    monkeypatch.setattr(main_module, "configure_telemetry", lambda: None)
+    adapter = MagicMock()
+    adapter_factory = MagicMock(return_value=adapter)
+    monkeypatch.setattr(main_module, "FollowBenchAdapter", adapter_factory)
+    callbacks = MagicMock()
+    monkeypatch.setattr(
+        main_module.DefaultCallbacks, "from_adapter", MagicMock(return_value=callbacks)
+    )
+
+    main_module.main()
+
+    adapter_factory.assert_called_once_with(
+        job_spec_path=job_spec_path or "/meta/job.json"
+    )
+    main_module.DefaultCallbacks.from_adapter.assert_called_once_with(adapter)
+    callbacks.tracer.evaluation_run.assert_called_once_with()
+    adapter.run_benchmark_job.assert_called_once_with(adapter.job_spec, callbacks)
+    callbacks.report_results.assert_called_once_with(
+        adapter.run_benchmark_job.return_value
+    )
+
+
 def test_build_judge_prompt_uses_requested_level():
     group = [
         FollowBenchExample(1, "content", "COGNAC", 0, "base", ""),
