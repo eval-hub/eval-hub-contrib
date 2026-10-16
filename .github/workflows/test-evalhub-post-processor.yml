@@ -1,0 +1,45 @@
+name: Test EvalHub Post Processor
+
+on:
+  push:
+    branches: [main]
+    paths: ['adapters/evalhub-post-processor/**', '.github/workflows/test-evalhub-post-processor.yml', 'Makefile']
+  pull_request:
+    branches: [main]
+    paths: ['adapters/evalhub-post-processor/**', '.github/workflows/test-evalhub-post-processor.yml', 'Makefile']
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        working-directory: adapters/evalhub-post-processor
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+      - name: Check Python style
+        working-directory: adapters/evalhub-post-processor
+        run: |
+          ruff check main.py post_processor tests
+          ruff format --check main.py post_processor tests
+      - name: Run tests
+        working-directory: adapters/evalhub-post-processor
+        run: pytest tests/ -v
+      - name: Build runtime image
+        run: make image-evalhub-post-processor BUILD_TOOL=docker REGISTRY=localhost VERSION=test
+      - name: Smoke test runtime image
+        run: |
+          docker run --rm --network none --entrypoint python localhost/evalhub-post-processor:test -c '
+          import numpy as np
+          import main
+          from ppi_py import ppi_mean_ci
+          bounds = ppi_mean_ci(np.array([1., 0., 1.]), np.array([.8, .2, .7]), np.array([.2, .4, .8, .9]), alpha=.05, lam=1)
+          assert np.isfinite(bounds).all(), bounds
+          print("Container imports and PPI computation passed:", bounds)
+          '
