@@ -1007,6 +1007,18 @@ def test_oci_export_persists_artifacts(monkeypatch, job_spec_path, petri_eval_lo
     )
     callbacks.mlflow.save.return_value = None
 
+    def save_with_logs(results, config, *, artifacts):
+        from evalhub.adapter.mlflow import MlflowFileArtifact
+
+        artifact, = artifacts
+        assert isinstance(artifact, MlflowFileArtifact)
+        oci_dir = callbacks.create_oci_artifact.call_args.args[0].files_path
+        assert artifact.local_path == oci_dir / artifact.path
+        assert json.loads(artifact.local_path.read_text()) == petri_eval_log
+        return "inspect-run"
+
+    callbacks.mlflow.save.side_effect = save_with_logs
+
     # run_inspect must place the log file inside the adapter's log_dir
     def fake_run_inspect(cmd, env, log_dir):
         log_file = log_dir / "petri_sycophancy_001.json"
@@ -1029,6 +1041,8 @@ def test_oci_export_persists_artifacts(monkeypatch, job_spec_path, petri_eval_lo
     spec = call_args.args[0]
     # work_dir is cleaned up in a finally block, so we verify the path shape
     assert spec.files_path.name == "logs"
+    assert not spec.files_path.exists()
+    assert results.mlflow_run_id == "inspect-run"
 
     # OCI artifact is attached to results
     assert results.oci_artifact is not None

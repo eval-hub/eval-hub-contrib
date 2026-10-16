@@ -38,6 +38,7 @@ from evalhub.adapter import (
 )
 
 from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
+from evalhub.adapter.mlflow import MlflowFileArtifact
 
 from prepare_assets import prepare_assets
 
@@ -366,7 +367,7 @@ class RulerAdapter(FrameworkAdapter):
                 logger.info(f"OCI artifact created: {oci_artifact.reference}")
 
             duration = time.time() - start_time
-            return JobResults(
+            job_results = JobResults(
                 id=config.id,
                 benchmark_id=config.benchmark_id,
                 benchmark_index=config.benchmark_index,
@@ -391,6 +392,17 @@ class RulerAdapter(FrameworkAdapter):
                 eval_card=eval_card,
                 env_card=env_card,
             )
+
+            # The fallback results directory can be inside work_dir, so save
+            # synchronously before finally removes it.
+            artifacts = [
+                MlflowFileArtifact(file.name, file)
+                for file in output_files
+            ]
+            run_id = callbacks.mlflow.save(job_results, config, artifacts=artifacts)
+            if run_id:
+                job_results.mlflow_run_id = run_id
+            return job_results
 
         except Exception as e:
             logger.exception("RULER evaluation failed")
@@ -1251,11 +1263,6 @@ def main() -> None:
         logger.info(f"Job completed: {results.id}")
         logger.info(f"Overall score: {results.overall_score}")
         logger.info(f"Evaluated {results.num_examples_evaluated} examples")
-
-        run_id = callbacks.mlflow.save(results, adapter.job_spec)
-        if run_id:
-            results.mlflow_run_id = run_id
-            logger.info(f"MLflow run created: {run_id}")
 
         callbacks.report_results(results)
         sys.exit(0)

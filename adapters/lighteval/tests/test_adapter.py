@@ -166,8 +166,9 @@ def test_oci_export_persists_artifacts(tmp_path, mock_callbacks, monkeypatch, mo
 def test_main_uploads_result_artifacts_to_mlflow(
     adapter, monkeypatch, mock_hf_api, oci_enabled
 ):
-    """MLflow receives the generated result files with or without OCI exports."""
+    """MLflow receives file-based artifacts with or without OCI exports."""
     from evalhub.adapter import DefaultCallbacks
+    from evalhub.adapter.mlflow import MlflowFileArtifact
 
     job = adapter.job_spec.model_dump(mode="json")
     job["experiment_name"] = "test-lighteval"
@@ -205,11 +206,13 @@ def test_main_uploads_result_artifacts_to_mlflow(
     }
     results_dir = adapter.local_jobs_base_path / "results"
     for artifact in artifacts:
-        assert artifact.content == (results_dir / artifact.path).read_bytes()
+        assert isinstance(artifact, MlflowFileArtifact)
+        assert artifact.local_path == results_dir / artifact.path
+        assert artifact.local_path.is_file()
         assert artifact.content_type == (
             "text/plain" if artifact.path.endswith(".txt") else "application/json"
         )
-    assert json.loads(artifacts[0].content) == CANNED_RESULTS
+    assert json.loads(artifacts[0].local_path.read_text()) == CANNED_RESULTS
     reported = callbacks.report_results.call_args.args[0]
     assert reported.mlflow_run_id == "test-run-id"
     assert callbacks.create_oci_artifact.called == oci_enabled
@@ -268,6 +271,12 @@ def test_oci_export_includes_opted_in_sample_results(
     assert "do not export" not in sample_file.read_text()
     assert "Question" not in sample_file.read_text()
     assert not (spec.files_path / "details").exists()
+    sample_artifact = next(
+        artifact for artifact in adapter.mlflow_artifacts
+        if artifact.path == "sample_results.jsonl"
+    )
+    assert sample_artifact.local_path == sample_file
+    assert sample_artifact.content_type == "application/x-ndjson"
 
 
 @pytest.mark.integration

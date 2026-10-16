@@ -27,6 +27,30 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [FollowBench](https://github.com/YJiangcm/FollowBench) | `quay.io/evalhub/community-followbench:latest` | ✓ | Multi-level instruction-following benchmark with HSR, SSR, and CSL metrics |
 | [promptfoo](https://github.com/promptfoo/promptfoo) | `quay.io/evalhub/community-promptfoo:latest` | ✓ | Assertion-based prompt regression testing (`promptfoo-eval`) and adversarial red-team scanning (`promptfoo-redteam`) — 155 plugins covering the OWASP LLM Top 10 plus industry-vertical compliance packs (financial, medical, insurance, telecom, and more) |
 
+## MLflow and OCI Export Tracking
+
+MLflow `Yes` means both metrics and artifacts; `Yes (metrics only)` indicates partial support.
+
+| Adapter name | MLflow | OCI export |
+| --- | --- | --- |
+| [atif](adapters/atif/main.py) | Yes (development SDK required) | No |
+| [clear](adapters/clear/main.py) | Yes | Yes |
+| [databench](adapters/databench/main.py) | Yes | Yes |
+| [deepeval](adapters/deepeval/main.py) | Yes | Yes |
+| [followbench](adapters/followbench/main.py) | No | No |
+| [guidellm](adapters/guidellm/main.py) | Yes | Yes |
+| [ifbench](adapters/ifbench/main.py) | No | No |
+| [inspect](adapters/inspect/main.py) | Yes | Yes |
+| [lighteval](adapters/lighteval/main.py) | Yes | Yes |
+| [mteb](adapters/mteb/main.py) | Yes | Yes |
+| [nemo-guardrails](adapters/nemo-guardrails/main.py) | Yes (metrics only) | No |
+| [promptfoo](adapters/promptfoo/main.py) | Yes | Yes |
+| [ragas](adapters/ragas/main.py) | Yes | Yes |
+| [ruler](adapters/ruler/main.py) | Yes | Yes |
+| [swebench](adapters/swebench/main.py) | Yes | Yes |
+| [tooleval](adapters/tooleval/main.py) | Yes | Yes |
+| [wildguard](adapters/wildguard/main.py) | No | No |
+
 ## Inspect AI Adapter
 
 The Inspect AI adapter exposes alignment auditing and safety evaluation through the [Petri](https://meridianlabs-ai.github.io/inspect_petri/) and [Bloom](https://meridianlabs-ai.github.io/inspect_petri/extensions/petri-bloom.html) tools from Meridian Labs, as well as curated benchmarks from the [inspect-evals](https://github.com/UKGovernmentBEIS/inspect_evals) community library.

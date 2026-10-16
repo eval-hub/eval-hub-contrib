@@ -38,6 +38,7 @@ from evalhub.adapter import (
     OCIArtifactSpec,
 )
 from evalhub.adapter.auth import resolve_model_credentials
+from evalhub.adapter.mlflow import MlflowFileArtifact
 
 # Configure logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -71,6 +72,7 @@ class GuideLLMAdapter(FrameworkAdapter):
         """
         super().__init__(job_spec_path=job_spec_path)
         self.results_dir: Optional[Path] = None
+        self.mlflow_artifacts: list[MlflowFileArtifact] = []
         logger.info("GuideLLM adapter initialized")
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
@@ -534,6 +536,10 @@ class GuideLLMAdapter(FrameworkAdapter):
 
         # Collect all output files
         output_files = list(self.results_dir.glob("benchmarks.*"))
+        self.mlflow_artifacts = [
+            MlflowFileArtifact(file.relative_to(self.results_dir).as_posix(), file)
+            for file in sorted(self.results_dir.rglob("*")) if file.is_file()
+        ]
 
         if not output_files:
             logger.warning("No output files found in results directory")
@@ -617,7 +623,9 @@ def main() -> None:
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
 
         # Persist benchmark metrics in MLflow before reporting the run ID.
-        run_id = callbacks.mlflow.save(results, adapter.job_spec)
+        run_id = callbacks.mlflow.save(
+            results, adapter.job_spec, artifacts=adapter.mlflow_artifacts
+        )
         if run_id:
             results.mlflow_run_id = run_id
             logger.info("MLflow run created: %s", run_id)
