@@ -2,6 +2,8 @@
 
 # LightEval framework
 lighteval==0.13.0
+# LightEval 0.13.0 uses list_models(model_name=...), removed in Hub v2
+huggingface-hub>=0.30.2,<2
 pyarrow
 
 # LiteLLM for endpoint support
