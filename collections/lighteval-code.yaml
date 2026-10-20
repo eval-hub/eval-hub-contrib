@@ -1,0 +1,38 @@
+# Lighteval — Code Collection
+#
+# LiveCodeBench v6 — competitive programming, contamination-free rolling benchmark.
+# Generative scoring — works with standard lighteval image.
+#
+# ── Threshold Justification ──────────────────────────────────────────────────
+# LiveCodeBench v6 (Jain et al. 2024): Samples problems from Codeforces, LeetCode,
+#   and AtCoder after model training cutoff — eliminates data contamination risk.
+#   codegen_pass@1 with 16 random seeds (robust estimate).
+#   Top-10 <80B: 40–75%. Typical 8B: 18–40%.
+#   Threshold 0.20 = bottom of competitive 8B range per artificialanalysis.ai leaderboard.
+#   Weight 2.0 — highest discriminating power across the coding benchmark landscape;
+#   far from saturated for <80B models; contamination-free.
+#   score=0 expected for Qwen3-8B-FP8 in standard mode (LCB requires strong coding).
+#
+# ── Global Pass Criteria ─────────────────────────────────────────────────────
+# lcb:codegeneration_v6 ≥ 0.20.
+
+name: lighteval-code
+description: >
+  Competitive programming via Lighteval — LiveCodeBench v6 (Jain et al. 2024).
+  Samples Codeforces/LeetCode/AtCoder problems after model training cutoff for
+  contamination-free evaluation. codegen_pass@1 with 16 seeds. Threshold 0.20 =
+  bottom of competitive 8B range per artificialanalysis.ai (top-10 <80B: 40–75%,
+  typical 8B: 18–40%). score=0 expected for Qwen3-8B-FP8 in standard mode.
+  Generative scoring — works with standard lighteval image.
+category: code
+tags: [coding, competitive-programming, execution, contamination-free, lighteval]
+
+benchmarks:
+  # LiveCodeBench v6: contamination-free competitive programming. Highest code discrimination.
+  # Top-10 <80B: 40–75%. Typical 8B: 18–40%. Threshold 0.20.
+  - id: lcb:codegeneration_v6
+    provider_id: lighteval
+    weight: 2.0
+    parameters: {}
+    primary_score: {metric: accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.20}
