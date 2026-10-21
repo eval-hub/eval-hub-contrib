@@ -538,13 +538,12 @@ make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
 
 ## Requirements
 
-Direct dependencies are pinned to exact versions in `requirements.txt`
-(`inspect-ai`, `inspect-evals`, `inspect-petri`, `petri-bloom`, `openai`,
-`nltk`; `eval-hub-sdk[adapter]` is a compatible-release pin). The two
-dependencies that are not on PyPI (`evals`, `instruction_following_eval`)
-are vendored under `vendor/` and referenced from `requirements.txt` as local
-paths. `constraints.txt` pins the full transitive tree, and the Containerfile
-installs with both, so an image rebuild reproduces the same dependency set.
+Direct dependencies are pinned in `requirements.txt` (`inspect-ai`,
+`inspect-evals`, `inspect-petri`, `petri-bloom`, `openai`, `nltk`; `eval-hub-sdk[adapter]`
+is a compatible-release pin). The two dependencies not published on PyPI
+(`evals`, `instruction_following_eval`) are pinned to upstream Git commits there.
+`constraints.txt` pins the full transitive tree, and the Containerfile installs
+with both, so an image rebuild reproduces the same dependency set.
 
 ### Updating dependencies
 
@@ -553,12 +552,10 @@ from `adapters/inspect/`:
 
 ```bash
 # 1. Regenerate the transitive pins (platform-independent; git lines are
-#    excluded because pip does not accept URLs in constraints files; the
-#    vendored deps' `./vendor/...` lines are excluded for the same reason —
-#    they are installed from vendor/, not from a constraints-resolvable pin)
+#    excluded because pip does not accept URLs in constraints files)
 { echo "# Transitive dependency pins for the Inspect adapter image, applied with: pip install -r requirements.txt -c constraints.txt"
   echo "# Generated; do not edit by hand. Regenerate (and re-audit) with the command in README.md → Updating dependencies."
-  uv pip compile requirements.txt --universal --python-version 3.12 --no-header --no-annotate | grep -vE " @ git|^\./vendor/"
+  uv pip compile requirements.txt --universal --python-version 3.12 --no-header --no-annotate | grep -v " @ git"
 } > constraints.txt
 
 # 2. Audit every pinned version for known vulnerabilities
@@ -569,10 +566,8 @@ pip-audit -r /tmp/inspect-pins.txt --no-deps --disable-pip
 The repository's Trivy filesystem scan only sees versions that are pinned, which
 is why the pins matter: with open-ended `>=` ranges it cannot see what actually
 lands in the image. `instruction_following_eval` and `evals` are not on PyPI
-and cannot be audited by name; they are vendored under `vendor/` at a pinned
-commit (see `vendor/README.md` for provenance, licenses, local modifications
-and the verification recipe), which also means their source itself is part of
-what the Trivy filesystem scan covers.
+and cannot be audited by name; their Git URLs are pinned to specific upstream
+commits in `requirements.txt`.
 
 Known advisory: `nltk` 3.10.3 carries GHSA-8mgp-746c-j5xp (CVE-2026-81726) with no
 patched release yet. It affects nltk's parser and perceptron model save/load APIs,
