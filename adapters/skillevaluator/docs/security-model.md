@@ -4,7 +4,9 @@ Skills are untrusted input.
 
 - Nothing in the skill is executed by these benchmarks; all checks are static analysis.
 - The skill path is validated to stay inside `/test_data` (no `..`, no symlink escapes) and symlinked or hidden
-  directories are not traversed.
+  directories are not traversed during discovery. Every entry inside the skill tree is also checked: a file or
+  directory symlink that resolves outside `/test_data` fails the job, because the scanners quote matched lines
+  in their reports.
 - The `skillevaluator` CLI runs by `subprocess` with a fixed argument list (no shell) and an allow-listed
   environment: job credentials and service-account variables are not forwarded.
 - Finding text and matched lines quote skill content, so they are never put in metrics, logs or failure messages.
