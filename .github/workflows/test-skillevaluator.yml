@@ -1,0 +1,92 @@
+name: Test SkillEvaluator
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'adapters/skillevaluator/**'
+      - '.github/workflows/test-skillevaluator.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'adapters/skillevaluator/**'
+      - '.github/workflows/test-skillevaluator.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v7
+        with:
+          # Matches the adapter image base (ubi9/python-312); SkillEvaluator needs >=3.12,<3.14.
+          python-version: '3.12'
+      - name: Install dependencies
+        working-directory: adapters/skillevaluator
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+      - name: Lint
+        working-directory: adapters/skillevaluator
+        run: |
+          uv tool run ruff==0.16.9 check .
+          uv tool run ruff==0.16.9 format --check .
+      - name: Docstring coverage
+        working-directory: adapters/skillevaluator
+        # Counts every module, class and function, tests and private helpers included.
+        run: uv tool run interrogate==1.7.0 --fail-under 80 -e .venv -e .pytest_cache .
+      - name: Run tests
+        working-directory: adapters/skillevaluator
+        # Offline by design: the skillevaluator CLI is replaced by a stub that emits golden reports.
+        run: pytest tests/ -v -m "not live_cli"
+
+  live-cli:
+    # Contract test against the real pinned CLIs. Fails when an upstream bump changes the report schema.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install adapter, SkillEvaluator and SkillSpector (each in its own venv)
+        working-directory: adapters/skillevaluator
+        run: |
+          uv pip install --system -r requirements.txt -r requirements-test.txt
+          uv venv --python 3.12 /tmp/skillevaluator-venv
+          uv pip install --python /tmp/skillevaluator-venv/bin/python -r requirements-skillevaluator.txt
+          uv venv --python 3.12 /tmp/skillspector-venv
+          uv pip install --python /tmp/skillspector-venv/bin/python -r requirements-skillspector.txt
+      - name: Run live-CLI tests
+        working-directory: adapters/skillevaluator
+        env:
+          SKILLEVALUATOR_BIN: /tmp/skillevaluator-venv/bin/skillevaluator
+          SKILLEVALUATOR_SKILLSPECTOR_PATH: /tmp/skillspector-venv/bin/skillspector
+        run: pytest tests/ -v -m live_cli
+
+  image:
+    # The runtime image must work read-only under both the image user and an OpenShift-style arbitrary UID.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build -t skillevaluator-container-test -f adapters/skillevaluator/Containerfile adapters/skillevaluator
+      - name: Verify tools and read-only non-root execution
+        run: |
+          for runtime_user in 1001 1001230000:0; do
+            docker run --rm --read-only --tmpfs /tmp --user "$runtime_user" --entrypoint /opt/skillevaluator/bin/skillevaluator skillevaluator-container-test --version
+            docker run --rm --read-only --tmpfs /tmp --user "$runtime_user" --entrypoint /opt/skillspector/bin/skillspector skillevaluator-container-test --version
+          done

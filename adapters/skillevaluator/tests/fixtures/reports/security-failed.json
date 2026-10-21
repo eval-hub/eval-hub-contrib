@@ -1,0 +1,199 @@
+{
+  "benchmark_policy": {
+    "tier2_required": true,
+    "tier3_required": true
+  },
+  "contributors": [
+    {
+      "author": "Unknown",
+      "failed_count": 2,
+      "items": [
+        {
+          "issue_count": 3,
+          "name": "SKILL.md",
+          "passed": false
+        },
+        {
+          "issue_count": 3,
+          "name": "scripts",
+          "passed": false
+        }
+      ],
+      "passed_count": 0,
+      "total_issues": 6,
+      "total_items": 2
+    }
+  ],
+  "evaluated_source": null,
+  "generated_at": "2026-10-20T20:26:12.276929+00:00",
+  "incomplete_scans": [],
+  "overall_passed": false,
+  "overall_status": "failed",
+  "publication": {
+    "eligible": false,
+    "reasons": [
+      "A validator failed."
+    ],
+    "status": "fail",
+    "tier3": {
+      "evidence_complete": false,
+      "execution_status": "not_run",
+      "reason": "Tier 3 lacks publication-complete execution evidence.",
+      "status": "not_run",
+      "verdict": "not_run"
+    }
+  },
+  "publication_status": "fail",
+  "results": [
+    {
+      "description": "Detect security vulnerabilities and PII/secrets",
+      "findings": [
+        {
+          "category": "SECURITY",
+          "check_name": "Instruction Override (P1)",
+          "file_path": "SKILL.md",
+          "line_content": "<redacted>",
+          "line_number": 8,
+          "message": "<redacted>",
+          "metadata": {
+            "skillspector_confidence": 0.8
+          },
+          "severity": "high",
+          "suggestion": "<redacted>"
+        },
+        {
+          "category": "SECURITY",
+          "check_name": "Credential Access (PE3)",
+          "file_path": "SKILL.md",
+          "line_content": "<redacted>",
+          "line_number": 9,
+          "message": "<redacted>",
+          "metadata": {
+            "skillspector_confidence": 0.9
+          },
+          "severity": "high",
+          "suggestion": "<redacted>"
+        },
+        {
+          "category": "SECURITY",
+          "check_name": "External Script Fetching (SC2)",
+          "file_path": "scripts/setup.sh",
+          "line_content": "<redacted>",
+          "line_number": 2,
+          "message": "<redacted>",
+          "metadata": {
+            "skillspector_confidence": 0.9
+          },
+          "severity": "high",
+          "suggestion": "<redacted>"
+        },
+        {
+          "category": "SECURITY",
+          "check_name": "Chaining Abuse (TM2)",
+          "file_path": "scripts/setup.sh",
+          "line_content": "<redacted>",
+          "line_number": 2,
+          "message": "<redacted>",
+          "metadata": {
+            "skillspector_confidence": 0.7
+          },
+          "severity": "high",
+          "suggestion": "<redacted>"
+        },
+        {
+          "category": "SECURITY",
+          "check_name": "Unknown (LP3)",
+          "file_path": "SKILL.md",
+          "line_content": null,
+          "line_number": 1,
+          "message": "<redacted>",
+          "metadata": {
+            "skillspector_confidence": 0.7
+          },
+          "severity": "medium",
+          "suggestion": "<redacted>"
+        },
+        {
+          "category": "SECURITY",
+          "check_name": "External Transmission (E1)",
+          "file_path": "scripts/setup.sh",
+          "line_content": "<redacted>",
+          "line_number": 4,
+          "message": "<redacted>",
+          "metadata": {
+            "skillspector_confidence": 0.7
+          },
+          "severity": "medium",
+          "suggestion": "<redacted>"
+        }
+      ],
+      "incomplete_scans": [],
+      "legacy": {
+        "errors": [
+          "[SECURITY-HIGH] <redacted>",
+          "[SECURITY-HIGH] <redacted>",
+          "[SECURITY-HIGH] <redacted>",
+          "[SECURITY-HIGH] <redacted>"
+        ],
+        "messages": [
+          "skillspector risk score: 100/100 (CRITICAL)",
+          "skillspector found 6 issue(s) including critical/high severity"
+        ],
+        "warnings": [
+          "[SECURITY-MEDIUM] <redacted>",
+          "[SECURITY-MEDIUM] <redacted>"
+        ]
+      },
+      "passed": false,
+      "publication_evidence": {
+        "check_id": "security",
+        "producer": "skillevaluator.tier1",
+        "schema_version": 1,
+        "tier": 1
+      },
+      "publication_target": {
+        "skill_digest": "sha256:bc72c053f9d11e069f5f38f94923b64ab7ce3f14d61cfdb006d7e84ac6d6d9f7",
+        "skill_digest_algorithm": "skill-evaluator-source-tree/2",
+        "skill_name": "bad-skill"
+      },
+      "skip_reason": null,
+      "skipped": false,
+      "status": "failed",
+      "success_details": [],
+      "summary": {
+        "checks_performed": 0,
+        "critical_count": 0,
+        "errors": 4,
+        "files_scanned": 0,
+        "high_count": 4,
+        "low_count": 0,
+        "medium_count": 2,
+        "warnings": 2
+      },
+      "validator": "Security Scan"
+    }
+  ],
+  "severity_counts": {
+    "critical": 0,
+    "high": 4,
+    "low": 0,
+    "medium": 2
+  },
+  "skills": [
+    {
+      "issue_count": 3,
+      "name": "SKILL.md",
+      "passed": false
+    },
+    {
+      "issue_count": 3,
+      "name": "scripts",
+      "passed": false
+    }
+  ],
+  "total_advisory_skipped": 0,
+  "total_errors": 4,
+  "total_skipped": 0,
+  "total_validators": 1,
+  "total_warnings": 2
+}
