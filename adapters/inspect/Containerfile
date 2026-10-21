@@ -7,7 +7,12 @@ WORKDIR /app
 
 # ── Python dependencies ───────────────────────────────────────────────────────
 # constraints.txt pins the transitive tree so rebuilds are reproducible.
+# vendor/ holds the two dependencies that are not on PyPI (see vendor/README.md);
+# requirements.txt references them as ./vendor/<name> paths, so they must be in
+# the image before the install step. Their own transitive dependencies resolve
+# from the same constraints.txt pins as everything else.
 COPY requirements.txt constraints.txt ./
+COPY vendor/ ./vendor/
 RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt
 
 # ── NLTK data — bundled at build time ────────────────────────────────────────
