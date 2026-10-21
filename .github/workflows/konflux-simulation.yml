@@ -11,7 +11,12 @@
 #   - a dependency-protocol scan: `git+`/`github:`/`file:` requirements are not
 #     on PyPI, have no AIPCC ingestion path, and cannot be productized — they
 #     must be vendored under adapters/<name>/vendor/ (referenced from
-#     requirements.txt as `./vendor/<name>`) or ingested into the curated index
+#     requirements.txt as `./vendor/<name>`) or ingested into the curated index.
+#     ANY such pin fails the check, introduced or pre-existing: the downstream
+#     Konflux/conforma gate rejects them either way, so a green run here must
+#     mean the requirements are productizable. The error message distinguishes
+#     violations introduced by the PR from pre-existing ones (which mirror an
+#     already-failing downstream build).
 #
 # This is NOT Konflux parity and does not claim to be: there is no Hermeto
 # hermetic prefetch, no AIPCC curated index, and no conforma/SBOM release
@@ -89,26 +94,31 @@ jobs:
             echo "No non-productizable dependency protocols in ${reqs}."
             exit 0
           fi
-          # Annotate every violation, pre-existing or new.
+          # Classify for the error message: introduced by this change, or pre-existing?
+          new=""
+          if [ -n "$BASE_SHA" ]; then
+            new=$(git diff "${BASE_SHA}" HEAD -- "$reqs" \
+              | grep -E '^\+' | grep -vE '^\+\+\+' \
+              | grep -E "${pattern}" | grep -vE '\./vendor/' || true)
+          fi
           while IFS= read -r line; do
             num="${line%%:*}"
-            echo "::warning file=${reqs},line=${num}::Non-productizable dependency protocol (git+/github:/file:): ${line#*:}"
+            echo "::error file=${reqs},line=${num}::Non-productizable dependency protocol (git+/github:/file:): ${line#*:}"
           done <<< "$violations"
-          if [ -z "$BASE_SHA" ]; then
-            echo "Manual run without a base commit: annotated only, not failing."
-            exit 0
-          fi
-          # Fail only when this change introduces new violations.
-          new=$(git diff "${BASE_SHA}" HEAD -- "$reqs" \
-            | grep -E '^\+' | grep -vE '^\+\+\+' \
-            | grep -E "${pattern}" | grep -vE '\./vendor/' || true)
+          # Fail on ANY violation, introduced or pre-existing: the downstream
+          # Konflux/conforma gate rejects these pins regardless of when they
+          # were added, so a green run here must mean productizable
+          # requirements. A pre-existing violation means the downstream build
+          # is already failing — this check mirrors that state rather than
+          # hiding it behind a diff.
+          echo "::error file=${reqs}::Non-productizable dependency protocol(s) present; the downstream Konflux build rejects git+/github:/file: pins (no AIPCC ingestion path)."
           if [ -n "$new" ]; then
-            echo "::error file=${reqs}::This change introduces non-productizable dependency protocol(s):"
+            echo "Introduced by this change — fix the PR:"
             echo "$new"
-            echo "Vendor the package under adapters/${ADAPTER}/vendor/ (see adapters/inspect/vendor/README.md for the pattern) or get it ingested into the curated index."
-            exit 1
+          else
+            echo "All listed violations pre-exist on main; the downstream build is already failing on them. The fix is vendoring under adapters/${ADAPTER}/vendor/ (see adapters/inspect/vendor/README.md for the pattern) or curated-index ingestion."
           fi
-          echo "All violations pre-exist this change; annotated as warnings only."
+          exit 1
 
       - name: Build image
         env:

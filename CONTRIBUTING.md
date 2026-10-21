@@ -55,11 +55,12 @@ Those two adapters are the ones with downstream Konflux pipelines
 (`odh-eval-hub-lighteval`, `odh-eval-hub-inspectai`); the simulation builds each
 adapter image, runs a non-root runtime smoke test of it, and scans requirements
 for dependency protocols (`git+`, `github:`, `file:`) that cannot be productized
-downstream. Protocols that pre-exist a change are annotated as warnings; new
-ones fail the check — vendor the package under `adapters/<name>/vendor/`
-(see `adapters/inspect/vendor/README.md` for the pattern) or get it ingested
-into the curated index. Skip the workflow on a PR by putting
-`[skip konflux-sim]` in its title.
+downstream. Any such protocol fails the check — the downstream Konflux build
+rejects them whether newly added or pre-existing, so a green run here means
+productizable requirements. The fix is vendoring the package under
+`adapters/<name>/vendor/` (see `adapters/inspect/vendor/README.md` for the
+pattern) or getting it ingested into the curated index. Skip the workflow on a
+PR by putting `[skip konflux-sim]` in its title.
 
 The simulation approximates the downstream build; it is not Konflux parity
 (no hermetic prefetch, no curated index, no release gates). Final validation is
