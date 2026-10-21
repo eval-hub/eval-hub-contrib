@@ -5,7 +5,7 @@
 eval-hub-sdk[adapter]~=1.0.6
 inspect-ai==0.3.278
 openai==3.24.0
-inspect-evals[math,bfcl]==0.23.0
+inspect-evals[math,bfcl]==0.25.0
 # instruction_following_eval is not on PyPI (inspect-evals' ifeval task imports
 # it); it is vendored at the pinned commit. See vendor/README.md.
 ./vendor/instruction_following_eval
