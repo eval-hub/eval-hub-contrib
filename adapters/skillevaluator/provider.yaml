@@ -1,0 +1,157 @@
+# SkillEvaluator — provider definition for eval-hub.
+# Static (Tier 1) evaluation of agent skills with NVIDIA SkillEvaluator.
+#
+# Upstream: https://github.com/NVIDIA/SkillEvaluator (Apache-2.0, Experimental)
+# Docs: https://docs.nvidia.com/skills/skillevaluator
+# Agent Skills specification: https://agentskills.io/
+
+id: skillevaluator
+name: SkillEvaluator
+description: >
+  Static evaluation of an agent skill (a directory with SKILL.md) using NVIDIA SkillEvaluator:
+  a 0-100 quality score with four weighted dimensions, SkillSpector static security analysis,
+  and a PII, credential and network-identifier scan. Deterministic: no model is called and
+  no skill content is executed. The skill is supplied through test_data_ref.
+type: community
+
+agent:
+  evaluates:
+    - agent-skills
+    - skill-quality
+    - skill-security
+    - supply-chain
+    - pii
+    - secrets
+  recommended_when:
+    - "User wants to gate an agent skill (SKILL.md) on quality, security or PII before publishing or installing it"
+    - "Pre-install review of a third-party agent skill"
+    - "CI quality gate for a repository of agent skills"
+  target_type: agent
+  summary: >-
+    Static quality, security (SkillSpector) and PII/secret checks for agent skills via
+    NVIDIA SkillEvaluator; skill staged through test_data_ref, no model call.
+  complements:
+    - garak
+    - wildguard
+  hints:
+    - "Stage the skill with test_data_ref (git, hf, s3 or pvc); the adapter reads it from /test_data and never fetches anything itself"
+    - "Set parameters.skill_path when the staged material contains more than one skill (a directory holding SKILL.md)"
+    - "model is required by the job schema but is not used by these benchmarks"
+    - "A skill whose SKILL.md references files outside its own directory can make the security scan INCOMPLETE; that is reported as a failed job (scan_incomplete) unless parameters.on_incomplete is report"
+    - "Run MaliciousSkillBench alongside skill-security: SkillSpector static analysis alone is not a malicious-skill gate"
+  result_interpretation:
+    - "skill-quality: quality_score is HIGHER is better (1.0 = 100/100); meets_min_score compares against parameters.min_score"
+    - "skill-security and skill-pii: gate_score 1.0 means the scan completed with no blocking findings, 0.0 means it completed and failed the gate"
+    - "An incomplete scan emits only scan_complete=false: no gate_score and no severity counts. An absent score is not a failing score, and missing counts are not zero findings"
+
+runtime:
+  k8s:
+    image: quay.io/evalhub/community-skillevaluator:latest
+    image_pull_policy: always
+    entrypoint:
+      - python
+      - main.py
+    cpu_request: 100m
+    memory_request: 512Mi
+    cpu_limit: 1000m
+    memory_limit: 2Gi
+
+benchmarks:
+  - id: skill-quality
+    name: Skill Quality
+    description: >
+      skillevaluator quality-check: composite 0-100 score (correctness 35%, discoverability 25%,
+      reliability 25%, efficiency 15%) with A-F grade. Adapts checks to the skill shape
+      (script-based, lib-based, resource-based, guide-only or hybrid).
+    category: agent_skills
+    domains: [agents]
+    tasks: [skill_quality]
+    modalities: [text]
+    evaluation_targets: [agent]
+    metrics:
+      - quality_score
+      - quality_grade
+      - meets_min_score
+      - correctness_score
+      - discoverability_score
+      - reliability_score
+      - efficiency_score
+      - issue_count
+    primary_score: {metric: quality_score, lower_is_better: false}
+    tags: [skillevaluator, agent-skills, quality, static]
+    agent:
+      result_interpretation: >-
+        quality_score: HIGHER is better, 0.0-1.0 (the upstream 0-100 score divided by 100).
+      score_ranges:
+        - range: "0.0-0.6"
+          meaning: "Grade F: significant gaps in structure, discoverability or reliability"
+        - range: "0.6-0.7"
+          meaning: "Grade D: below the default publication bar"
+        - range: "0.7-0.9"
+          meaning: "Grade C-B: meets the default bar (min_score 70)"
+        - range: "0.9-1.0"
+          meaning: "Grade A"
+
+  - id: skill-security
+    name: Skill Security (static)
+    description: >
+      skillevaluator security-scan with --no-llm: SkillSpector static detection of prompt injection,
+      credential access, data exfiltration, supply-chain fetch-and-run and tool-misuse patterns.
+      Reports severity counts and a pass/fail gate. Not a complete malicious-skill detector.
+    category: agent_skills_safety
+    domains: [safety]
+    tasks: [skill_security_scan]
+    modalities: [text]
+    evaluation_targets: [agent]
+    metrics:
+      - gate_score
+      - gate_passed
+      - scan_complete
+      - critical_count
+      - high_count
+      - medium_count
+      - low_count
+      - finding_count
+      - high_or_critical_count
+    primary_score: {metric: gate_score, lower_is_better: false}
+    tags: [skillevaluator, skillspector, agent-skills, security, supply-chain, static]
+    agent:
+      result_interpretation: >-
+        gate_score: 1.0 = scan completed with no blocking findings; 0.0 = completed and failed.
+        The count metrics are LOWER is better. SkillSpector static analysis scored 0% malicious
+        recall on MaliciousSkillBench, so a pass is not proof that a skill is benign.
+
+  - id: skill-pii
+    name: Skill PII and Secrets
+    description: >
+      skillevaluator pii-scan: personal paths, emails, phone numbers, SSNs, credentials and API keys,
+      private keys, JWTs, webhook URLs, public IPs, card numbers and wallet addresses (regex based).
+    category: agent_skills_safety
+    domains: [safety]
+    tasks: [skill_pii_scan]
+    modalities: [text]
+    evaluation_targets: [agent]
+    metrics:
+      - gate_score
+      - gate_passed
+      - scan_complete
+      - critical_count
+      - high_count
+      - medium_count
+      - low_count
+      - finding_count
+      - high_or_critical_count
+    primary_score: {metric: gate_score, lower_is_better: false}
+    tags: [skillevaluator, agent-skills, pii, secrets, static]
+    agent:
+      result_interpretation: >-
+        gate_score: 1.0 = no blocking findings; 0.0 = at least one blocking finding. Count metrics are
+        LOWER is better. The home-path check only runs when parameters.submitter is set.
+
+parameters:
+  - {name: skill_path, type: string, description: "Skill directory (contains SKILL.md), absolute or relative to /test_data. Required only when more than one skill is staged."}
+  - {name: min_score, type: integer, default: 70, description: "skill-quality: 0-100 bar used for the meets_min_score metric."}
+  - {name: on_incomplete, type: string, default: fail, description: "fail: an incomplete scan fails the job (scan_incomplete). report: finish with no gate_score and outcome=incomplete in the metadata."}
+  - {name: timeout_seconds, type: integer, default: 300, description: "Per-check timeout, 10-3600."}
+  - {name: submitter, type: string, description: "skill-pii: submitter identity that enables the personal home-path check."}
+  - {name: mlflow_experiment_name, type: string, description: "Fallback MLflow experiment name if JobSpec.experiment_name is unset."}

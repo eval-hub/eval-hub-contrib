@@ -1,0 +1,84 @@
+{
+  "benchmark_policy": {
+    "tier2_required": true,
+    "tier3_required": true
+  },
+  "contributors": [],
+  "evaluated_source": null,
+  "generated_at": "2026-10-20T20:26:09.980573+00:00",
+  "incomplete_scans": [
+    "skillspector"
+  ],
+  "overall_passed": false,
+  "overall_status": "incomplete",
+  "publication": {
+    "eligible": false,
+    "reasons": [
+      "One or more validators reported incomplete scanner evidence."
+    ],
+    "status": "incomplete",
+    "tier3": {
+      "evidence_complete": false,
+      "execution_status": "not_run",
+      "reason": "Tier 3 lacks publication-complete execution evidence.",
+      "status": "not_run",
+      "verdict": "not_run"
+    }
+  },
+  "publication_status": "incomplete",
+  "results": [
+    {
+      "description": "Detect security vulnerabilities and PII/secrets",
+      "findings": [],
+      "incomplete_scans": [
+        "skillspector"
+      ],
+      "legacy": {
+        "errors": [
+          "skillspector JSON field 'analysis_completeness' reports incomplete analysis (status 'partial'); security scan did not complete"
+        ],
+        "messages": [],
+        "warnings": []
+      },
+      "passed": false,
+      "publication_evidence": {
+        "check_id": "security",
+        "producer": "skillevaluator.tier1",
+        "schema_version": 1,
+        "tier": 1
+      },
+      "publication_target": {
+        "skill_digest": "sha256:16d44bd9732e22254f1ee28029a39ba0361e65b53839456547fdaee4dfeb5c15",
+        "skill_digest_algorithm": "skill-evaluator-source-tree/2",
+        "skill_name": "blog-review"
+      },
+      "skip_reason": null,
+      "skipped": false,
+      "status": "incomplete",
+      "success_details": [],
+      "summary": {
+        "checks_performed": 0,
+        "critical_count": 0,
+        "errors": 1,
+        "files_scanned": 0,
+        "high_count": 0,
+        "low_count": 0,
+        "medium_count": 0,
+        "warnings": 0
+      },
+      "validator": "Security Scan"
+    }
+  ],
+  "severity_counts": {
+    "critical": 0,
+    "high": 0,
+    "low": 0,
+    "medium": 0
+  },
+  "skills": [],
+  "total_advisory_skipped": 0,
+  "total_errors": 1,
+  "total_skipped": 0,
+  "total_validators": 1,
+  "total_warnings": 0
+}
