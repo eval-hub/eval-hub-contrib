@@ -58,6 +58,23 @@ def _is_within(path: Path, root: Path) -> bool:
     return True
 
 
+def _reject_escaping_symlinks(skill_dir: Path, root: Path) -> None:
+    """Raise if any entry below ``skill_dir`` is a symlink that leaves ``root``.
+
+    The scanners read every scannable file in the skill tree and their reports
+    quote matched lines, so a symlinked file inside the skill must not expose
+    content from outside the staged material. Links are inspected, never followed.
+    """
+    for current, dirs, files in os.walk(skill_dir, followlinks=False):
+        for name in (*dirs, *files):
+            entry = Path(current) / name
+            if entry.is_symlink() and not _is_within(entry.resolve(), root):
+                raise SkillSourceError(
+                    f"skill contains a symlink resolving outside {root}: "
+                    f"{entry.relative_to(skill_dir)}"
+                )
+
+
 def _validate_skill_dir(candidate: Path, root: Path) -> Path:
     """Return the resolved skill directory or raise ``SkillSourceError``."""
     resolved = candidate.resolve()
@@ -70,6 +87,7 @@ def _validate_skill_dir(candidate: Path, root: Path) -> Path:
         raise SkillSourceError(f"no {SKILL_MANIFEST} in skill directory: {candidate}")
     if not _is_within(manifest, root):
         raise SkillSourceError(f"{SKILL_MANIFEST} resolves outside {root}: {candidate}")
+    _reject_escaping_symlinks(resolved, root)
     return resolved
 
 
