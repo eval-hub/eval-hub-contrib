@@ -30,6 +30,7 @@ jobs:
           - nemo-guardrails
           - ragas
           - ruler
+          - skillevaluator
           - swebench
           - tooleval
           - toolbench-server

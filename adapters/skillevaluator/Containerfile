@@ -1,0 +1,33 @@
+# Stage 1: build SkillEvaluator and SkillSpector into isolated venvs. Neither is on PyPI, so
+# pip needs git; git stays in this stage and never reaches the runtime image.
+FROM registry.access.redhat.com/ubi9/python-312:latest AS tools
+USER 0
+RUN dnf install -y --nodocs git-core && dnf clean all
+WORKDIR /build
+COPY requirements-skillevaluator.txt requirements-skillspector.txt ./
+RUN python -m venv /opt/skillevaluator \
+    && /opt/skillevaluator/bin/pip install --no-cache-dir -r requirements-skillevaluator.txt \
+    && python -m venv /opt/skillspector \
+    && /opt/skillspector/bin/pip install --no-cache-dir -r requirements-skillspector.txt \
+    && /opt/skillevaluator/bin/skillevaluator --version \
+    && /opt/skillspector/bin/skillspector --version
+
+# Stage 2: runtime image.
+FROM registry.access.redhat.com/ubi9/python-312:latest
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=tools /opt/skillevaluator /opt/skillevaluator
+COPY --from=tools /opt/skillspector /opt/skillspector
+COPY main.py _results.py _runner.py _skill_source.py ./
+COPY meta/job.json /meta/job.json
+
+# The CLI is driven by subprocess. Tier 1 static checks make no network calls
+# (security-scan runs with --no-llm); deny egress to the job pod as well.
+ENV PYTHONUNBUFFERED=1 \
+    EVALHUB_MODE=k8s \
+    SKILLEVALUATOR_BIN=/opt/skillevaluator/bin/skillevaluator \
+    SKILLEVALUATOR_SKILLSPECTOR_PATH=/opt/skillspector/bin/skillspector
+
+USER 1001
+ENTRYPOINT ["python", "main.py"]
