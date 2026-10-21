@@ -47,6 +47,25 @@ make push-lighteval REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-guidellm REGISTRY=quay.io/your-org VERSION=v1.0.0
 ```
 
+## Konflux build simulation
+
+PRs touching `adapters/lighteval/` or `adapters/inspect/` run the
+*Konflux build simulation* workflow (`.github/workflows/konflux-simulation.yml`).
+Those two adapters are the ones with downstream Konflux pipelines
+(`odh-eval-hub-lighteval`, `odh-eval-hub-inspectai`); the simulation builds each
+adapter image, runs a non-root runtime smoke test of it, and scans requirements
+for dependency protocols (`git+`, `github:`, `file:`) that cannot be productized
+downstream. Protocols that pre-exist a change are annotated as warnings; new
+ones fail the check — vendor the package under `adapters/<name>/vendor/`
+(see `adapters/inspect/vendor/README.md` for the pattern) or get it ingested
+into the curated index. Skip the workflow on a PR by putting
+`[skip konflux-sim]` in its title.
+
+The simulation approximates the downstream build; it is not Konflux parity
+(no hermetic prefetch, no curated index, no release gates). Final validation is
+always the downstream Konflux build. Extend the workflow's matrix only when a
+new adapter gets a downstream pipeline.
+
 ## Annotating metric result types (`metrics_schema`)
 
 Every adapter should declare the type of each metric it submits by passing a `metrics_schema` list to `JobResults`. This tells the eval-hub UI how to render comparisons between runs without relying on shape-based inference.

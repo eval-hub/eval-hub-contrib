@@ -1,0 +1,135 @@
+# Konflux build simulation for the adapters productized downstream.
+#
+# The red-hat-data-services/eval-hub-contrib fork runs exactly two Konflux
+# pipelines:
+#   - odh-eval-hub-lighteval   -> builds adapters/lighteval
+#   - odh-eval-hub-inspectai   -> builds adapters/inspect
+# This workflow approximates, at upstream PR time, the parts of those builds
+# whose breakage is otherwise only seen downstream:
+#   - the image build itself (Containerfile + build context + PyPI resolution)
+#   - a non-root runtime smoke test of the built image, as shipped
+#   - a dependency-protocol scan: `git+`/`github:`/`file:` requirements are not
+#     on PyPI, have no AIPCC ingestion path, and cannot be productized — they
+#     must be vendored under adapters/<name>/vendor/ (referenced from
+#     requirements.txt as `./vendor/<name>`) or ingested into the curated index
+#
+# This is NOT Konflux parity and does not claim to be: there is no Hermeto
+# hermetic prefetch, no AIPCC curated index, and no conforma/SBOM release
+# gating. It catches the common classes of PR-time breakage early; final
+# validation remains the downstream Konflux build.
+#
+# Only the two adapters above are simulated because only they have downstream
+# pipelines. Extend the matrix only when a new downstream pipeline exists.
+#
+# Skip on a PR by putting "[skip konflux-sim]" in its title.
+
+name: Konflux build simulation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'adapters/lighteval/**'
+      - 'adapters/inspect/**'
+      - '.github/workflows/konflux-simulation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'adapters/lighteval/**'
+      - 'adapters/inspect/**'
+      - '.github/workflows/konflux-simulation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: konflux-sim-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulate:
+    name: Konflux sim (${{ matrix.adapter }})
+    if: github.event_name != 'pull_request' || !contains(github.event.pull_request.title, '[skip konflux-sim]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # Mirrors the two downstream Konflux pipelines; see the header comment.
+        adapter: [lighteval, inspect]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history: the protocol scan diffs against the base commit to
+          # tell new violations from pre-existing ones.
+          fetch-depth: 0
+
+      - name: Resolve base commit
+        id: base
+        run: |
+          set -euo pipefail
+          case "${{ github.event_name }}" in
+            pull_request) echo "sha=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT" ;;
+            push)         echo "sha=$(git rev-parse HEAD~1)" >> "$GITHUB_OUTPUT" ;;
+            *)            echo "sha=" >> "$GITHUB_OUTPUT" ;;  # manual run: annotate only
+          esac
+
+      - name: Dependency protocol scan (productization check)
+        env:
+          ADAPTER: ${{ matrix.adapter }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          set -euo pipefail
+          reqs="adapters/${ADAPTER}/requirements.txt"
+          pattern='(git\+|github:|file:)'
+          # ./vendor/ local paths are the sanctioned vendoring pattern, not violations.
+          violations=$(grep -nE "${pattern}" "$reqs" | grep -vE '^[0-9]+:\./vendor/' || true)
+          if [ -z "$violations" ]; then
+            echo "No non-productizable dependency protocols in ${reqs}."
+            exit 0
+          fi
+          # Annotate every violation, pre-existing or new.
+          while IFS= read -r line; do
+            num="${line%%:*}"
+            echo "::warning file=${reqs},line=${num}::Non-productizable dependency protocol (git+/github:/file:): ${line#*:}"
+          done <<< "$violations"
+          if [ -z "$BASE_SHA" ]; then
+            echo "Manual run without a base commit: annotated only, not failing."
+            exit 0
+          fi
+          # Fail only when this change introduces new violations.
+          new=$(git diff "${BASE_SHA}" HEAD -- "$reqs" \
+            | grep -E '^\+' | grep -vE '^\+\+\+' \
+            | grep -E "${pattern}" | grep -vE '\./vendor/' || true)
+          if [ -n "$new" ]; then
+            echo "::error file=${reqs}::This change introduces non-productizable dependency protocol(s):"
+            echo "$new"
+            echo "Vendor the package under adapters/${ADAPTER}/vendor/ (see adapters/inspect/vendor/README.md for the pattern) or get it ingested into the curated index."
+            exit 1
+          fi
+          echo "All violations pre-exist this change; annotated as warnings only."
+
+      - name: Build image
+        env:
+          ADAPTER: ${{ matrix.adapter }}
+        run: docker build -f "adapters/${ADAPTER}/Containerfile" -t "konflux-sim-${ADAPTER}:pr" "adapters/${ADAPTER}"
+
+      - name: Runtime smoke test (non-root)
+        env:
+          ADAPTER: ${{ matrix.adapter }}
+          IMAGE: konflux-sim-${{ matrix.adapter }}:pr
+        run: |
+          set -euo pipefail
+          case "$ADAPTER" in
+            lighteval)
+              # Import-level smoke: exercises the adapter entrypoint's full
+              # dependency closure inside the image, as the shipped user.
+              docker run --rm --user 1001 --entrypoint python "$IMAGE" -c "import main, lighteval, evalhub"
+              ;;
+            inspect)
+              # End-to-end mock-model eval: resolves registered tasks,
+              # downloads a public dataset and scores it with mockllm.
+              docker run --rm --user 1001 --entrypoint inspect "$IMAGE" eval evals/telemath --model mockllm/model --limit 1
+              ;;
+          esac
