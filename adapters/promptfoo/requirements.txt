@@ -1,2 +1,2 @@
-eval-hub-sdk[adapter]~=1.0.5
+eval-hub-sdk[adapter]~=1.0.6
 pyyaml

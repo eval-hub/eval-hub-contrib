@@ -48,6 +48,7 @@ from evalhub.adapter import (
     MessageInfo,
     OCIArtifactSpec,
 )
+from evalhub.adapter.mlflow import MlflowFileArtifact
 
 from _benchmarks import (
     BLOOM_TEMPLATE_MAP,
@@ -241,7 +242,12 @@ class InspectAdapter(FrameworkAdapter):
                 env_card=env_card,
             )
 
-            mlflow_run_id = callbacks.mlflow.save(job_results, config)
+            # Save while the log files still exist; finally removes work_dir.
+            artifacts = [
+                MlflowFileArtifact(file.relative_to(log_dir).as_posix(), file)
+                for file in sorted(log_dir.rglob("*")) if file.is_file()
+            ]
+            mlflow_run_id = callbacks.mlflow.save(job_results, config, artifacts=artifacts)
             if mlflow_run_id:
                 job_results.mlflow_run_id = mlflow_run_id
                 logger.info(f"MLflow run recorded: {mlflow_run_id}")
