@@ -110,6 +110,53 @@ def test_symlinked_manifest_pointing_outside_is_rejected(tmp_path):
         src.resolve_skill_path({"skill_path": "s"}, test_data_dir=str(root))
 
 
+def test_symlinked_file_inside_skill_pointing_outside_is_rejected(tmp_path):
+    """A file symlinked out of ``/test_data`` from inside the skill is rejected."""
+    root = tmp_path / "td"
+    skill = _skill(root / "s")
+    (skill / "scripts").mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("outside")
+    os.symlink(secret, skill / "scripts" / "token.txt")
+    with pytest.raises(src.SkillSourceError, match=r"symlink.*scripts/token\.txt"):
+        src.resolve_skill_path({"skill_path": "s"}, test_data_dir=str(root))
+
+
+def test_symlinked_dir_inside_skill_pointing_outside_is_rejected(tmp_path):
+    """A directory symlinked out of ``/test_data`` from inside the skill is rejected."""
+    root = tmp_path / "td"
+    skill = _skill(root / "s")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.symlink(outside, skill / "data")
+    with pytest.raises(src.SkillSourceError, match="symlink"):
+        src.resolve_skill_path({"skill_path": "s"}, test_data_dir=str(root))
+
+
+def test_symlink_inside_skill_staying_within_root_is_allowed(tmp_path):
+    """A symlink that resolves inside ``/test_data`` is harmless and accepted."""
+    root = tmp_path / "td"
+    skill = _skill(root / "s")
+    shared = root / "shared.txt"
+    shared.write_text("inside")
+    os.symlink(shared, skill / "shared.txt")
+    assert (
+        src.resolve_skill_path({"skill_path": "s"}, test_data_dir=str(root))
+        == skill.resolve()
+    )
+
+
+def test_discovery_skips_skill_with_escaping_symlink(tmp_path):
+    """Auto-discovery ignores a skill whose tree links outside ``/test_data``."""
+    root = tmp_path / "td"
+    good = _skill(root / "good")
+    bad = _skill(root / "bad")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("outside")
+    os.symlink(secret, bad / "leak.txt")
+    assert src.resolve_skill_path({}, test_data_dir=str(root)) == good.resolve()
+
+
 def test_discovery_ignores_hidden_dirs_and_symlinked_dirs(tmp_path):
     """Discovery skips hidden and symlinked directories."""
     root = tmp_path / "td"
