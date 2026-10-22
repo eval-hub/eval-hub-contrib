@@ -235,11 +235,18 @@ def confidence_interval(context: Context, raw: dict) -> dict:
     for index, ref in enumerate(config["calibration_data_ref"]):
         source_ref = {key: value for key, value in ref.items() if key != "data_config"}
         directory = context.sources.download(source_ref, context.directory / f"calibration-{index}")
-        calibration.append(read_table(directory, ref.get("data_config", {})))
+        calibration.append(
+            read_table(
+                directory,
+                ref.get("data_config", {}),
+                dataset=f"calibration_data_ref[{index}]",
+                calibration=True,
+            )
+        )
     alpha = config["significance_level"]
     if job is None:
         directory = context.sources.download(reference, context.directory / "results")
-        data = read_table(directory, result_config(config, {}))
+        data = read_table(directory, result_config(config, {}), dataset="results_data_ref")
         metric = text_value(data.primary_score, "external result manifest primary_score.metric")
         context.phase(JobPhase.RUNNING_EVALUATION)
         return {
@@ -279,7 +286,12 @@ def confidence_interval(context: Context, raw: dict) -> dict:
                         + "; ".join(errors)
                     ) from exc
                 continue
-            data = read_table(downloaded, result_config(config, target))
+            dataset = (
+                f"results_data_ref (evaluation job {reference['eval_job']['id']!r}, "
+                f"benchmark {benchmark['id']!r}, provider {benchmark['provider_id']!r}, "
+                f"benchmark_index {benchmark['benchmark_index']})"
+            )
+            data = read_table(downloaded, result_config(config, target), dataset=dataset)
             bounds = interval(data, calibration, target, shared=len(benchmarks) > 1, alpha=alpha)
             return {
                 "id": benchmark["id"],

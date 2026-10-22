@@ -97,7 +97,13 @@ class Table:
         return mapping[value]
 
 
-def read_table(root: Path, config: dict | None = None) -> Table:
+def read_table(
+    root: Path,
+    config: dict | None = None,
+    *,
+    dataset: str | None = None,
+    calibration: bool = False,
+) -> Table:
     """Load per-example records from supported files under a source path."""
     config = config or {}
     if not isinstance(config, dict):
@@ -137,6 +143,7 @@ def read_table(root: Path, config: dict | None = None) -> Table:
         raise ValueError("Selected data path does not exist")
     files = [root] if root.is_file() else sorted(p for p in root.rglob("*") if p.is_file())
     table = Table([], config=config)
+    prefix = f"{dataset}: " if dataset else ""
     primary_scores: set[str] = set()
     estimands: set[str] = set()
     for path in files:
@@ -178,7 +185,7 @@ def read_table(root: Path, config: dict | None = None) -> Table:
         ):
             continue
         if any(not isinstance(row, dict) or table.get(row, "sample_id") is None for row in records):
-            raise ValueError(f"Missing sample_id in a per-example data file: {path.name}")
+            raise ValueError(f"{prefix}Missing sample_id in a per-example data file: {path.name}")
         table.rows.extend(records)
     if len(primary_scores) > 1:
         raise ValueError("External result data has conflicting primary_score declarations")
@@ -188,8 +195,16 @@ def read_table(root: Path, config: dict | None = None) -> Table:
             "The initial PPI operation supports mean per-example scores; this artifact declares another estimand"
         )
     if not table.rows:
+        if calibration:
+            raise ValueError(
+                f"{prefix}No per-example calibration records found. "
+                "Check the dataset format and column mappings. Each record must provide "
+                "a sample identifier and an observed label. Model/judge predictions can be "
+                "supplied directly or joined from evaluation data by sample identifier."
+            )
         raise ValueError(
-            "No per-example scores found; aggregate metrics cannot be used for PPI. Supply sample_id and score columns."
+            f"{prefix}No per-example scores found; aggregate metrics cannot be used for PPI. "
+            "Supply sample_id and score columns."
         )
     return table
 

@@ -154,8 +154,11 @@ accepted by the HTTP API follow its separate `CalibrationDataConfig` schema.
 
 Column roles are `sample_id`, `prediction`, `label`, `metric`, `benchmark_id`,
 and `provider_id`. JSON can be an array, a `samples`/`records`
-array inside an object, or one sample object. Without a mapping, `doc_id` is an
-alias for `sample_id`; predictions can also be stored at the metric's own key,
+array inside an object, or one sample object. Both calibration and result records
+require a sample identifier. Without a `columns.sample_id` mapping, the reader uses
+`sample_id`, falling back to `doc_id` when `sample_id` is absent or null. An explicit
+mapping takes precedence and disables that fallback. Identifiers must be nonempty
+strings or integers. Predictions can also be stored at the metric's own key,
 `metrics[metric]`, or `scores[metric]`. A score object `{"value": 0.8}` is accepted.
 
 For a job with multiple benchmarks, calibration must carry both `benchmark_id`
@@ -203,6 +206,14 @@ metadata, the original explicit benchmark configuration, or provider metadata
 fetched through the sidecar. Its stored value must be numeric. A direct external
 results reference must declare `primary_score.metric` in its JSON object or a
 `manifest.json` next to its sample files. Aggregate-only artifacts are rejected.
+Errors reporting missing per-example data identify `calibration_data_ref[index]`
+(using a zero-based index) or `results_data_ref`. For evaluation-job results,
+the error also identifies the source job, benchmark, provider, and benchmark index.
+Files mixing records with and without sample identifiers also identify the
+dataset and filename in the error. Missing calibration records produce guidance
+about sample identifiers, observed labels, and model/judge predictions supplied
+directly or joined from evaluation data by sample identifier. Missing result
+records produce guidance about sample identifiers and per-example scores.
 
 ## Sources and the sidecar
 
