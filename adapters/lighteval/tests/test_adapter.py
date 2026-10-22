@@ -645,6 +645,76 @@ def test_format_generation_parameters_string_value_in_dict():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("benchmark_id", "benchmark_config", "expected"),
+    [
+        ("piqa", {}, ["evalhub_piqa"]),
+        ("physical_commonsense", {}, ["evalhub_piqa"]),
+        (
+            "truthfulness",
+            {},
+            ["evalhub_truthfulqa_mc", "evalhub_truthfulqa_gen"],
+        ),
+        ("truthfulqa:mc", {}, ["evalhub_truthfulqa_mc"]),
+        ("truthfulqa:gen", {}, ["evalhub_truthfulqa_gen"]),
+        ("custom", {"tasks": ["piqa", "boolq"]}, ["evalhub_piqa", "boolq"]),
+        ("custom", {"tasks": "piqa"}, ["evalhub_piqa"]),
+        (
+            "custom",
+            {"tasks": ["truthfulqa:mc"]},
+            ["evalhub_truthfulqa_mc"],
+        ),
+        ("boolq", {}, ["boolq"]),
+    ],
+)
+def test_parse_benchmark_tasks_routes_piqa_to_custom_task(
+    adapter, benchmark_id, benchmark_config, expected
+):
+    assert adapter._parse_benchmark_tasks(benchmark_id, benchmark_config) == expected
+
+
+def test_custom_piqa_task_uses_pinned_parquet_dataset():
+    from custom_tasks import TASKS_TABLE
+
+    task = next(task for task in TASKS_TABLE if task.name == "evalhub_piqa")
+    assert task.name == "evalhub_piqa"
+    assert task.hf_repo == "regisss/piqa"
+    assert task.hf_subset == "default"
+    assert task.hf_revision == "b434c23003a4bee60e2d88b3403259f5487dc5f4"
+    assert tuple(task.evaluation_splits) == ("validation",)
+
+
+@pytest.mark.parametrize(
+    ("task_name", "subset"),
+    [
+        ("evalhub_truthfulqa_mc", "multiple_choice"),
+        ("evalhub_truthfulqa_gen", "generation"),
+    ],
+)
+def test_custom_truthfulqa_tasks_use_pinned_parquet_dataset(task_name, subset):
+    from custom_tasks import TASKS_TABLE, TRUTHFULQA_REVISION
+
+    task = next(task for task in TASKS_TABLE if task.name == task_name)
+    assert task.hf_repo == "truthfulqa/truthful_qa"
+    assert task.hf_subset == subset
+    assert task.hf_revision == TRUTHFULQA_REVISION
+    assert tuple(task.evaluation_splits) == ("validation",)
+
+
+@pytest.mark.parametrize(
+    ("task_name", "expected"),
+    [
+        ("evalhub_piqa|0", "piqa"),
+        ("evalhub_piqa", "piqa"),
+        ("evalhub_truthfulqa_mc|0", "truthfulqa:mc"),
+        ("evalhub_truthfulqa_gen|0", "truthfulqa:gen"),
+        ("boolq|0", "boolq"),
+    ],
+)
+def test_normalise_custom_piqa_task_name(task_name, expected):
+    assert LightEvalAdapter._normalise_task_name(task_name) == expected
+
+
 @pytest.mark.integration
 def test_run_lighteval_cmd_formats_generation_parameters(adapter, tmp_path, monkeypatch):
     """generation_parameters dict (including list values like stop_tokens) is
@@ -696,3 +766,43 @@ def test_run_lighteval_cmd_formats_generation_parameters(adapter, tmp_path, monk
     # Scalar parameters pass through directly
     assert ",concurrent_requests=7" in model_args
     assert ",system_prompt=You are a helpful math tutor." in model_args
+
+
+@pytest.mark.parametrize(
+    "task",
+    ["evalhub_piqa", "evalhub_truthfulqa_mc"],
+)
+@pytest.mark.integration
+def test_run_lighteval_cmd_loads_custom_tasks(adapter, tmp_path, monkeypatch, task):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        output_idx = cmd.index("--output-dir") + 1
+        results_dir = Path(cmd[output_idx])
+        results_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "results_test.json").write_text(json.dumps(CANNED_RESULTS))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "main.resolve_model_credentials",
+        lambda: SimpleNamespace(api_key="test-key"),
+    )
+    monkeypatch.setenv("HF_TOKEN", "fake")
+
+    adapter._run_lighteval(
+        model_config=adapter.job_spec.model,
+        tasks=[task],
+        output_dir=tmp_path / "output",
+        num_fewshot=0,
+        limit=5,
+        batch_size=1,
+        benchmark_config={},
+    )
+
+    cmd = captured["cmd"]
+    custom_tasks_idx = cmd.index("--custom-tasks")
+    assert cmd[4] == f"{task}|0"
+    assert Path(cmd[custom_tasks_idx + 1]).name == "custom_tasks.py"
+    assert Path(cmd[custom_tasks_idx + 1]).is_file()

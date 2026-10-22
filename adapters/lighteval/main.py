@@ -42,6 +42,15 @@ from evalhub.adapter.mlflow import MlflowFileArtifact
 
 logger = logging.getLogger(__name__)
 
+CUSTOM_TASK_ALIASES = {
+    "piqa": "evalhub_piqa",
+    "truthfulqa:mc": "evalhub_truthfulqa_mc",
+    "truthfulqa:gen": "evalhub_truthfulqa_gen",
+}
+CUSTOM_TASK_RESULT_NAMES = {
+    custom_name: task_name for task_name, custom_name in CUSTOM_TASK_ALIASES.items()
+}
+
 
 class LightEvalAdapter(FrameworkAdapter):
     """LightEval framework adapter.
@@ -61,6 +70,7 @@ class LightEvalAdapter(FrameworkAdapter):
         "knowledge": ["mmlu", "triviaqa"],
         "language_understanding": ["glue:cola", "glue:sst2", "glue:mrpc"],
     }
+    CUSTOM_TASK_ALIASES = CUSTOM_TASK_ALIASES
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         """Execute a LightEval benchmark evaluation job.
@@ -298,15 +308,15 @@ class LightEvalAdapter(FrameworkAdapter):
             tasks = benchmark_config["tasks"]
             if isinstance(tasks, str):
                 tasks = [tasks]
-            return tasks
+        elif benchmark_id in self.SUPPORTED_TASKS:
+            # Check if benchmark_id is a known category
+            tasks = self.SUPPORTED_TASKS[benchmark_id]
+        else:
+            # Otherwise, treat benchmark_id as a single task name
+            # LightEval task names can include colons (e.g., "arc:easy", "truthfulqa:mc")
+            tasks = [benchmark_id]
 
-        # Check if benchmark_id is a known category
-        if benchmark_id in self.SUPPORTED_TASKS:
-            return self.SUPPORTED_TASKS[benchmark_id]
-
-        # Otherwise, treat benchmark_id as a single task name
-        # LightEval task names can include colons (e.g., "arc:easy", "truthfulqa:mc")
-        return [benchmark_id]
+        return [self.CUSTOM_TASK_ALIASES.get(task, task) for task in tasks]
 
     def _run_lighteval(
         self,
@@ -408,6 +418,10 @@ class LightEvalAdapter(FrameworkAdapter):
             "--no-push-to-hub",
             "--save-details",
         ])
+
+        if any(task in self.CUSTOM_TASK_ALIASES.values() for task in tasks):
+            custom_tasks_path = Path(__file__).with_name("custom_tasks.py")
+            cmd.extend(["--custom-tasks", str(custom_tasks_path)])
 
         # Add max-samples limit if specified
         if limit is not None:
@@ -571,8 +585,8 @@ class LightEvalAdapter(FrameworkAdapter):
         # Strip |N fewshot suffix LightEval appends to task names in results JSON
         # (e.g. math_500|0 → math_500)
         if "|" in task_name:
-            return task_name.rsplit("|", 1)[0]
-        return task_name
+            task_name = task_name.rsplit("|", 1)[0]
+        return CUSTOM_TASK_RESULT_NAMES.get(task_name, task_name)
 
     @staticmethod
     def _normalise_metric_name(metric_name: str) -> str:
