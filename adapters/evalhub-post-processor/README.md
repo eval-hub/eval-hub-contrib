@@ -209,9 +209,11 @@ results reference must declare `primary_score.metric` in its JSON object or a
 Errors reporting missing per-example data identify `calibration_data_ref[index]`
 (using a zero-based index) or `results_data_ref`. For evaluation-job results,
 the error also identifies the source job, benchmark, provider, and benchmark index.
-Missing calibration records produce guidance about sample identifiers, observed
-labels, and model/judge predictions; missing result records produce guidance about
-sample identifiers and per-example scores.
+Files mixing records with and without sample identifiers also identify the
+dataset and filename in the error. Missing calibration records produce guidance
+about sample identifiers, observed labels, and model/judge predictions supplied
+directly or joined from evaluation data by sample identifier. Missing result
+records produce guidance about sample identifiers and per-example scores.
 
 ## Sources and the sidecar
 

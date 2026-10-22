@@ -241,12 +241,20 @@ def test_invalid_mlflow_samples_do_not_fall_back_to_oci(runtime):
 
 
 @pytest.mark.parametrize("calibration_index", [0, 1])
-def test_missing_calibration_samples_identify_dataset(
-    runtime, tmp_path, monkeypatch, calibration_index
+@pytest.mark.parametrize("mixed_records", [False, True])
+def test_invalid_calibration_samples_identify_dataset(
+    runtime, tmp_path, monkeypatch, calibration_index, mixed_records
 ):
     aggregate = tmp_path / "aggregate-calibration"
     aggregate.mkdir()
-    (aggregate / "summary.jsonl").write_text(json.dumps({"metrics": {"accuracy": 0.8}}))
+    if mixed_records:
+        records = [
+            {"example_id": "c1", "human_score": 1, "judge_score": 0.8},
+            {"human_score": 0, "judge_score": 0.2},
+        ]
+    else:
+        records = [{"metrics": {"accuracy": 0.8}}]
+    (aggregate / "labels.jsonl").write_text("\n".join(json.dumps(row) for row in records))
     monkeypatch.setenv(
         "EVALHUB_POST_PROCESSOR_PVC_MOUNTS",
         json.dumps({"calibration-data": str(runtime["cal"]), "aggregate": str(aggregate)}),
@@ -261,11 +269,18 @@ def test_missing_calibration_samples_identify_dataset(
         runtime["run"]()
 
     message = str(exc_info.value)
-    assert message == (
-        f"calibration_data_ref[{calibration_index}]: No per-example calibration records found. "
-        "Check the dataset format and column mappings. Each record must provide "
-        "a sample identifier, an observed label, and a model/judge prediction."
-    )
+    if mixed_records:
+        assert message == (
+            f"calibration_data_ref[{calibration_index}]: "
+            "Missing sample_id in a per-example data file: labels.jsonl"
+        )
+    else:
+        assert message == (
+            f"calibration_data_ref[{calibration_index}]: No per-example calibration records found. "
+            "Check the dataset format and column mappings. Each record must provide "
+            "a sample identifier and an observed label. Model/judge predictions can be "
+            "supplied directly or joined from evaluation data by sample identifier."
+        )
     assert runtime["events"][-1]["status"] == "failed"
     assert runtime["events"][-1]["error_message"] == {
         "message": message,
@@ -275,11 +290,18 @@ def test_missing_calibration_samples_identify_dataset(
     assert not any(event["status"] == "completed" for event in runtime["events"])
 
 
-def test_missing_evaluation_samples_identify_source_benchmark(runtime):
+@pytest.mark.parametrize("mixed_records", [False, True])
+def test_invalid_evaluation_samples_identify_source_benchmark(runtime, mixed_records):
     for section in ("status", "results"):
         runtime["job"][section]["benchmarks"] = runtime["job"][section]["benchmarks"][:1]
     runtime["data"].clear()
-    runtime["data"].update({"metrics": {"accuracy": 0.8}})
+    if mixed_records:
+        runtime["data"]["samples"] = [
+            {"sample_id": "e1", "prediction": 0.8},
+            {"prediction": 0.2},
+        ]
+    else:
+        runtime["data"].update({"metrics": {"accuracy": 0.8}})
 
     with pytest.raises(ValueError) as exc_info:
         runtime["run"]()
@@ -287,11 +309,15 @@ def test_missing_evaluation_samples_identify_source_benchmark(runtime):
     message = str(exc_info.value)
     assert message.startswith(
         "results_data_ref (evaluation job 'source', benchmark 'benchmark-1', "
-        "provider 'test-provider', benchmark_index 1): No per-example scores found;"
+        "provider 'test-provider', benchmark_index 1): "
     )
-    assert (
-        "aggregate metrics cannot be used for PPI. Supply sample_id and score columns." in message
-    )
+    if mixed_records:
+        assert message.endswith("Missing sample_id in a per-example data file: samples.json")
+    else:
+        assert (
+            "No per-example scores found; aggregate metrics cannot be used for PPI. "
+            "Supply sample_id and score columns." in message
+        )
     assert runtime["events"][-1]["status"] == "failed"
     assert runtime["events"][-1]["error_message"]["message"] == message
     assert not any(event["status"] == "completed" for event in runtime["events"])
