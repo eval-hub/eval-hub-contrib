@@ -97,7 +97,13 @@ class Table:
         return mapping[value]
 
 
-def read_table(root: Path, config: dict | None = None) -> Table:
+def read_table(
+    root: Path,
+    config: dict | None = None,
+    *,
+    dataset: str | None = None,
+    calibration: bool = False,
+) -> Table:
     """Load per-example records from supported files under a source path."""
     config = config or {}
     if not isinstance(config, dict):
@@ -188,8 +194,16 @@ def read_table(root: Path, config: dict | None = None) -> Table:
             "The initial PPI operation supports mean per-example scores; this artifact declares another estimand"
         )
     if not table.rows:
+        prefix = f"{dataset}: " if dataset else ""
+        if calibration:
+            raise ValueError(
+                f"{prefix}No per-example calibration records found. "
+                "Check the dataset format and column mappings. Each record must provide "
+                "a sample identifier, an observed label, and a model/judge prediction."
+            )
         raise ValueError(
-            "No per-example scores found; aggregate metrics cannot be used for PPI. Supply sample_id and score columns."
+            f"{prefix}No per-example scores found; aggregate metrics cannot be used for PPI. "
+            "Supply sample_id and score columns."
         )
     return table
 

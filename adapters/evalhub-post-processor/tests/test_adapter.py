@@ -240,6 +240,87 @@ def test_invalid_mlflow_samples_do_not_fall_back_to_oci(runtime):
     assert not any("/manifests/" in path for path in runtime["gets"])
 
 
+@pytest.mark.parametrize("calibration_index", [0, 1])
+def test_missing_calibration_samples_identify_dataset(
+    runtime, tmp_path, monkeypatch, calibration_index
+):
+    aggregate = tmp_path / "aggregate-calibration"
+    aggregate.mkdir()
+    (aggregate / "summary.jsonl").write_text(json.dumps({"metrics": {"accuracy": 0.8}}))
+    monkeypatch.setenv(
+        "EVALHUB_POST_PROCESSOR_PVC_MOUNTS",
+        json.dumps({"calibration-data": str(runtime["cal"]), "aggregate": str(aggregate)}),
+    )
+    config = runtime["spec"]["parameters"]["operations"]["confidence_interval"]
+    config["calibration_data_ref"] = [
+        copy.deepcopy(config["calibration_data_ref"][0]) for _ in range(2)
+    ]
+    config["calibration_data_ref"][calibration_index]["pvc"]["claim_name"] = "aggregate"
+
+    with pytest.raises(ValueError) as exc_info:
+        runtime["run"]()
+
+    message = str(exc_info.value)
+    assert message == (
+        f"calibration_data_ref[{calibration_index}]: No per-example calibration records found. "
+        "Check the dataset format and column mappings. Each record must provide "
+        "a sample identifier, an observed label, and a model/judge prediction."
+    )
+    assert runtime["events"][-1]["status"] == "failed"
+    assert runtime["events"][-1]["error_message"] == {
+        "message": message,
+        "message_code": "post_processing_failed",
+        "message_origin": "adapter",
+    }
+    assert not any(event["status"] == "completed" for event in runtime["events"])
+
+
+def test_missing_evaluation_samples_identify_source_benchmark(runtime):
+    for section in ("status", "results"):
+        runtime["job"][section]["benchmarks"] = runtime["job"][section]["benchmarks"][:1]
+    runtime["data"].clear()
+    runtime["data"].update({"metrics": {"accuracy": 0.8}})
+
+    with pytest.raises(ValueError) as exc_info:
+        runtime["run"]()
+
+    message = str(exc_info.value)
+    assert message.startswith(
+        "results_data_ref (evaluation job 'source', benchmark 'benchmark-1', "
+        "provider 'test-provider', benchmark_index 1): No per-example scores found;"
+    )
+    assert (
+        "aggregate metrics cannot be used for PPI. Supply sample_id and score columns." in message
+    )
+    assert runtime["events"][-1]["status"] == "failed"
+    assert runtime["events"][-1]["error_message"]["message"] == message
+    assert not any(event["status"] == "completed" for event in runtime["events"])
+
+
+def test_missing_external_samples_identify_results_dataset(runtime, tmp_path, monkeypatch):
+    results = tmp_path / "external-results"
+    results.mkdir()
+    (results / "summary.json").write_text(json.dumps({"metrics": {"accuracy": 0.8}}))
+    monkeypatch.setenv(
+        "EVALHUB_POST_PROCESSOR_PVC_MOUNTS",
+        json.dumps({"calibration-data": str(runtime["cal"]), "results": str(results)}),
+    )
+    config = runtime["spec"]["parameters"]["operations"]["confidence_interval"]
+    config["results_data_ref"] = {"pvc": {"claim_name": "results"}}
+
+    with pytest.raises(ValueError) as exc_info:
+        runtime["run"]()
+
+    message = str(exc_info.value)
+    assert message.startswith("results_data_ref: No per-example scores found;")
+    assert (
+        "aggregate metrics cannot be used for PPI. Supply sample_id and score columns." in message
+    )
+    assert runtime["events"][-1]["status"] == "failed"
+    assert runtime["events"][-1]["error_message"]["message"] == message
+    assert not any(event["status"] == "completed" for event in runtime["events"])
+
+
 @pytest.mark.parametrize(
     "mutation, message",
     [
