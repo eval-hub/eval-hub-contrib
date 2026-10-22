@@ -681,6 +681,7 @@ def test_custom_piqa_task_uses_pinned_parquet_dataset():
     assert task.hf_repo == "regisss/piqa"
     assert task.hf_subset == "default"
     assert task.hf_revision == "b434c23003a4bee60e2d88b3403259f5487dc5f4"
+    assert tuple(task.evaluation_splits) == ("validation",)
 
 
 @pytest.mark.parametrize(
