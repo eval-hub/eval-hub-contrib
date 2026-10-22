@@ -1,0 +1,94 @@
+name: Verify adapter requirements
+
+# Verifies that every pinned distribution in the affected adapter's
+# requirements file exists on the Red Hat package index. The index URL is a
+# repository secret so the same workflow can target another channel without a
+# code change.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'adapters/inspect/**'
+      - 'adapters/lighteval/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'adapters/inspect/**'
+      - 'adapters/lighteval/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-requirements-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: ${{ matrix.adapter }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - adapter: inspect
+            file: adapters/inspect/constraints.txt
+            python-version: '3.12'
+          - adapter: lighteval
+            file: adapters/lighteval/requirements.txt
+            python-version: '3.11'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Detect changes under adapters/${{ matrix.adapter }}
+        id: changed
+        env:
+          ADAPTER: ${{ matrix.adapter }}
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base="$PUSH_BEFORE"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$PR_BASE"
+          fi
+          if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            base="HEAD~1"
+          fi
+          files=$(git diff --name-only "$base" HEAD)
+          if printf '%s\n' "$files" | grep -q "^adapters/${ADAPTER}/"; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require PYTHON_INDEX
+        if: steps.changed.outputs.changed == 'true'
+        env:
+          PYTHON_INDEX: ${{ secrets.PYTHON_INDEX }}
+        run: |
+          if [ -z "$PYTHON_INDEX" ]; then
+            echo "::error::PYTHON_INDEX is not set; refusing to fall back to PyPI."
+            exit 1
+          fi
+
+      - name: Verify ${{ matrix.file }}
+        if: steps.changed.outputs.changed == 'true'
+        uses: ruivieira/basic-ops-tasks@5b0fe5ca94646478a36d10e248ff08a1db67ed02 # basic-ops-tasks main, python-index mode
+        with:
+          mode: python-index
+          requirements-file: ${{ matrix.file }}
+          index-url: ${{ secrets.PYTHON_INDEX }}
+          python-version: ${{ matrix.python-version }}
+          timeout-seconds: '60'
