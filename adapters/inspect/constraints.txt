@@ -52,7 +52,7 @@ ijson==3.5.1
 immutabledict==4.3.1
 importlib-metadata==9.0.1
 inspect-ai==0.3.278
-inspect-evals==0.25.0
+inspect-evals==0.26.0
 inspect-petri==3.1.1
 inspect-scout==0.5.3
 inspect-swe==0.2.71
