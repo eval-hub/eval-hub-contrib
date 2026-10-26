@@ -38,10 +38,10 @@ Key `parameters` parameters:
 
 - `metrics`: List of metric names to evaluate
 - `embedding_model`: Model name for embeddings (defaults to LLM model)
-- `embedding_url`: Standalone endpoint override; Kubernetes uses the `embedding_url` Secret entry
+- `embedding_url`: Endpoint override; Kubernetes retains the legacy primary-sidecar fallback for external parameter URLs
 - `judge_model`: Optional model used for LLM-based RAGAS metrics (defaults to the evaluated model)
-- `judge_url`: Standalone endpoint override; Kubernetes uses the `judge_url` Secret entry
-- `judge_api_key`: Standalone key override or explicit sidecar reference; Kubernetes normally reads `judge_api-key` from the projected Secret
+- `judge_url`: Optional endpoint override, including existing Kubernetes direct judge connections
+- `judge_api_key`: Optional judge key override or explicit sidecar reference; without judge connection overrides, the adapter reads `judge_api-key` from the projected Secret
 - `max_tokens`: Max tokens for LLM completions
 - `temperature`: Sampling temperature
 - `column_map`: Map dataset columns to RAGAS names
@@ -54,7 +54,7 @@ needs a separate embedding service. LLM-based metrics also need a judge that
 supports structured JSON; set `judge_model` when that should differ from the
 evaluated model.
 
-Put connection URLs and credentials in the Secret referenced by
+For automatic sidecar routing, put connection URLs and credentials in the Secret referenced by
 `model.auth.secret_ref`:
 
 ```yaml
@@ -103,17 +103,32 @@ With no role-specific Secret entries, that role reuses the primary model
 connection (`api-key:ref`). A role-specific key without a URL selects a separate
 credential on the primary endpoint. Projected URL paths are preserved.
 
-In Kubernetes, parameter URL overrides must use the sidecar origin and key
-overrides must be reference tokens. Put real upstream URLs and keys in the
-Secret. `OPENAI_API_KEY` does not replace a projected role credential.
+Secret-based connections are defaults. Existing explicit connection parameters
+take precedence as described below. `OPENAI_API_KEY` does not replace a projected
+role credential when using those defaults.
 
-### Standalone endpoint overrides
+### Existing parameter overrides
 
-Standalone/local runs retain `judge_url`, `judge_api_key`, and `embedding_url`
-parameter overrides. A different endpoint uses its explicit key or the process's
-`OPENAI_API_KEY`, falling back to a dummy key for unauthenticated endpoints.
-It does not borrow the evaluated model's credential. Local model-auth directories
-can also contain the role-specific URL/key files described above.
+Existing `judge_model`, `judge_url`, and `judge_api_key` parameters remain
+supported in Kubernetes and standalone/local runs. If either judge connection
+parameter is supplied, it takes precedence over the judge Secret defaults:
+the URL is `judge_url` or the primary model URL, and the key is `judge_api_key`
+when supplied. A direct judge endpoint without an explicit key uses the process's
+`OPENAI_API_KEY`, falling back to a dummy key for unauthenticated endpoints. It
+does not borrow the primary or projected judge credential. A judge using the
+primary connection without a key override retains its mounted model credential.
+`judge_model` alone still uses the automatic Secret-based connection, when present.
+
+Explicit credential references such as `judge_api_key: custom_api-key:ref` also
+remain supported through the sidecar. Prefer Secret-based routing for new
+Kubernetes connections so real credentials stay in the model-auth Secret.
+
+For backward compatibility, an external `embedding_url` parameter in Kubernetes
+still falls back to the primary sidecar and its credential. To select a separate
+embedding upstream, put `embedding_url` and `embedding_api-key` in the model-auth
+Secret and omit the parameter URL. Standalone/local `embedding_url` overrides
+use `OPENAI_API_KEY` or a dummy key for a different endpoint. Local model-auth
+directories can also contain the role-specific URL/key files described above.
 
 ## Local Development
 

@@ -89,9 +89,10 @@ parameters:
     type: string
     default: null
     description: >
-      Standalone embedding endpoint override. In Kubernetes, put embedding_url
-      and embedding_api-key in model.auth.secret_ref; the adapter uses the
-      projected sidecar URL and credential reference.
+      Embedding endpoint override. External parameter URLs in Kubernetes retain
+      the legacy primary-sidecar fallback. For a separate Kubernetes connection,
+      omit this override and put embedding_url and embedding_api-key in
+      model.auth.secret_ref.
 
   - name: judge_model
     type: string
@@ -105,17 +106,19 @@ parameters:
     type: string
     default: null
     description: >
-      Standalone judge endpoint override. In Kubernetes, put judge_url and
-      judge_api-key in model.auth.secret_ref; the adapter uses the projected
-      sidecar URL and credential reference.
+      Judge endpoint override, supported in Kubernetes and standalone runs.
+      Explicit judge connection parameters take precedence over Secret defaults.
+      For automatic sidecar routing, omit the overrides and put judge_url and
+      judge_api-key in model.auth.secret_ref.
 
   - name: judge_api_key
     type: string
     default: null
     description: >
-      Standalone judge key override or explicit sidecar credential reference.
-      In Kubernetes, use judge_api-key in model.auth.secret_ref. Real keys must
-      not be placed in benchmark or job configuration.
+      Optional judge key override or explicit sidecar credential reference,
+      supported in Kubernetes and standalone runs. Existing literal keys remain
+      supported. Prefer judge_api-key in model.auth.secret_ref for new
+      Kubernetes connections so credentials stay in the Secret.
 
   - name: max_tokens
     type: integer

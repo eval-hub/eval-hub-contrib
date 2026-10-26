@@ -142,7 +142,16 @@ def test_ragas_happy_path(monkeypatch, tmp_path):
 
 
 @pytest.mark.integration
-def test_separate_judge_is_used_for_llm_metrics(monkeypatch, tmp_path):
+@pytest.mark.parametrize("mode", ["local", "k8s"])
+def test_separate_judge_is_used_for_llm_metrics(monkeypatch, tmp_path, mode):
+    monkeypatch.setenv("EVALHUB_MODE", mode)
+    monkeypatch.setattr(
+        "main.read_model_auth_key",
+        {
+            "judge_api-key": "judge_api-key:ref",
+            "judge_url": "http://localhost:8082/secret-judge/v1",
+        }.get,
+    )
     adapter = RagasAdapter(job_spec_path="meta/job.json")
     adapter.job_spec.parameters.update(
         {
@@ -354,16 +363,17 @@ def test_role_credential_without_url_uses_model_endpoint(monkeypatch, role):
 
 
 @pytest.mark.parametrize("role", ["judge", "embedding"])
-def test_k8s_role_cannot_bypass_sidecar(monkeypatch, role):
+def test_k8s_projected_role_url_must_use_sidecar(monkeypatch, role):
     from main import _resolve_role_connection
 
     monkeypatch.setenv("EVALHUB_MODE", "k8s")
-    monkeypatch.setattr("main.read_model_auth_key", lambda key: None)
+    monkeypatch.setattr(
+        "main.read_model_auth_key",
+        {f"{role}_api-key": f"{role}_api-key:ref", f"{role}_url": "https://external.example/v1"}.get,
+    )
 
     with pytest.raises(ValueError, match=f"{role}_url.*model.auth.secret_ref"):
-        _resolve_role_connection(
-            role, "http://localhost:8082/v1", url_override="https://external.example/v1"
-        )
+        _resolve_role_connection(role, "http://localhost:8082/v1")
 
 
 def test_k8s_explicit_judge_reference_remains_supported(monkeypatch):
@@ -380,16 +390,89 @@ def test_k8s_explicit_judge_reference_remains_supported(monkeypatch):
     assert key == "custom_api-key:ref"
 
 
-def test_k8s_judge_rejects_literal_key(monkeypatch):
+@pytest.mark.parametrize("role", ["judge", "embedding"])
+def test_k8s_projected_role_key_must_be_reference(monkeypatch, role):
     from main import _resolve_role_connection
 
     monkeypatch.setenv("EVALHUB_MODE", "k8s")
-    monkeypatch.setattr("main.read_model_auth_key", lambda key: None)
+    monkeypatch.setattr("main.read_model_auth_key", {f"{role}_api-key": "literal-key"}.get)
 
-    with pytest.raises(ValueError, match="judge_api-key.*model.auth.secret_ref"):
-        _resolve_role_connection(
-            "judge", "http://localhost:8082/v1", api_key_override="literal-key"
-        )
+    with pytest.raises(ValueError, match=f"{role}_api-key.*model.auth.secret_ref"):
+        _resolve_role_connection(role, "http://localhost:8082/v1")
+
+
+@pytest.mark.parametrize("mode", ["local", "k8s"])
+@pytest.mark.parametrize(
+    "url_override, key_override, expected_url, expected_key",
+    [
+        ("https://legacy-judge.example/v1", "literal-key", "https://legacy-judge.example/v1", "literal-key"),
+        ("https://legacy-judge.example/v1", None, "https://legacy-judge.example/v1", "env-key"),
+        (None, "literal-key", "http://localhost:8082/v1", "literal-key"),
+        ("http://localhost:8082/v1", None, "http://localhost:8082/v1", "api-key:ref"),
+    ],
+)
+def test_explicit_judge_parameters_override_secret_defaults(
+    monkeypatch, mode, url_override, key_override, expected_url, expected_key
+):
+    from main import _async_openai_client, _resolve_role_connection
+
+    monkeypatch.setenv("EVALHUB_MODE", mode)
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    monkeypatch.setattr(
+        "main.read_model_auth_key",
+        {
+            "judge_api-key": "judge_api-key:ref",
+            "judge_url": "http://localhost:8082/secret-judge/v1",
+        }.get,
+    )
+    monkeypatch.setattr(
+        "main.resolve_model_credentials",
+        lambda: type("Credentials", (), {"api_key": "api-key:ref"})(),
+    )
+
+    url, key, use_primary = _resolve_role_connection(
+        "judge", "http://localhost:8082/v1",
+        url_override=url_override, api_key_override=key_override,
+    )
+    client = _async_openai_client(url, key, use_model_credentials=use_primary)
+
+    assert str(client.base_url) == expected_url + "/"
+    assert client.auth_headers["Authorization"] == f"Bearer {expected_key}"
+
+
+@pytest.mark.parametrize(
+    "override, expected_url",
+    [
+        ("https://legacy-embedding.example/v1", "http://localhost:8082/v1"),
+        ("http://legacy-embedding:8000/v1", "http://localhost:8082/v1"),
+        ("http://localhost:8082/alternate/v1", "http://localhost:8082/alternate/v1"),
+        ("http://127.0.0.1:8001/v1", "http://127.0.0.1:8001/v1"),
+    ],
+)
+def test_k8s_embedding_parameter_retains_primary_credentials(monkeypatch, override, expected_url):
+    from main import _openai_credentials, _resolve_role_connection
+
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-env-key")
+    monkeypatch.setattr(
+        "main.read_model_auth_key",
+        {
+            "embedding_api-key": "embedding_api-key:ref",
+            "embedding_url": "http://localhost:8082/secret-embedding/v1",
+        }.get,
+    )
+    monkeypatch.setattr(
+        "main.resolve_model_credentials",
+        lambda: type("Credentials", (), {"api_key": "api-key:ref"})(),
+    )
+
+    url, key, use_primary = _resolve_role_connection(
+        "embedding", "http://localhost:8082/v1", url_override=override
+    )
+
+    assert _openai_credentials(url, key, use_model_credentials=use_primary) == (
+        expected_url, "api-key:ref"
+    )
 
 
 @pytest.mark.parametrize("role", ["judge", "embedding"])

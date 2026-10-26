@@ -220,39 +220,56 @@ def _resolve_role_connection(
     url_override: str | None = None,
     api_key_override: str | None = None,
 ) -> tuple[str, str | None, bool]:
-    """Resolve a role's projected URL/ref pair, with standalone overrides.
+    """Prefer explicit parameters, then a role's projected URL/ref pair.
 
-    In Kubernetes all roles use the sidecar. Equal localhost URLs can select
-    different upstreams: the Authorization reference token controls routing.
+    Existing judge parameters retain their direct-endpoint behavior. Secret
+    defaults use the sidecar in Kubernetes; their reference token selects the
+    upstream even when all projected URLs are equal.
     """
+    in_k8s = os.getenv("EVALHUB_MODE", "").lower() == "k8s"
+    sidecar = urlparse(model_url)
+    if url_override or api_key_override:
+        # Parameters predate role-specific Secret entries. Resolve them without
+        # borrowing a role's default URL/key or validating unused Secret entries.
+        url = (url_override or model_url).strip().rstrip("/")
+        endpoint = urlparse(url)
+        if role == "embedding" and in_k8s:
+            # Preserve the previous Kubernetes embedding override behavior:
+            # external URLs fall back to the primary credential-injection path.
+            local_hosts = {"localhost", "127.0.0.1", "::1"}
+            if sidecar.hostname in local_hosts and endpoint.hostname not in local_hosts:
+                logger.warning(
+                    "External embedding_url parameter falls back to the primary "
+                    "sidecar; configure embedding_url and embedding_api-key in "
+                    "model.auth.secret_ref for a separate embedding connection"
+                )
+                url = model_url
+            return url, api_key_override, True
+        use_model_credentials = url == model_url or (
+            in_k8s and (endpoint.scheme, endpoint.netloc) == (sidecar.scheme, sidecar.netloc)
+        )
+        return url, api_key_override, use_model_credentials
+
     role_key = read_model_auth_key(f"{role}_api-key")
     projected_url = read_model_auth_key(f"{role}_url")
     if projected_url and not role_key:
         raise ValueError(
             f"{role}_url in model.auth.secret_ref requires {role}_api-key"
         )
-    role_url = (projected_url or model_url).strip().rstrip("/")
-    url = (url_override or role_url).strip().rstrip("/")
-    in_k8s = os.getenv("EVALHUB_MODE", "").lower() == "k8s"
+    url = (projected_url or model_url).strip().rstrip("/")
     if in_k8s:
-        sidecar = urlparse(model_url)
         endpoint = urlparse(url)
         if (endpoint.scheme, endpoint.netloc) != (sidecar.scheme, sidecar.netloc):
             raise ValueError(
                 f"Configure {role}_url and {role}_api-key in model.auth.secret_ref "
-                f"for Kubernetes; parameters.{role}_url must use the sidecar"
+                "for Kubernetes; projected URLs must use the sidecar"
             )
-        api_key = api_key_override or role_key
-        if api_key and not api_key.endswith(":ref"):
+        if role_key and not role_key.endswith(":ref"):
             raise ValueError(
                 f"Configure {role}_api-key in model.auth.secret_ref for Kubernetes; "
                 "the adapter must send a credential reference token"
             )
-    else:
-        # A standalone override to another endpoint must not borrow the role's
-        # configured credential. The caller supplies its key or OPENAI_API_KEY.
-        api_key = api_key_override or (role_key if url == role_url else None)
-    return url, api_key, in_k8s or url == model_url
+    return url, role_key, in_k8s or url == model_url
 
 
 def _openai_credentials(
@@ -270,8 +287,8 @@ def _openai_credentials(
         creds = resolve_model_credentials()
         api_key = creds.api_key
     else:
-        # Standalone endpoint overrides use their own key or OPENAI_API_KEY.
-        # Kubernetes role connections supply a projected reference above.
+        # Direct endpoint overrides use their own key or OPENAI_API_KEY.
+        # Secret-backed Kubernetes role connections supply a reference above.
         api_key = os.getenv("OPENAI_API_KEY")
     return url, api_key or "DUMMY"
 
