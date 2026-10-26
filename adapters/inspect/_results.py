@@ -9,7 +9,7 @@ from typing import Any
 from evalhub.adapter import CapabilityEvalEntry, EvaluationResult
 from evalhub.models.api import PrimaryScore
 
-from _benchmarks import DIMENSION_ABILITY_MAP, PETRI_PRIMARY_METRIC
+from _benchmarks import DIMENSION_ABILITY_MAP, fixed_primary_for
 
 logger = logging.getLogger(__name__)
 
@@ -164,17 +164,12 @@ def resolve_primary_score(
             lower_is_better=bool(job_primary.lower_is_better),
         )
 
-    if benchmark_id == "inspect/hle" and "hle/regex_judge/hle/accuracy" in score_names:
-        return PrimaryScore(metric="hle/regex_judge/hle/accuracy")
-    if benchmark_id == "inspect/bfcl" and "bfcl_scorer/accuracy" in score_names:
-        return PrimaryScore(metric="bfcl_scorer/accuracy")
-
-    if mode in ("petri", "bloom"):
-        petri_metric = f"{PETRI_PRIMARY_METRIC}/mean"
-        if petri_metric in score_names:
-            # Catalog concerning/mean entries are lower-is-better; keep the same
-            # direction when job/catalog primary_score is absent (e.g. bloom-custom).
-            return PrimaryScore(metric=petri_metric, lower_is_better=True)
+    fixed = fixed_primary_for(benchmark_id, mode)
+    if fixed is not None and fixed.metric in score_names:
+        return PrimaryScore(
+            metric=fixed.metric,
+            lower_is_better=fixed.lower_is_better,
+        )
 
     accuracy_like = [
         n for n in score_names
@@ -222,18 +217,17 @@ def compute_overall_score(
             return None
         return round(float(matches[0].metric_value), 4)
 
-    if benchmark_id == "inspect/hle":
-        return selected_score("hle/regex_judge/hle/accuracy")
-    if benchmark_id == "inspect/bfcl":
-        return selected_score("bfcl_scorer/accuracy")
-
-    if mode in ("petri", "bloom"):
-        primary = next(
-            (r for r in results if r.metric_name == f"{PETRI_PRIMARY_METRIC}/mean"),
-            None,
-        )
-        if primary is not None:
-            return round(float(primary.metric_value), 4)
+    fixed = fixed_primary_for(benchmark_id, mode)
+    if fixed is not None:
+        if mode in ("petri", "bloom"):
+            primary = next(
+                (r for r in results if r.metric_name == fixed.metric),
+                None,
+            )
+            if primary is not None:
+                return round(float(primary.metric_value), 4)
+        else:
+            return selected_score(fixed.metric)
 
     values = [
         float(r.metric_value)

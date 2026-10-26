@@ -83,9 +83,12 @@ def test_job_overall_and_confirmed_zero_shot_follow_accuracy(
     if missing:
         assert result.overall_score is None
         assert "zero_shot" not in result.additional_info
+        assert result.primary_score is None
     else:
         assert result.overall_score == value
         assert result.additional_info["zero_shot"] == value
+        assert result.primary_score is not None
+        assert result.primary_score.metric == f"{scorer}/{key}"
 
 
 def test_other_benchmark_aggregation_is_unchanged():
@@ -155,14 +158,30 @@ def test_resolve_primary_score_bfcl():
 @pytest.mark.parametrize("mode,bid", [("petri", "inspect/petri-escalation"), ("bloom", "inspect/bloom-custom")])
 def test_resolve_primary_score_petri_bloom_lower_is_better(mode, bid):
     """Petri/Bloom fallback must mark concerning/mean as lower-is-better."""
-    from _benchmarks import PETRI_PRIMARY_METRIC
+    from _benchmarks import PETRI_BLOOM_PRIMARY
 
-    petri_metric = f"{PETRI_PRIMARY_METRIC}/mean"
     results = [
-        metric(petri_metric, 0.8),
+        metric(PETRI_BLOOM_PRIMARY.metric, 0.8),
         metric("other/mean", 0.1),
     ]
     ps = resolve_primary_score(results, mode=mode, benchmark_id=bid, job_primary=None)
     assert ps is not None
-    assert ps.metric == petri_metric
+    assert ps.metric == PETRI_BLOOM_PRIMARY.metric
     assert ps.lower_is_better is True
+
+
+def test_resolve_primary_score_ambiguous_custom_returns_none():
+    """Multiple non-accuracy scores: no unique primary without job primary_score."""
+    results = [
+        metric("choice/f1", 0.2),
+        metric("match/em", 0.9),
+    ]
+    assert (
+        resolve_primary_score(
+            results,
+            mode="standard",
+            benchmark_id="inspect/custom",
+            job_primary=None,
+        )
+        is None
+    )
