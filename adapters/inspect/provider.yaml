@@ -800,13 +800,17 @@ benchmarks:
     tags: [agent, inspect-evals]
 
   # Custom
+  # primary_score omitted: adapter reports task-dependent metric on the event.
   - id: inspect/custom
     name: Custom Inspect Task
     description: >
       Run any Inspect AI task by providing 'task' in parameters.
       Supports any inspect-evals task or user-authored task file.
+      Scorer metric names are task-dependent; the adapter reports primary_score
+      on the completed status event so results.benchmarks[].test can be built.
     category: custom
-    metrics: [accuracy/accuracy]
+    pass_criteria:
+      threshold: 0.15
     tags: [custom, inspect-ai]
 
 parameters:

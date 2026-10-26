@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from evalhub.adapter import CapabilityEvalEntry, EvaluationResult
+from evalhub.models.api import PrimaryScore
 
 from _benchmarks import DIMENSION_ABILITY_MAP, PETRI_PRIMARY_METRIC
 
@@ -121,6 +122,84 @@ def _is_dispersion_metric(metric_name: str) -> bool:
     return name in _DISPERSION_METRICS or name.endswith(("_stderr", "_sterr"))
 
 
+def _score_metric_names(results: list[EvaluationResult]) -> list[str]:
+    """Non-dispersion metric names with finite numeric values."""
+    names: list[str] = []
+    for r in results:
+        if _is_dispersion_metric(r.metric_name):
+            continue
+        if not isinstance(r.metric_value, (int, float)) or isinstance(r.metric_value, bool):
+            continue
+        if not math.isfinite(float(r.metric_value)):
+            continue
+        names.append(r.metric_name)
+    return names
+
+
+def resolve_primary_score(
+    results: list[EvaluationResult],
+    *,
+    mode: str,
+    benchmark_id: str | None = None,
+    job_primary: PrimaryScore | None = None,
+) -> PrimaryScore | None:
+    """Pick the primary metric key to report on the completed status event.
+
+    Preference:
+    1. Job/catalog ``primary_score.metric`` when it exactly matches an emitted score
+    2. Known fixed benchmarks (HLE, BFCL, Petri/Bloom)
+    3. Unique ``*/accuracy`` (or bare ``accuracy``) among non-dispersion scores
+    4. Unique non-dispersion score metric
+
+    EvalHub builds ``results.benchmarks[].test`` from this event field when the
+    catalog primary key is absent from metrics (e.g. inspect/custom).
+    """
+    score_names = _score_metric_names(results)
+    if not score_names:
+        return None
+
+    if job_primary is not None and job_primary.metric and job_primary.metric in score_names:
+        return PrimaryScore(
+            metric=job_primary.metric,
+            lower_is_better=bool(job_primary.lower_is_better),
+        )
+
+    if benchmark_id == "inspect/hle" and "hle/regex_judge/hle/accuracy" in score_names:
+        return PrimaryScore(metric="hle/regex_judge/hle/accuracy")
+    if benchmark_id == "inspect/bfcl" and "bfcl_scorer/accuracy" in score_names:
+        return PrimaryScore(metric="bfcl_scorer/accuracy")
+
+    if mode in ("petri", "bloom"):
+        petri_metric = f"{PETRI_PRIMARY_METRIC}/mean"
+        if petri_metric in score_names:
+            return PrimaryScore(metric=petri_metric)
+
+    accuracy_like = [
+        n for n in score_names
+        if n == "accuracy" or n.endswith("/accuracy")
+    ]
+    # Preserve order, unique
+    seen: set[str] = set()
+    accuracy_unique: list[str] = []
+    for n in accuracy_like:
+        if n not in seen:
+            seen.add(n)
+            accuracy_unique.append(n)
+    if len(accuracy_unique) == 1:
+        return PrimaryScore(metric=accuracy_unique[0])
+
+    unique_scores = list(dict.fromkeys(score_names))
+    if len(unique_scores) == 1:
+        return PrimaryScore(metric=unique_scores[0])
+
+    logger.warning(
+        "Could not resolve a unique primary_score metric | benchmark_id=%s | candidates=%s",
+        benchmark_id,
+        unique_scores,
+    )
+    return None
+
+
 def compute_overall_score(
     results: list[EvaluationResult], mode: str, benchmark_id: str | None = None
 ) -> float | None:
@@ -129,7 +208,7 @@ def compute_overall_score(
     HLE and BFCL report their accuracy metric. Petri/Bloom report
     ``concerning/mean``. For other benchmarks this remains the mean of
     the score metrics, excluding dispersion metrics such as stderr. EvalHub selects the
-    primary metric for pass/fail from the full results list via ``primary_score.metric``.
+    primary metric for pass/fail from the event/job ``primary_score.metric``.
     """
     if not results:
         return None

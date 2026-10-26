@@ -8,7 +8,9 @@ import pytest
 from evalhub.adapter import EvaluationResult
 
 import main
-from _results import compute_overall_score, extract_results
+from evalhub.models.api import PrimaryScore
+
+from _results import compute_overall_score, extract_results, resolve_primary_score
 from main import InspectAdapter
 
 
@@ -102,3 +104,49 @@ def test_petri_bloom_primary_selection_is_unchanged(bid):
 def test_petri_bloom_missing_primary_retains_legacy_fallback(bid):
     results = [metric("a/mean", 2), metric("b/mean", 4), metric("a/stderr", 0.1)]
     assert compute_overall_score(results, "petri" if "petri" in bid else "bloom", bid) == 3
+
+
+def test_resolve_primary_score_custom_unique_accuracy():
+    """inspect/custom: pick the unique */accuracy scorer key for the event."""
+    results = [
+        metric("choice/accuracy", 0.2),
+        metric("choice/stderr", 0.01),
+    ]
+    ps = resolve_primary_score(
+        results,
+        mode="standard",
+        benchmark_id="inspect/custom",
+        job_primary=PrimaryScore(metric="accuracy/accuracy"),
+    )
+    assert ps is not None
+    assert ps.metric == "choice/accuracy"
+
+
+def test_resolve_primary_score_prefers_job_when_present():
+    results = [
+        metric("choice/accuracy", 0.2),
+        metric("match/accuracy", 0.9),
+    ]
+    ps = resolve_primary_score(
+        results,
+        mode="standard",
+        benchmark_id="inspect/custom",
+        job_primary=PrimaryScore(metric="match/accuracy"),
+    )
+    assert ps is not None
+    assert ps.metric == "match/accuracy"
+
+
+def test_resolve_primary_score_bfcl():
+    results = [
+        metric("bfcl_scorer/accuracy", 0.8),
+        metric("bfcl_scorer/stderr", 0.1),
+    ]
+    ps = resolve_primary_score(
+        results,
+        mode="standard",
+        benchmark_id="inspect/bfcl",
+        job_primary=None,
+    )
+    assert ps is not None
+    assert ps.metric == "bfcl_scorer/accuracy"

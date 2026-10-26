@@ -48,6 +48,7 @@ from evalhub.adapter import (
     MessageInfo,
     OCIArtifactSpec,
 )
+from evalhub.models.api import PrimaryScore
 from evalhub.adapter.mlflow import MlflowFileArtifact
 
 from _benchmarks import (
@@ -58,7 +59,7 @@ from _benchmarks import (
 from _bloom import bloom_prepare
 from _execution import build_command, build_env, get_inspect_version, redact_cmd, run_inspect
 from _hf_offline import ensure_test_data_ready_for_offline
-from _results import compute_overall_score, extract_results, parse_log
+from _results import compute_overall_score, extract_results, parse_log, resolve_primary_score
 from _routing import (
     build_role_spec,
     role_model_spec,
@@ -122,6 +123,7 @@ class InspectAdapter(FrameworkAdapter):
     def __init__(self, job_spec_path: str | None = None) -> None:
         super().__init__(job_spec_path=job_spec_path)
         self._run_info: dict[str, Any] = {}
+        self.resolved_primary_score: PrimaryScore | None = None
 
     def generate_additional_info(self, results: JobResults) -> dict[str, Any] | None:
         """Return Inspect-specific supplementary metadata captured during the run."""
@@ -129,10 +131,13 @@ class InspectAdapter(FrameworkAdapter):
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         start_time = time.time()
+        # Capture before _validate_config rewrites inspect/custom → task name.
+        catalog_benchmark_id = config.benchmark_id
         mode = self._detect_mode(config.benchmark_id)
         logger.info(f"Starting Inspect job {config.id} | benchmark={config.benchmark_id} | mode={mode}")
 
         work_dir: Path | None = None
+        self.resolved_primary_score = None
 
         try:
             callbacks.report_status(
@@ -186,7 +191,20 @@ class InspectAdapter(FrameworkAdapter):
             )
 
             evaluation_results, _, num_samples = extract_results(eval_log, config.benchmark_id, mode)
-            overall_score = compute_overall_score(evaluation_results, mode, config.benchmark_id)
+            overall_score = compute_overall_score(evaluation_results, mode, catalog_benchmark_id)
+            job_primary = getattr(config, "primary_score", None)
+            self.resolved_primary_score = resolve_primary_score(
+                evaluation_results,
+                mode=mode,
+                benchmark_id=catalog_benchmark_id,
+                job_primary=job_primary,
+            )
+            if self.resolved_primary_score is not None:
+                logger.info(
+                    "Resolved primary_score metric=%s (catalog_benchmark_id=%s)",
+                    self.resolved_primary_score.metric,
+                    catalog_benchmark_id,
+                )
             logger.info(f"Post-processing complete | samples={num_samples} | overall_score={overall_score}")
 
             oci_artifact = None
@@ -445,6 +463,11 @@ def main() -> None:
         logger.info(f"Completed: {results.id}")
         logger.info(f"Overall score: {results.overall_score}")
         logger.info(f"Samples evaluated: {results.num_examples_evaluated}")
+
+        # Prefer the runtime-resolved metric (task-dependent for inspect/custom)
+        # so the completed event carries primary_score for EvalHub test wiring.
+        if adapter.resolved_primary_score is not None:
+            callbacks.primary_score = adapter.resolved_primary_score
 
         callbacks.report_results(results)
         sys.exit(0)
