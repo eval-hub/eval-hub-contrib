@@ -172,7 +172,9 @@ def resolve_primary_score(
     if mode in ("petri", "bloom"):
         petri_metric = f"{PETRI_PRIMARY_METRIC}/mean"
         if petri_metric in score_names:
-            return PrimaryScore(metric=petri_metric)
+            # Catalog concerning/mean entries are lower-is-better; keep the same
+            # direction when job/catalog primary_score is absent (e.g. bloom-custom).
+            return PrimaryScore(metric=petri_metric, lower_is_better=True)
 
     accuracy_like = [
         n for n in score_names

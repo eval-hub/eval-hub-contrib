@@ -150,3 +150,19 @@ def test_resolve_primary_score_bfcl():
     )
     assert ps is not None
     assert ps.metric == "bfcl_scorer/accuracy"
+
+
+@pytest.mark.parametrize("mode,bid", [("petri", "inspect/petri-escalation"), ("bloom", "inspect/bloom-custom")])
+def test_resolve_primary_score_petri_bloom_lower_is_better(mode, bid):
+    """Petri/Bloom fallback must mark concerning/mean as lower-is-better."""
+    from _benchmarks import PETRI_PRIMARY_METRIC
+
+    petri_metric = f"{PETRI_PRIMARY_METRIC}/mean"
+    results = [
+        metric(petri_metric, 0.8),
+        metric("other/mean", 0.1),
+    ]
+    ps = resolve_primary_score(results, mode=mode, benchmark_id=bid, job_primary=None)
+    assert ps is not None
+    assert ps.metric == petri_metric
+    assert ps.lower_is_better is True
