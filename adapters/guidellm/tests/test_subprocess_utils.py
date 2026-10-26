@@ -16,7 +16,7 @@ class FakeProcess:
 
 
 def test_failure_includes_only_the_bounded_tail_and_logs_it(monkeypatch, caplog):
-    output = "".join(f"line-{index}\n" for index in range(25))
+    output = "".join(f"line-{index}\n" for index in range(45))
     process = FakeProcess(output, return_code=1)
     popen_kwargs = {}
 
@@ -37,10 +37,9 @@ def test_failure_includes_only_the_bounded_tail_and_logs_it(monkeypatch, caplog)
     message = str(error.value)
     assert message.startswith("GuideLLM failed with exit code 1")
     assert "Last subprocess output (stdout/stderr):" in message
-    assert "\nline-4\n" not in message
-    assert "line-5" in message
-    assert "line-24" in message
-    assert "GuideLLM: line-24" in caplog.text
+    tail = message.split("Last subprocess output (stdout/stderr):\n", 1)[1]
+    assert tail.splitlines() == [f"line-{index}" for index in range(5, 45)]
+    assert "GuideLLM: line-44" in caplog.text
     assert popen_kwargs["stderr"] is subprocess_utils.subprocess.STDOUT
 
 
@@ -48,6 +47,8 @@ def test_failure_redacts_known_and_labeled_credentials(monkeypatch, caplog):
     output = (
         "api_key=known-secret\n"
         "Authorization: Bearer bearer-secret\n"
+        "Authorization: Basic basic-secret\n"
+        "Authorization: Token token-secret\n"
         "request failed at https://example.test/?access_token=url-secret\n"
         '{"api_key": "quoted secret with spaces"}\n'
     )
@@ -67,6 +68,8 @@ def test_failure_redacts_known_and_labeled_credentials(monkeypatch, caplog):
     for secret in (
         "known-secret",
         "bearer-secret",
+        "basic-secret",
+        "token-secret",
         "url-secret",
         "quoted secret with spaces",
     ):

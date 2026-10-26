@@ -8,13 +8,13 @@ import subprocess
 from collections import deque
 from collections.abc import Iterable, Mapping
 
-_MAX_OUTPUT_LINES = 20
+_MAX_OUTPUT_LINES = 40
 _MAX_ERROR_OUTPUT_CHARS = 4_000
 
 _CREDENTIAL_ASSIGNMENT_RE = re.compile(
     r"(?i)([\"']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|"
     r"authorization|password|secret)[\"']?\s*[:=]\s*)"
-    r"(\"[^\"]*\"|'[^']*'|(?:bearer\s+)?[^\s,;{}]+)"
+    r"(\"[^\"]*\"|'[^']*'|(?:(?:bearer|basic|token)\s+)?[^\s,;{}]+)"
 )
 _URL_CREDENTIAL_RE = re.compile(
     r"(?i)([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|password)=)"
