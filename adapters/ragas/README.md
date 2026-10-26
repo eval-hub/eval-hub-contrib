@@ -47,6 +47,24 @@ Key `parameters` parameters:
 - `column_map`: Map dataset columns to RAGAS names
 - `data_path`: Explicit path to dataset file
 
+### Using a separate embedding model
+
+Both RAG suites include metrics that call `/v1/embeddings`. When the evaluated
+model serves only chat completions, configure an embedding model and its
+OpenAI-compatible base URL explicitly:
+
+```yaml
+parameters:
+  embedding_model: granite-embedding
+  embedding_url: http://granite-embedding:8080/v1
+```
+
+Use the model ID and service URL from your deployment. The adapter honors this
+endpoint even when the evaluated model uses EvalHub's local sidecar. A separate
+embedding endpoint uses `OPENAI_API_KEY` from the adapter's runtime environment,
+or a dummy key for unauthenticated services; it does not receive the evaluated
+model's mounted credentials. Inject any required key through a Secret.
+
 ### Using a separate judge model
 
 RAGAS metrics such as `answer_relevancy` and `answer_correctness` request

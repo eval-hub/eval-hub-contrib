@@ -187,6 +187,102 @@ def test_separate_judge_is_used_for_llm_metrics(monkeypatch, tmp_path):
     assert results.evaluation_metadata["judge_url"] == "https://api.openai.com/v1"
 
 
+@pytest.mark.parametrize(
+    "embedding_url, expected_url, use_model_credentials",
+    [
+        ("http://granite-embedding:8080/v1/", "http://granite-embedding:8080/v1", False),
+        ("http://127.0.0.1:8001/v1", "http://127.0.0.1:8001/v1", False),
+        ("http://localhost:8082/v1/", "http://localhost:8082/v1", True),
+        (None, "http://localhost:8082/v1", True),
+    ],
+)
+def test_embedding_endpoint_routing(
+    monkeypatch, tmp_path, embedding_url, expected_url, use_model_credentials
+):
+    adapter = RagasAdapter(job_spec_path="meta/job.json")
+    adapter.job_spec.model.url = "http://localhost:8082/v1"
+    adapter.job_spec.parameters["embedding_model"] = "granite-embedding"
+    adapter.job_spec.parameters["embedding_url"] = embedding_url
+    callbacks = create_autospec(JobCallbacks)
+    create_embeddings = MagicMock(return_value=object())
+    monkeypatch.setattr("main._create_ragas_llm", lambda *args, **kwargs: object())
+    monkeypatch.setattr("main._create_ragas_embeddings", create_embeddings)
+    monkeypatch.setattr(
+        adapter,
+        "_run_ragas",
+        lambda **kwargs: _make_mock_ragas_result(["answer_relevancy"], n_rows=1),
+    )
+    dataset_file = tmp_path / "dataset.jsonl"
+    dataset_file.write_text(
+        '{"user_input":"What is AI?","response":"Artificial Intelligence",'
+        '"retrieved_contexts":["AI is..."],"reference":"AI stands for..."}\n'
+    )
+    monkeypatch.setattr("main._resolve_data_path", lambda config: dataset_file)
+
+    adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    assert create_embeddings.call_args.args == (expected_url, "granite-embedding")
+    assert create_embeddings.call_args.kwargs["use_model_credentials"] is use_model_credentials
+
+
+def test_separate_embeddings_do_not_use_model_credentials(monkeypatch):
+    from main import _create_ragas_embeddings
+
+    monkeypatch.setenv("OPENAI_API_KEY", "embedding-key")
+
+    def fail_if_called():
+        raise AssertionError("embedding endpoint must not receive chat credentials")
+
+    monkeypatch.setattr("main.resolve_model_credentials", fail_if_called)
+    factory = MagicMock()
+    monkeypatch.setattr("ragas.embeddings.base.embedding_factory", factory)
+
+    _create_ragas_embeddings(
+        "http://granite-embedding:8080/v1",
+        "granite-embedding",
+        use_model_credentials=False,
+    )
+
+    client = factory.call_args.kwargs["client"]
+    assert str(client.base_url) == "http://granite-embedding:8080/v1/"
+    assert client.api_key == "embedding-key"
+
+
+def test_http_failure_reports_request_url_without_credentials(monkeypatch, tmp_path):
+    import httpx
+    from openai import NotFoundError
+    from evalhub.adapter import JobStatus
+
+    adapter = RagasAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+    monkeypatch.setattr("main._create_ragas_llm", lambda *args, **kwargs: object())
+    monkeypatch.setattr("main._create_ragas_embeddings", lambda *args, **kwargs: object())
+    dataset_file = tmp_path / "dataset.jsonl"
+    dataset_file.write_text('{"user_input":"hello"}\n')
+    monkeypatch.setattr("main._resolve_data_path", lambda config: dataset_file)
+    error = NotFoundError(
+        "Not Found",
+        response=httpx.Response(
+            404,
+            request=httpx.Request(
+                "POST", "https://user:password@chat.example/v1/embeddings?api_key=secret#fragment"
+            ),
+        ),
+        body={"detail": "Not Found"},
+    )
+    monkeypatch.setattr(adapter, "_run_ragas", MagicMock(side_effect=error))
+
+    with pytest.raises(NotFoundError) as raised:
+        adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    assert raised.value is error
+    status = callbacks.report_status.call_args.args[0]
+    assert status.status == JobStatus.FAILED
+    assert "POST https://chat.example/v1/embeddings" in status.error_message.message
+    for sensitive in ("user", "password", "api_key", "secret", "fragment"):
+        assert sensitive not in status.error_message.message
+
+
 @pytest.mark.integration
 def test_run_collections_evaluation_builds_metric_columns():
     """Collections evaluation should score each row via abatch_score()."""

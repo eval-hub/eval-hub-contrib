@@ -31,7 +31,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlparse
 
 from evalhub.adapter import (
     EvaluationResult,
@@ -50,7 +49,7 @@ from ragas import EvaluationDataset
 from ragas.run_config import RunConfig
 
 try:
-    from openai import AsyncOpenAI, DefaultAsyncHttpxClient
+    from openai import APIStatusError, AsyncOpenAI, DefaultAsyncHttpxClient
 
     _HAS_OPENAI = True
 except ImportError:
@@ -228,9 +227,8 @@ def _openai_credentials(
         creds = resolve_model_credentials()
         api_key = creds.api_key
     else:
-        # A separate judge endpoint must not attempt to use the evaluated
-        # model's mounted credential. External endpoints use an explicit
-        # judge_api_key or OPENAI_API_KEY instead.
+        # Separate judge/embedding endpoints must not receive the evaluated
+        # model's mounted credential. Use an explicit key or OPENAI_API_KEY.
         api_key = os.getenv("OPENAI_API_KEY")
     return url, api_key or "DUMMY"
 
@@ -297,11 +295,12 @@ def _create_ragas_embeddings(
     model_id: str,
     *,
     run_config: RunConfig | None = None,
+    use_model_credentials: bool = True,
 ) -> Any:
     """Build embeddings for ragas.metrics.collections via embedding_factory."""
     from ragas.embeddings.base import embedding_factory
 
-    client = _async_openai_client(base_url)
+    client = _async_openai_client(base_url, use_model_credentials=use_model_credentials)
     return embedding_factory(
         "openai",
         model=model_id,
@@ -444,27 +443,8 @@ class RagasAdapter(FrameworkAdapter):
             judge_api_key = bc.get("judge_api_key")
             judge_uses_model_credentials = judge_url == model_url
             embedding_model = bc.get("embedding_model") or model_name
-            embedding_url = bc.get("embedding_url") or model_url
-
-            # In k8s mode the service rewrites model.url to the local credential-
-            # injection sidecar (http://localhost:…).  If a caller also supplies an
-            # explicit embedding_url that points at an external host, the embedding
-            # calls would bypass the sidecar and reach the model endpoint with the
-            # unresolved "api-key:ref" ref token, causing a 401.  Detect this and
-            # fall back to the sidecar URL so both LLM and embedding calls share the
-            # same credential-injection path.
-            _sidecar_hosts = {"localhost", "127.0.0.1", "::1"}
-            _model_is_local = urlparse(model_url).hostname in _sidecar_hosts
-            _embed_is_external = urlparse(embedding_url).hostname not in _sidecar_hosts
-            if _model_is_local and _embed_is_external and embedding_url != model_url:
-                logger.warning(
-                    "embedding_url %r is external but model.url points to the local "
-                    "sidecar (%r); falling back to the sidecar URL for embeddings so "
-                    "that credential injection applies to both LLM and embedding calls.",
-                    embedding_url,
-                    model_url,
-                )
-                embedding_url = model_url
+            embedding_url = (bc.get("embedding_url") or model_url).strip().rstrip("/")
+            embedding_uses_model_credentials = embedding_url == model_url
 
             max_workers = min(max(int(bc.get("max_workers") or 1), 1), 10)
             run_config = RunConfig(max_workers=max_workers)
@@ -480,6 +460,7 @@ class RagasAdapter(FrameworkAdapter):
                 embedding_url,
                 embedding_model,
                 run_config=run_config,
+                use_model_credentials=embedding_uses_model_credentials,
             )
 
             callbacks.report_status(
@@ -594,12 +575,17 @@ class RagasAdapter(FrameworkAdapter):
             )
 
         except Exception as e:
-            logger.exception("RAGAS EvalHub job %s failed", config.id)
+            error_message = str(e)
+            if _HAS_OPENAI and isinstance(e, APIStatusError):
+                request = e.request
+                url = request.url.copy_with(username=None, password=None, query=None, fragment=None)
+                error_message = f"{error_message} ({request.method} {url})"
+            logger.exception("RAGAS EvalHub job %s failed: %s", config.id, error_message)
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
                     error_message=MessageInfo(
-                        message=str(e),
+                        message=error_message,
                         message_code="job_failed",
                     ),
                 )
