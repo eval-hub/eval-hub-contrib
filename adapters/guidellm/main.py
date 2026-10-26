@@ -48,6 +48,53 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Selectable benchmark presets. The first two are the user-facing
+# "Quick performance" and "Full performance" benchmarks; the aliases keep
+# jobs submitted with the older descriptive ids working.
+QUICK_BENCHMARK_ID = "quick_perf_test"
+FULL_BENCHMARK_ID = "comprehensive_perf_test"
+BENCHMARK_ALIASES = {
+    "performance_quick": QUICK_BENCHMARK_ID,
+    "performance_full": FULL_BENCHMARK_ID,
+}
+
+FULL_PROFILES = ("sweep", "throughput", "concurrent", "constant", "poisson")
+
+# Preset defaults are only applied when the submitted job does not set the
+# key itself. `num_examples` always takes precedence over a preset
+# `max_requests` bound.
+BENCHMARK_PRESETS: Dict[str, Dict[str, Any]] = {
+    QUICK_BENCHMARK_ID: {
+        "profile": "sweep",
+        "max_seconds": 30,
+        "max_requests": 100,
+        "data": "prompt_tokens=256,output_tokens=128",
+        "request_type": "chat_completions",
+        "detect_saturation": False,
+    },
+    FULL_BENCHMARK_ID: {
+        "profiles": list(FULL_PROFILES),
+        "max_seconds": 60,
+        "max_requests": 300,
+        "data": "prompt_tokens=256,output_tokens=128",
+        "request_type": "chat_completions",
+        "detect_saturation": False,
+        # Profiles whose rate has no sensible automatic default get one
+        # here. A rate supplied by the job overrides all of them.
+        "profile_parameters": {
+            "concurrent": {"rate": 10},
+            "constant": {"rate": 5},
+            "poisson": {"rate": 5},
+        },
+    },
+}
+
+
+def _benchmark_preset(benchmark_id: Optional[str]) -> Dict[str, Any]:
+    """Return the preset for a benchmark id, resolving supported aliases."""
+    resolved_id = BENCHMARK_ALIASES.get(benchmark_id or "", benchmark_id or "")
+    return BENCHMARK_PRESETS.get(resolved_id, {})
+
 
 class GuideLLMAdapter(FrameworkAdapter):
     """
@@ -62,6 +109,24 @@ class GuideLLMAdapter(FrameworkAdapter):
 
     ALLOWED_OUTPUT_FORMATS = frozenset({"json", "csv", "html", "yaml"})
     DEFAULT_OUTPUTS = "json,csv,html,yaml"
+
+    SUPPORTED_PROFILES = (
+        "sweep",
+        "throughput",
+        "concurrent",
+        "constant",
+        "poisson",
+        "synchronous",
+        "async",
+    )
+    # Metrics reported by the adapter, in report order, with their type.
+    REPORTED_METRICS = (
+        ("requests_per_second", "throughput"),
+        ("prompt_tokens_per_second", "throughput"),
+        ("output_tokens_per_second", "throughput"),
+        ("mean_ttft_ms", "latency"),
+        ("mean_itl_ms", "latency"),
+    )
 
     def __init__(self, job_spec_path: Optional[str] = None):
         """Initialize the GuideLLM adapter.
@@ -106,81 +171,69 @@ class GuideLLMAdapter(FrameworkAdapter):
             self.results_dir = Path(tempfile.mkdtemp(prefix="guidellm_results_"))
             logger.info(f"Results directory: {self.results_dir}")
 
-            # Build GuideLLM command
+            run_profiles = self._resolve_run_profiles(config)
+            multi_profile = len(run_profiles) > 1
+            logger.info(
+                "Benchmark %s resolved to profile(s): %s",
+                config.benchmark_id,
+                ", ".join(run_profiles),
+            )
+
             callbacks.report_status(
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
             )
-            cmd = self._build_guidellm_command(config)
-            logger.info(f"Running command: {' '.join(cmd)}")
 
-            # Execute GuideLLM
-            callbacks.report_status(
-                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
-            )
-            self._run_guidellm(cmd)
+            profile_metrics: Dict[str, Dict[str, Any]] = {}
+            total_profiles = len(run_profiles)
+            for index, profile in enumerate(run_profiles, start=1):
+                parameters = self._parameters_for_profile(config, profile)
+                output_dir = (
+                    self.results_dir / profile if multi_profile else self.results_dir
+                )
+                output_dir.mkdir(parents=True, exist_ok=True)
 
-            # Parse results
+                callbacks.report_status(
+                    JobStatusUpdate(
+                        status=JobStatus.RUNNING,
+                        phase=JobPhase.RUNNING_EVALUATION,
+                        progress=(index - 1) / total_profiles,
+                        current_step=f"profile {profile} ({index}/{total_profiles})",
+                        total_steps=total_profiles,
+                        completed_steps=index - 1,
+                    )
+                )
+
+                cmd = self._build_guidellm_command(
+                    config, parameters=parameters, output_dir=output_dir
+                )
+                logger.info(f"Running command: {' '.join(cmd)}")
+                self._run_guidellm(cmd)
+                profile_metrics[profile] = self._parse_results(config, output_dir)
+
             callbacks.report_status(
-                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
+                JobStatusUpdate(
+                    status=JobStatus.RUNNING,
+                    phase=JobPhase.POST_PROCESSING,
+                    progress=1.0,
+                    current_step="aggregating results",
+                    total_steps=total_profiles,
+                    completed_steps=total_profiles,
+                )
             )
-            results_data = self._parse_results(config)
+
+            aggregate_metrics = self._aggregate_metrics(profile_metrics)
 
             # Use the server-configured primary metric when available,
             # falling back to requests_per_second for backward compatibility.
             ps = getattr(config, "primary_score", None)
             ps_metric = ps.metric if ps else None
-            overall_score = results_data.get(ps_metric or "requests_per_second")
+            overall_score = aggregate_metrics.get(
+                ps_metric or "requests_per_second"
+            )
 
-            # Create evaluation results with performance metrics
-            evaluation_results = []
-
-            # Add requests per second metric
-            if "requests_per_second" in results_data:
-                evaluation_results.append(
-                    EvaluationResult(
-                        metric_name="requests_per_second",
-                        metric_value=results_data["requests_per_second"],
-                        metric_type="throughput",
-                    )
-                )
-
-            # Add token throughput metrics
-            if "prompt_tokens_per_second" in results_data:
-                evaluation_results.append(
-                    EvaluationResult(
-                        metric_name="prompt_tokens_per_second",
-                        metric_value=results_data["prompt_tokens_per_second"],
-                        metric_type="throughput",
-                    )
-                )
-
-            if "output_tokens_per_second" in results_data:
-                evaluation_results.append(
-                    EvaluationResult(
-                        metric_name="output_tokens_per_second",
-                        metric_value=results_data["output_tokens_per_second"],
-                        metric_type="throughput",
-                    )
-                )
-
-            # Add latency metrics
-            if "mean_ttft_ms" in results_data:
-                evaluation_results.append(
-                    EvaluationResult(
-                        metric_name="mean_ttft_ms",
-                        metric_value=results_data["mean_ttft_ms"],
-                        metric_type="latency",
-                    )
-                )
-
-            if "mean_itl_ms" in results_data:
-                evaluation_results.append(
-                    EvaluationResult(
-                        metric_name="mean_itl_ms",
-                        metric_value=results_data["mean_itl_ms"],
-                        metric_type="latency",
-                    )
-                )
+            evaluation_results = self._build_evaluation_results(
+                profile_metrics, aggregate_metrics
+            )
 
             # Compute duration
             duration = time.time() - start_time
@@ -193,13 +246,21 @@ class GuideLLMAdapter(FrameworkAdapter):
                 model_name=config.model.name,
                 results=evaluation_results,
                 overall_score=overall_score,
-                num_examples_evaluated=results_data.get("total_requests", 0),
+                num_examples_evaluated=sum(
+                    metrics.get("total_requests", 0)
+                    for metrics in profile_metrics.values()
+                ),
                 duration_seconds=duration,
                 completed_at=datetime.now(UTC),
                 evaluation_metadata={
                     "framework": "guidellm",
-                    "profile": config.parameters.get("profile", "sweep"),
-                    "request_type": config.parameters.get("request_type", "chat_completions"),
+                    "benchmark_preset": config.benchmark_id,
+                    "profile": run_profiles[0],
+                    "profiles": run_profiles,
+                    "profile_metrics": profile_metrics,
+                    "request_type": config.parameters.get(
+                        "request_type", "chat_completions"
+                    ),
                 },
             )
 
@@ -225,6 +286,143 @@ class GuideLLMAdapter(FrameworkAdapter):
             )
             raise
 
+    def _resolve_run_profiles(self, job_spec: JobSpec) -> List[str]:
+        """Resolve which GuideLLM traffic profile(s) this job should run.
+
+        Explicit ``profiles`` (or a single ``profile``) in the submitted
+        parameters always win. Otherwise the benchmark preset decides: Quick
+        runs one bounded sweep, Full runs every traffic profile in sequence.
+        Unknown benchmark ids keep the historical single-profile behaviour.
+        """
+        parameters = job_spec.parameters or {}
+        preset = _benchmark_preset(job_spec.benchmark_id)
+
+        profiles = parameters.get("profiles")
+        if profiles:
+            if isinstance(profiles, str):
+                profiles = [part.strip() for part in profiles.split(",") if part.strip()]
+            resolved = list(profiles)
+            self._validate_profiles(resolved)
+            return resolved
+
+        profile = parameters.get("profile")
+        if profile:
+            self._validate_profiles([profile])
+            return [profile]
+
+        if preset.get("profiles"):
+            return list(preset["profiles"])
+        return [preset.get("profile", "sweep")]
+
+    def _validate_profiles(self, profiles: List[str]) -> None:
+        for profile in profiles:
+            if profile not in self.SUPPORTED_PROFILES:
+                supported = ", ".join(self.SUPPORTED_PROFILES)
+                raise ValueError(
+                    f"Unsupported GuideLLM profile '{profile}'. "
+                    f"Supported profiles: {supported}"
+                )
+
+    def _parameters_for_profile(
+        self, job_spec: JobSpec, profile: str
+    ) -> Dict[str, Any]:
+        """Merge submitted parameters with the benchmark preset for one profile.
+
+        Submitted values always win. ``num_examples`` takes precedence over a
+        preset ``max_requests`` bound, matching the adapter's long-standing
+        num_examples/max_requests contract.
+        """
+        parameters = dict(job_spec.parameters or {})
+        parameters.pop("profiles", None)
+        parameters.pop("profile", None)
+
+        preset = _benchmark_preset(job_spec.benchmark_id)
+        for key, value in preset.items():
+            if key in ("profiles", "profile_parameters"):
+                continue
+            if key == "max_requests" and job_spec.num_examples is not None:
+                continue
+            parameters.setdefault(key, value)
+
+        for key, value in (
+            (preset.get("profile_parameters") or {}).get(profile, {}).items()
+        ):
+            parameters.setdefault(key, value)
+
+        parameters["profile"] = profile
+        return parameters
+
+    @staticmethod
+    def _aggregate_metrics(
+        profile_metrics: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Average the reported metrics across every profile that produced them."""
+        aggregate: Dict[str, Any] = {}
+        for metric_name, _ in GuideLLMAdapter.REPORTED_METRICS:
+            values = [
+                metrics[metric_name]
+                for metrics in profile_metrics.values()
+                if isinstance(metrics.get(metric_name), (int, float))
+            ]
+            if values:
+                aggregate[metric_name] = sum(values) / len(values)
+        return aggregate
+
+    @staticmethod
+    def _build_evaluation_results(
+        profile_metrics: Dict[str, Dict[str, Any]],
+        aggregate_metrics: Dict[str, Any],
+    ) -> List[EvaluationResult]:
+        """Build the result rows for a single- or multi-profile run.
+
+        A single-profile run reports the plain metric names, unchanged from
+        earlier adapter versions. A multi-profile run reports every profile's
+        metrics prefixed with the profile name (``sweep_requests_per_second``)
+        plus the cross-profile average under the plain metric name so server
+        primary-score and pass-criteria definitions still apply.
+        """
+        metric_types = dict(GuideLLMAdapter.REPORTED_METRICS)
+        results: List[EvaluationResult] = []
+
+        if len(profile_metrics) == 1:
+            profile, metrics = next(iter(profile_metrics.items()))
+            for metric_name, metric_type in GuideLLMAdapter.REPORTED_METRICS:
+                if metric_name in metrics:
+                    results.append(
+                        EvaluationResult(
+                            metric_name=metric_name,
+                            metric_value=metrics[metric_name],
+                            metric_type=metric_type,
+                            metadata={"profile": profile, "aggregate": False},
+                        )
+                    )
+            return results
+
+        for profile, metrics in profile_metrics.items():
+            for metric_name, metric_type in GuideLLMAdapter.REPORTED_METRICS:
+                if metric_name in metrics:
+                    results.append(
+                        EvaluationResult(
+                            metric_name=f"{profile}_{metric_name}",
+                            metric_value=metrics[metric_name],
+                            metric_type=metric_type,
+                            metadata={"profile": profile, "aggregate": False},
+                        )
+                    )
+
+        profiles = list(profile_metrics)
+        for metric_name, metric_type in GuideLLMAdapter.REPORTED_METRICS:
+            if metric_name in aggregate_metrics:
+                results.append(
+                    EvaluationResult(
+                        metric_name=metric_name,
+                        metric_value=aggregate_metrics[metric_name],
+                        metric_type=metric_types[metric_name],
+                        metadata={"aggregate": True, "profiles": profiles},
+                    )
+                )
+        return results
+
     @staticmethod
     def _validate_outputs(outputs: str) -> str:
         """Validate and normalize comma-separated GuideLLM output format aliases."""
@@ -244,17 +442,26 @@ class GuideLLMAdapter(FrameworkAdapter):
 
         return ",".join(normalized)
 
-    def _build_guidellm_command(self, job_spec: JobSpec) -> List[str]:
+    def _build_guidellm_command(
+        self,
+        job_spec: JobSpec,
+        parameters: Optional[Dict[str, Any]] = None,
+        output_dir: Optional[Path] = None,
+    ) -> List[str]:
         """
         Build the GuideLLM CLI command from job specification.
 
         Args:
             job_spec: The benchmark job specification
+            parameters: Resolved parameters for this run. Defaults to the
+                job spec's own parameters.
+            output_dir: Directory to write this run's output to. Defaults to
+                the adapter results directory.
 
         Returns:
             List of command arguments for subprocess execution
         """
-        config = job_spec.parameters
+        config = parameters if parameters is not None else job_spec.parameters
         model = job_spec.model
 
         # Base command
@@ -262,7 +469,7 @@ class GuideLLMAdapter(FrameworkAdapter):
             "guidellm",
             "benchmark",
             "--target", model.url,
-            "--output-path", str(self.results_dir),
+            "--output-path", str(output_dir or self.results_dir),
         ]
 
         # Execution profile
@@ -424,7 +631,9 @@ class GuideLLMAdapter(FrameworkAdapter):
             logger.error(f"Failed to execute GuideLLM: {e}")
             raise
 
-    def _parse_results(self, job_spec: JobSpec) -> Dict[str, Any]:
+    def _parse_results(
+        self, job_spec: JobSpec, output_dir: Optional[Path] = None
+    ) -> Dict[str, Any]:
         """
         Parse GuideLLM results from output files.
 
@@ -436,6 +645,8 @@ class GuideLLMAdapter(FrameworkAdapter):
 
         Args:
             job_spec: The benchmark job specification
+            output_dir: Directory holding this run's output. Defaults to the
+                adapter results directory.
 
         Returns:
             Dictionary of metrics in standardized format
@@ -443,7 +654,7 @@ class GuideLLMAdapter(FrameworkAdapter):
         if not self.results_dir:
             raise RuntimeError("Results directory not initialized")
 
-        results_file = self.results_dir / "benchmarks.json"
+        results_file = (output_dir or self.results_dir) / "benchmarks.json"
 
         if not results_file.exists():
             raise FileNotFoundError(f"Results file not found: {results_file}")
@@ -534,8 +745,8 @@ class GuideLLMAdapter(FrameworkAdapter):
             logger.warning("No results directory available for artifact reporting")
             return None
 
-        # Collect all output files
-        output_files = list(self.results_dir.glob("benchmarks.*"))
+        # Collect all output files (per-profile runs write into subdirectories)
+        output_files = list(self.results_dir.rglob("benchmarks.*"))
         self.mlflow_artifacts = [
             MlflowFileArtifact(file.relative_to(self.results_dir).as_posix(), file)
             for file in sorted(self.results_dir.rglob("*")) if file.is_file()
