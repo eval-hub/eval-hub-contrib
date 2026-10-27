@@ -24,6 +24,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Essay haystacks need English sentence tokenization. Provision both formats
+# for the supported NLTK versions; runtime pods must not need NLTK downloads.
+# Keep data outside HOME (/tmp) and readable by OpenShift's arbitrary UID.
+ENV NLTK_DATA=/usr/local/share/nltk_data
+RUN python -c "import nltk; [nltk.download(resource, download_dir='/usr/local/share/nltk_data', raise_on_error=True) for resource in ('punkt', 'punkt_tab')]; nltk.sent_tokenize('First sentence. Second sentence.')" && \
+    chmod -R a+rX /usr/local/share/nltk_data
+
 # Copy application files
 COPY scripts ./scripts
 COPY prepare_assets.py DATA_LICENSES.md ./

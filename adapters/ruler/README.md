@@ -96,12 +96,23 @@ Set `model.url` in the JobSpec to the `/v1` endpoint and `model.name` to the mod
 cd adapters/ruler
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-test.txt
 
+# Provision sentence tokenizer data for real essay-generation tests
+export NLTK_DATA="$PWD/.venv/nltk_data"
+.venv/bin/python -m nltk.downloader -d "$NLTK_DATA" punkt punkt_tab
+
 # Run tests
 .venv/bin/pytest tests/ -v
 
 # Run a single test file
 .venv/bin/pytest tests/test_task_config.py -v
 ```
+
+From the repository root, `make test-ruler` installs dependencies and NLTK data
+and runs the suite, including real `niah_single_2` generation at 4096 tokens
+with a local Hugging Face tokenizer and a deterministic prose fixture.
+The image includes `punkt` and `punkt_tab` under `/usr/local/share/nltk_data`,
+readable by arbitrary runtime UIDs; essay sentence tokenization needs no
+runtime download or PyTorch installation.
 
 ## Building the Container Image
 

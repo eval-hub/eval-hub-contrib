@@ -430,7 +430,8 @@ test-ruler:
 	cd adapters/ruler && \
 	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
-	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	.venv/bin/python -m nltk.downloader -d .venv/nltk_data punkt punkt_tab && \
+	NLTK_DATA="$$(pwd)/.venv/nltk_data" PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ RULER tests passed"
 
 .PHONY: image-nemo-guardrails
