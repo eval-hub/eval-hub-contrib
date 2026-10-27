@@ -22,6 +22,7 @@ talk to model endpoints.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import logging
 import runpy
@@ -54,6 +55,63 @@ _HF_TASK_PREFIXES = ("inspect_evals/", "evals/")
 # Task-spec substrings that download from GitHub (not HuggingFace) even when
 # the spec falls under an _HF_TASK_PREFIXES namespace.
 _GITHUB_ONLY_TASKS = frozenset({"bfcl"})
+
+# Source files required by the BFCL categories in the pinned inspect-evals release.
+# Keep these aligned with inspect_evals.bfcl.backends.loader.CLASS_FILE_MAPPING and
+# inspect_evals.bfcl.data.MULTI_TURN_FUNC_DOC_FILE_MAPPING.
+_BFCL_MULTI_TURN_ASSETS = {
+    "func_source_code": frozenset(
+        {
+            "gorilla_file_system.py",
+            "math_api.py",
+            "message_api.py",
+            "posting_api.py",
+            "ticket_api.py",
+            "trading_bot.py",
+            "travel_booking.py",
+            "vehicle_control.py",
+            "long_context.py",
+        }
+    ),
+    "multi_turn_func_doc": frozenset(
+        {
+            "gorilla_file_system.json",
+            "math_api.json",
+            "message_api.json",
+            "posting_api.json",
+            "ticket_api.json",
+            "trading_bot.json",
+            "travel_booking.json",
+            "vehicle_control.json",
+        }
+    ),
+}
+_BFCL_AGENTIC_ASSETS = {
+    "web_search_base": (
+        frozenset({"web_search.py"}),
+        frozenset({"web_search.json"}),
+    ),
+    "web_search_no_snippet": (
+        frozenset({"web_search.py"}),
+        frozenset({"web_search.json"}),
+    ),
+    "memory_kv": (
+        frozenset({"memory_kv.py", "memory_api_metaclass.py"}),
+        frozenset({"memory_kv.json"}),
+    ),
+    "memory_vector": (
+        frozenset({"memory_vector.py", "memory_api_metaclass.py"}),
+        frozenset({"memory_vector.json"}),
+    ),
+    "memory_rec_sum": (
+        frozenset({"memory_rec_sum.py", "memory_api_metaclass.py"}),
+        frozenset({"memory_rec_sum.json"}),
+    ),
+}
+_BFCL_CATEGORY_ALIASES = {
+    "memory": ("memory_kv", "memory_vector", "memory_rec_sum"),
+    "web_search": ("web_search_base", "web_search_no_snippet"),
+}
 
 
 class PreflightError(RuntimeError):
@@ -114,8 +172,82 @@ def _bfcl_category_manifest() -> dict[str, Any] | None:
         return None
 
 
-def _bfcl_data_present(env: dict[str, str]) -> bool:
-    """Return True when the BFCL data and function sources needed offline are staged."""
+def _bfcl_selected_categories(
+    task_args: dict[str, Any] | None, categories: dict[str, Any]
+) -> set[str] | None:
+    """Resolve the selected BFCL categories, or return None when they are unknown."""
+    requested = (task_args or {}).get("categories")
+    if requested is None:
+        # inspect-evals 0.26.0 defaults to V1/V2/V3 categories (excluding the
+        # unimplemented REST category and format_sensitivity meta-index).
+        defaults = {
+            name
+            for name, category in categories.items()
+            if getattr(category, "category_version", None) in {"v1", "v2", "v3"}
+            and name not in {"rest", "format_sensitivity"}
+        }
+        return defaults or None
+
+    if isinstance(requested, str):
+        try:
+            parsed = ast.literal_eval(requested)
+        except (SyntaxError, ValueError):
+            parsed = requested
+        if isinstance(parsed, str):
+            names = [part.strip() for part in parsed.split(",") if part.strip()]
+        elif isinstance(parsed, (list, tuple, set)):
+            names = [str(part).strip() for part in parsed if str(part).strip()]
+        else:
+            return None
+    elif isinstance(requested, (list, tuple, set)):
+        names = [str(part).strip() for part in requested if str(part).strip()]
+    else:
+        return None
+
+    if not names:
+        return None
+    selected: set[str] = set()
+    for name in names:
+        selected.update(_BFCL_CATEGORY_ALIASES.get(name, (name,)))
+    if not selected.issubset(categories):
+        # An unknown category should never make a partial cache look complete.
+        return None
+    return selected
+
+
+def _bfcl_required_runtime_assets(
+    selected_categories: set[str] | None,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Return backend modules and function docs used by the selected categories."""
+    if selected_categories is None:
+        return (
+            frozenset().union(
+                _BFCL_MULTI_TURN_ASSETS["func_source_code"],
+                *(assets[0] for assets in _BFCL_AGENTIC_ASSETS.values()),
+            ),
+            frozenset().union(
+                _BFCL_MULTI_TURN_ASSETS["multi_turn_func_doc"],
+                *(assets[1] for assets in _BFCL_AGENTIC_ASSETS.values()),
+            ),
+        )
+
+    modules: set[str] = set()
+    docs: set[str] = set()
+    for category in selected_categories:
+        if category.startswith("multi_turn_"):
+            modules.update(_BFCL_MULTI_TURN_ASSETS["func_source_code"])
+            docs.update(_BFCL_MULTI_TURN_ASSETS["multi_turn_func_doc"])
+        elif category in _BFCL_AGENTIC_ASSETS:
+            category_modules, category_docs = _BFCL_AGENTIC_ASSETS[category]
+            modules.update(category_modules)
+            docs.update(category_docs)
+    return frozenset(modules), frozenset(docs)
+
+
+def _bfcl_data_present(
+    env: dict[str, str], task_args: dict[str, Any] | None = None
+) -> bool:
+    """Return True when the selected BFCL data and runtime assets are staged."""
     cache = env.get(INSPECT_EVALS_CACHE_DIR_ENV)
     if not cache:
         return False
@@ -134,12 +266,19 @@ def _bfcl_data_present(env: dict[str, str]) -> bool:
         ).is_file():
             return False
 
-    # BFCL categories that execute functions also load this GitHub-hosted tree.
+    selected_categories = _bfcl_selected_categories(task_args, categories)
+    required_modules, required_docs = _bfcl_required_runtime_assets(selected_categories)
+    if not required_modules:
+        return True
+
     function_sources = bfcl_dir / "func_source_code"
+    function_docs = bfcl_dir / "multi_turn_func_doc"
     try:
         return (
             function_sources.is_dir()
-            and next(function_sources.iterdir(), None) is not None
+            and function_docs.is_dir()
+            and all((function_sources / name).is_file() for name in required_modules)
+            and all((function_docs / name).is_file() for name in required_docs)
         )
     except OSError:
         return False
@@ -149,14 +288,15 @@ def configure_staged_bfcl_cache(
     task_spec: str,
     env: dict[str, str],
     staged_data_dir: str | Path = "/test_data",
+    task_args: dict[str, Any] | None = None,
 ) -> bool:
     """Point Inspect-Evals at staged BFCL assets when the offline cache is complete."""
-    if "bfcl" not in task_spec.lower() or _bfcl_data_present(env):
+    if "bfcl" not in task_spec.lower() or _bfcl_data_present(env, task_args):
         return False
 
     staged_env = dict(env)
     staged_env[INSPECT_EVALS_CACHE_DIR_ENV] = str(staged_data_dir)
-    if not _bfcl_data_present(staged_env):
+    if not _bfcl_data_present(staged_env, task_args):
         return False
 
     env[INSPECT_EVALS_CACHE_DIR_ENV] = str(staged_data_dir)
@@ -167,7 +307,9 @@ def configure_staged_bfcl_cache(
     return True
 
 
-def required_urls(task_spec: str, env: dict[str, str]) -> list[str]:
+def required_urls(
+    task_spec: str, env: dict[str, str], task_args: dict[str, Any] | None = None
+) -> list[str]:
     """URLs the task is known to need at runtime, plus any user-supplied hosts."""
     urls: list[str] = []
     if not task_spec.startswith(_NO_PROBE_PREFIXES):
@@ -177,7 +319,7 @@ def required_urls(task_spec: str, env: dict[str, str]) -> list[str]:
         )
         if is_hf_task and not hub_offline:
             urls.append(env.get("HF_ENDPOINT") or DEFAULT_HF_ENDPOINT)
-        if "bfcl" in task_spec.lower() and not _bfcl_data_present(env):
+        if "bfcl" in task_spec.lower() and not _bfcl_data_present(env, task_args):
             urls.append("https://github.com")
     urls += normalize_hosts(env.get(HOSTS_ENV), HOSTS_ENV)
     return list(dict.fromkeys(urls))
@@ -228,14 +370,16 @@ def probe(url: str, timeout_s: float, env: dict[str, str]) -> tuple[bool, str, f
         return False, str(reason), elapsed
 
 
-def run_preflight(task_spec: str, env: dict[str, str]) -> None:
+def run_preflight(
+    task_spec: str, env: dict[str, str], task_args: dict[str, Any] | None = None
+) -> None:
     """Probe the hosts ``task_spec`` needs; raise :class:`PreflightError` in ``fail`` mode."""
     mode = normalize_mode(env.get(MODE_ENV) or DEFAULT_MODE, MODE_ENV)
     if mode == "off":
         logger.info("Pre-flight network check disabled (%s=off)", MODE_ENV)
         return
     timeout_s = normalize_timeout(env.get(TIMEOUT_ENV) or DEFAULT_TIMEOUT_S, TIMEOUT_ENV)
-    urls = required_urls(task_spec, env)
+    urls = required_urls(task_spec, env, task_args)
     if not urls:
         return
 

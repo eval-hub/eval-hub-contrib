@@ -121,12 +121,56 @@ _BFCL_TEST_CATEGORIES = {
         filename="BFCL_v4_simple_python.json",
         has_ground_truth_file=True,
         ground_truth_filename="possible_answer/BFCL_v4_simple_python.json",
+        category_version="v1",
+        is_multi_turn=False,
+        is_agentic=False,
     ),
     "irrelevance": SimpleNamespace(
         filename="BFCL_v4_irrelevance.json",
         has_ground_truth_file=False,
         ground_truth_filename="",
+        category_version="v1",
+        is_multi_turn=False,
+        is_agentic=False,
     ),
+    "multi_turn_base": SimpleNamespace(
+        filename="BFCL_v4_multi_turn_base.json",
+        has_ground_truth_file=True,
+        ground_truth_filename="possible_answer/BFCL_v4_multi_turn_base.json",
+        category_version="v3",
+        is_multi_turn=True,
+        is_agentic=False,
+    ),
+    "memory_kv": SimpleNamespace(
+        filename="BFCL_v4_memory.json",
+        has_ground_truth_file=True,
+        ground_truth_filename="possible_answer/BFCL_v4_memory.json",
+        category_version="v4",
+        is_multi_turn=False,
+        is_agentic=True,
+    ),
+}
+
+_TEST_MULTI_TURN_MODULES = {
+    "gorilla_file_system.py",
+    "math_api.py",
+    "message_api.py",
+    "posting_api.py",
+    "ticket_api.py",
+    "trading_bot.py",
+    "travel_booking.py",
+    "vehicle_control.py",
+    "long_context.py",
+}
+_TEST_MULTI_TURN_DOCS = {
+    "gorilla_file_system.json",
+    "math_api.json",
+    "message_api.json",
+    "posting_api.json",
+    "ticket_api.json",
+    "trading_bot.json",
+    "travel_booking.json",
+    "vehicle_control.json",
 }
 
 
@@ -159,8 +203,8 @@ def bfcl_category_manifest(monkeypatch):
     return _BFCL_TEST_CATEGORIES
 
 
-def _write_bfcl_assets(root, categories, *, include_function_sources=True):
-    """Create BFCL files for the test category manifest."""
+def _write_bfcl_assets(root, categories):
+    """Create the dataset files for the test category manifest."""
     bfcl = root / "BFCL"
     for category in categories.values():
         question_file = bfcl / category.filename
@@ -171,10 +215,17 @@ def _write_bfcl_assets(root, categories, *, include_function_sources=True):
             answer_file.parent.mkdir(parents=True, exist_ok=True)
             answer_file.write_text("{}")
 
-    if include_function_sources:
-        function_sources = bfcl / "func_source_code"
-        function_sources.mkdir(exist_ok=True)
-        (function_sources / "python.py").write_text("# staged source\n")
+
+def _write_bfcl_runtime_assets(root, modules, docs):
+    """Create selected backend modules and function-doc files for an offline test."""
+    function_sources = root / "BFCL" / "func_source_code"
+    function_docs = root / "BFCL" / "multi_turn_func_doc"
+    function_sources.mkdir(parents=True, exist_ok=True)
+    function_docs.mkdir(parents=True, exist_ok=True)
+    for name in modules:
+        (function_sources / name).write_text("# staged backend\n")
+    for name in docs:
+        (function_docs / name).write_text("{}\n")
 
 
 def test_bfcl_needs_github_not_huggingface():
@@ -182,24 +233,52 @@ def test_bfcl_needs_github_not_huggingface():
     assert pf.required_urls("inspect_evals/bfcl", {}) == ["https://github.com"]
 
 
-def test_bfcl_requires_upstream_data_sentinel_and_function_sources(
+def test_bfcl_requires_data_docs_and_selected_backend_modules(
     tmp_path, bfcl_category_manifest
 ):
-    """Partial caches must not suppress the GitHub preflight needed by the default task."""
+    """Missing multi-turn docs or a selected backend module must retain GitHub preflight."""
     env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
-    bfcl = tmp_path / "BFCL"
-    bfcl.mkdir()
-    (bfcl / "BFCL_v3_simple_python.json").write_text("{}")
+    _write_bfcl_assets(tmp_path, bfcl_category_manifest)
     assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
 
-    _write_bfcl_assets(
-        tmp_path, bfcl_category_manifest, include_function_sources=False
-    )
-    assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
-
-    (bfcl / "func_source_code").mkdir()
-    (bfcl / "func_source_code" / "python.py").write_text("# staged source\n")
+    _write_bfcl_runtime_assets(tmp_path, _TEST_MULTI_TURN_MODULES, _TEST_MULTI_TURN_DOCS)
     assert pf.required_urls("inspect_evals/bfcl", env) == []
+
+    (tmp_path / "BFCL" / "multi_turn_func_doc" / "math_api.json").unlink()
+    assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
+    (tmp_path / "BFCL" / "multi_turn_func_doc" / "math_api.json").write_text("{}\n")
+
+    (tmp_path / "BFCL" / "func_source_code" / "math_api.py").unlink()
+    assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
+
+
+def test_bfcl_single_turn_selection_does_not_require_multiturn_assets(
+    tmp_path, bfcl_category_manifest
+):
+    """A V1-only BFCL selection does not need multi-turn backend code or function docs."""
+    _write_bfcl_assets(tmp_path, bfcl_category_manifest)
+    env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
+
+    assert pf.required_urls(
+        "inspect_evals/bfcl", env, {"categories": "simple_python"}
+    ) == []
+
+
+def test_bfcl_agentic_selection_checks_its_own_runtime_assets(
+    tmp_path, bfcl_category_manifest
+):
+    """Agentic categories require their own backend module and function-doc file."""
+    _write_bfcl_assets(tmp_path, bfcl_category_manifest)
+    env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
+    selection = {"categories": "memory_kv"}
+
+    assert pf.required_urls("inspect_evals/bfcl", env, selection) == ["https://github.com"]
+    _write_bfcl_runtime_assets(
+        tmp_path,
+        {"memory_kv.py", "memory_api_metaclass.py"},
+        {"memory_kv.json"},
+    )
+    assert pf.required_urls("inspect_evals/bfcl", env, selection) == []
 
 
 def test_configure_staged_bfcl_cache_points_to_test_data(
@@ -207,6 +286,7 @@ def test_configure_staged_bfcl_cache_points_to_test_data(
 ):
     """The adapter maps a complete /test_data BFCL tree to Inspect-Evals' cache root."""
     _write_bfcl_assets(tmp_path, bfcl_category_manifest)
+    _write_bfcl_runtime_assets(tmp_path, _TEST_MULTI_TURN_MODULES, _TEST_MULTI_TURN_DOCS)
     env = {}
 
     assert pf.configure_staged_bfcl_cache("inspect_evals/bfcl", env, tmp_path)
@@ -219,6 +299,7 @@ def test_configure_staged_bfcl_cache_does_not_use_partial_or_unrelated_data(
 ):
     """Only complete BFCL assets for the BFCL task activate the staged cache."""
     _write_bfcl_assets(tmp_path, bfcl_category_manifest)
+    _write_bfcl_runtime_assets(tmp_path, _TEST_MULTI_TURN_MODULES, _TEST_MULTI_TURN_DOCS)
     env = {}
 
     assert not pf.configure_staged_bfcl_cache("inspect_evals/mmlu_pro", env, tmp_path)
