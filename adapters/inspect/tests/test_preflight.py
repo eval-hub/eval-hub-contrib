@@ -4,9 +4,8 @@ import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-import pytest
-
 import _preflight as pf
+import pytest
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -116,13 +115,68 @@ def test_custom_task_file_is_not_probed_by_default():
     assert pf.required_urls("/work/my_task.py", {}) == []
 
 
-def test_bfcl_needs_github_not_huggingface(tmp_path):
+def _write_bfcl_assets(root, *, include_function_sources=True):
+    """Create the BFCL files required by the installed Inspect-Evals category manifest."""
+    categories = pf._bfcl_category_manifest()
+    assert categories
+
+    bfcl = root / "BFCL"
+    for category in categories.values():
+        question_file = bfcl / category.filename
+        question_file.parent.mkdir(parents=True, exist_ok=True)
+        question_file.write_text("[]")
+        if category.has_ground_truth_file:
+            answer_file = bfcl / category.ground_truth_filename
+            answer_file.parent.mkdir(parents=True, exist_ok=True)
+            answer_file.write_text("{}")
+
+    if include_function_sources:
+        function_sources = bfcl / "func_source_code"
+        function_sources.mkdir(exist_ok=True)
+        (function_sources / "python.py").write_text("# staged source\n")
+
+
+def test_bfcl_needs_github_not_huggingface():
     """BFCL downloads from GitHub, not HuggingFace; HF must never be probed for it."""
-    env = {"INSPECT_EVALS_CACHE_DIR": str(tmp_path)}
+    assert pf.required_urls("inspect_evals/bfcl", {}) == ["https://github.com"]
+
+
+def test_bfcl_requires_upstream_data_sentinel_and_function_sources(tmp_path):
+    """Partial caches must not suppress the GitHub preflight needed by the default task."""
+    env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
+    bfcl = tmp_path / "BFCL"
+    bfcl.mkdir()
+    (bfcl / "BFCL_v3_simple_python.json").write_text("{}")
     assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
-    (tmp_path / "BFCL").mkdir()
-    (tmp_path / "BFCL" / "BFCL_v4_simple_python.json").write_text("{}")
+
+    _write_bfcl_assets(tmp_path, include_function_sources=False)
+    assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
+
+    (bfcl / "func_source_code").mkdir()
+    (bfcl / "func_source_code" / "python.py").write_text("# staged source\n")
     assert pf.required_urls("inspect_evals/bfcl", env) == []
+
+
+def test_configure_staged_bfcl_cache_points_to_test_data(tmp_path):
+    """The adapter maps a complete /test_data BFCL tree to Inspect-Evals' cache root."""
+    _write_bfcl_assets(tmp_path)
+    env = {}
+
+    assert pf.configure_staged_bfcl_cache("inspect_evals/bfcl", env, tmp_path)
+    assert env[pf.INSPECT_EVALS_CACHE_DIR_ENV] == str(tmp_path)
+    assert pf.required_urls("inspect_evals/bfcl", env) == []
+
+
+def test_configure_staged_bfcl_cache_does_not_use_partial_or_unrelated_data(tmp_path):
+    """Only complete BFCL assets for the BFCL task activate the staged cache."""
+    _write_bfcl_assets(tmp_path)
+    env = {}
+
+    assert not pf.configure_staged_bfcl_cache("inspect_evals/mmlu_pro", env, tmp_path)
+    assert not pf.configure_staged_bfcl_cache(
+        "inspect_evals/bfcl", env, tmp_path / "missing"
+    )
+    assert pf.INSPECT_EVALS_CACHE_DIR_ENV not in env
 
 
 def test_run_preflight_returns_within_deadline_when_dns_stalls(monkeypatch):

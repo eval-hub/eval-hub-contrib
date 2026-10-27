@@ -11,10 +11,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from evalhub.adapter import JobSpec
-from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
-
-from _benchmarks import PETRI_SEED_MAP, _CLIENT_OPENAI_COMPAT
+from _benchmarks import _CLIENT_OPENAI_COMPAT, PETRI_SEED_MAP
 from _hf_auth import apply_hf_hub_auth, refresh_hf_hub_auth
 from _hf_offline import (
     TEST_DATA_DIR,
@@ -26,6 +23,7 @@ from _preflight import (
     HOSTS_ENV,
     MODE_ENV,
     TIMEOUT_ENV,
+    configure_staged_bfcl_cache,
     normalize_hosts,
     normalize_mode,
     normalize_timeout,
@@ -39,6 +37,8 @@ from _routing import (
     select_client,
     target_model_spec,
 )
+from evalhub.adapter import JobSpec
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -463,8 +463,10 @@ def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
     live (prefixed ``inspect |``), a network pre-flight fails fast when a required host is
     unreachable, and the run is bounded by ``timeout_s`` when one is configured.
     """
+    task_spec = cmd[2] if len(cmd) > 2 else ""
+    configure_staged_bfcl_cache(task_spec, env, TEST_DATA_DIR)
     refresh_hf_hub_auth(env)
-    run_preflight(cmd[2] if len(cmd) > 2 else "", env)
+    run_preflight(task_spec, env)
     timeout = _resolve_job_timeout(env)
     stream = (env.get(_STREAM_LOGS_ENV) or "1").strip().lower() not in ("0", "false", "no", "off")
 

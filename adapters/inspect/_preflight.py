@@ -22,12 +22,15 @@ talk to model endpoints.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
+import runpy
 import ssl
 import threading
 import time
 import urllib.error
 import urllib.request
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -37,6 +40,7 @@ logger = logging.getLogger(__name__)
 MODE_ENV = "INSPECT_PREFLIGHT"
 TIMEOUT_ENV = "INSPECT_PREFLIGHT_TIMEOUT_S"
 HOSTS_ENV = "INSPECT_PREFLIGHT_HOSTS"
+INSPECT_EVALS_CACHE_DIR_ENV = "INSPECT_EVALS_CACHE_DIR"
 
 MODES = ("fail", "warn", "off")
 DEFAULT_MODE = "fail"
@@ -89,12 +93,78 @@ def normalize_hosts(value: Any, name: str = "preflight_hosts") -> list[str]:
     return urls
 
 
+@lru_cache(maxsize=1)
+def _bfcl_category_manifest() -> dict[str, Any] | None:
+    """Load Inspect-Evals' lightweight category manifest without importing its task package."""
+    try:
+        spec = importlib.util.find_spec("inspect_evals")
+        if spec is None or not spec.submodule_search_locations:
+            return None
+        manifest_path = (
+            Path(next(iter(spec.submodule_search_locations)))
+            / "bfcl"
+            / "utils"
+            / "task_categories.py"
+        )
+        if not manifest_path.is_file():
+            return None
+        categories = runpy.run_path(str(manifest_path)).get("CATEGORIES")
+        return categories if isinstance(categories, dict) else None
+    except (ImportError, OSError, RuntimeError, ValueError):
+        return None
+
+
 def _bfcl_data_present(env: dict[str, str]) -> bool:
-    """Return True if BFCL dataset files are already staged in INSPECT_EVALS_CACHE_DIR."""
-    cache = env.get("INSPECT_EVALS_CACHE_DIR")
+    """Return True when the BFCL data and function sources needed offline are staged."""
+    cache = env.get(INSPECT_EVALS_CACHE_DIR_ENV)
     if not cache:
         return False
-    return any((Path(cache) / "BFCL").glob("BFCL_v*_*.json"))
+
+    bfcl_dir = Path(cache) / "BFCL"
+    # Mirror Inspect-Evals' own data validation so one sentinel file cannot
+    # make an incomplete staged tree look ready for an offline run.
+    categories = _bfcl_category_manifest()
+    if not categories:
+        return False
+    for category in categories.values():
+        if not (bfcl_dir / category.filename).is_file():
+            return False
+        if category.has_ground_truth_file and not (
+            bfcl_dir / category.ground_truth_filename
+        ).is_file():
+            return False
+
+    # BFCL categories that execute functions also load this GitHub-hosted tree.
+    function_sources = bfcl_dir / "func_source_code"
+    try:
+        return (
+            function_sources.is_dir()
+            and next(function_sources.iterdir(), None) is not None
+        )
+    except OSError:
+        return False
+
+
+def configure_staged_bfcl_cache(
+    task_spec: str,
+    env: dict[str, str],
+    staged_data_dir: str | Path = "/test_data",
+) -> bool:
+    """Point Inspect-Evals at staged BFCL assets when the offline cache is complete."""
+    if "bfcl" not in task_spec.lower() or _bfcl_data_present(env):
+        return False
+
+    staged_env = dict(env)
+    staged_env[INSPECT_EVALS_CACHE_DIR_ENV] = str(staged_data_dir)
+    if not _bfcl_data_present(staged_env):
+        return False
+
+    env[INSPECT_EVALS_CACHE_DIR_ENV] = str(staged_data_dir)
+    logger.info(
+        "Using staged Inspect-Evals BFCL data and function sources from %s",
+        staged_data_dir,
+    )
+    return True
 
 
 def required_urls(task_spec: str, env: dict[str, str]) -> list[str]:
@@ -107,7 +177,7 @@ def required_urls(task_spec: str, env: dict[str, str]) -> list[str]:
         )
         if is_hf_task and not hub_offline:
             urls.append(env.get("HF_ENDPOINT") or DEFAULT_HF_ENDPOINT)
-        if "bfcl" in task_spec and not _bfcl_data_present(env):
+        if "bfcl" in task_spec.lower() and not _bfcl_data_present(env):
             urls.append("https://github.com")
     urls += normalize_hosts(env.get(HOSTS_ENV), HOSTS_ENV)
     return list(dict.fromkeys(urls))
