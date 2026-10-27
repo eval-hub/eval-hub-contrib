@@ -96,10 +96,11 @@ Against an OpenAI-compatible endpoint (`endpoint`, `openai`, `litellm`) benchmar
 The log-likelihood path is designed to give the same per-choice scores as lighteval's own `transformers` backend for the same model and prompt settings:
 
 - The scored text is lighteval's plain-text prompt: system prompt, task instruction, `num_few_shot` examples and the question, followed by the choice.
-- Whitespace at the end of the question counts as part of the answer, and a token that straddles the question/answer boundary counts toward the answer, as in lighteval's `tok_encode_pair`.
+- Whitespace at the end of the question counts as part of the answer, as in lighteval's `tok_encode_pair`. A token that straddles the question/answer boundary counts toward the answer.
 - Echoed token offsets are aligned with the prompt before the question/answer split: vLLM counts the text of a leading BOS token (`<s>`) in `text_offset`, which shifts every offset. An echo that is shorter than the prompt, or whose extra text is not whole leading tokens, fails the job.
 - A request that cannot be scored (HTTP error, timeout, missing `logprobs`) fails the job. It is never turned into a score, so a broken endpoint cannot produce an accuracy. Timeouts, connection errors and HTTP 408/429/5xx are retried up to 3 times first.
 - Known limit: lighteval's PMI-normalised metrics (`Doc.unconditioned_query`) are not supported.
+- Known limit, tokenization at the question/answer boundary: lighteval's `transformers` backend tokenizes the question and the answer separately and joins the token ids (`tok_encode_pair(..., pairwise=True)`). `/v1/completions` takes text, so the endpoint tokenizes question and answer together. The two produce the same tokens when the boundary is a clean split, which is the usual case for GPT-style tokenizers and for prompts like `Answer:` followed by ` Paris`. They differ when a token would merge across the boundary, and more often with SentencePiece tokenizers (Llama, Mistral) when the question ends in a newline or a quote, or the answer has no leading space. The model then sees a different token sequence, so its log-likelihoods differ slightly from the `transformers` backend's. `tests/test_logprob_reference.py` keeps two such cases as expected failures. Closing the gap needs token-id prompts, which are specific to vLLM, and is not done yet.
 
 `tests/test_logprob_reference.py` checks this against lighteval's `TransformersModel` using a small local model, with no network.
 
@@ -414,27 +415,6 @@ docker run \
 ```
 
 This will run all tasks in the "commonsense_reasoning" category.
-
-## Memory use
-
-Most benchmarks stay near the baseline of the LightEval process, about 2 GiB. The default
-pod limit (`memory_limit: 4Gi` in `provider.yaml`) covers them.
-
-`lcb:codegeneration_v6` (LiveCodeBench) is the exception, because it runs the code the model
-wrote. LightEval starts a child process per solution and calls `reliability_guard()` without a
-memory limit (its comment says 4 GB), so a solution that allocates in a loop grows until the
-container is killed. A 175-problem run then fails after every answer has been generated,
-with all the work lost.
-
-The wrapper limits each graded solution to what its process already had plus
-`EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB` (default `2048`; `0` turns the limit off). A solution that
-needs more fails that problem and the run continues. Size the pod for the LightEval process
-plus that allowance, plus margin: the default of 4Gi is tight for LiveCodeBench, so set a
-higher `memory_limit` for it. Solutions that legitimately need more memory than the allowance
-fail, so raise the variable together with the pod limit.
-
-Set the variable in the job's environment. The limit applies on Linux with the `fork` start
-method (the default before Python 3.14), which is the only one LightEval's grader works with.
 
 ## LightEval Results and Eval Card Fields
 
