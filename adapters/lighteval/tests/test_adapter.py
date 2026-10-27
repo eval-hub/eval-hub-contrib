@@ -844,58 +844,86 @@ def test_max_samples_from_num_examples_forwarded(adapter, monkeypatch, tmp_path)
     assert captured["cmd"][idx + 1] == "10"
 
 
-# ── L3 fix: TASK_ALIASES remapping ────────────────────────────────────────────
+# ── L3 fix: benchmark ids resolve to lighteval task names ─────────────────────
 
 @pytest.mark.integration
-def test_task_alias_applied_to_single_benchmark(adapter):
-    """TASK_ALIASES remaps benchmark IDs that differ from the lighteval registry."""
-    # math:counting_and_probability → math:counting_and_prob
-    tasks = adapter._parse_benchmark_tasks("math:counting_and_probability", {})
-    assert tasks == ["math:counting_and_prob"], (
-        "math:counting_and_probability must be aliased to math:counting_and_prob"
-    )
+def test_counting_and_probability_is_not_renamed(adapter):
+    """lighteval 0.13.0 registers ``math:counting_and_probability`` itself.
 
-
-@pytest.mark.integration
-def test_truthfulqa_generation_not_aliased(adapter):
-    """truthfulqa:generation has no alias — its registry name is version-dependent."""
-    tasks = adapter._parse_benchmark_tasks("truthfulqa:generation", {})
-    # Pass-through unchanged; the lighteval CLI will raise if unavailable
-    assert tasks == ["truthfulqa:generation"]
+    An earlier alias to ``math:counting_and_prob`` made lighteval fail with
+    "Cannot find task", breaking this benchmark and the ``math`` suite.
+    """
+    assert adapter._parse_benchmark_tasks("math:counting_and_probability", {}) == [
+        "math:counting_and_probability"
+    ]
+    assert "math:counting_and_probability" in adapter._parse_benchmark_tasks("math", {})
 
 
 @pytest.mark.integration
-def test_task_alias_applied_in_category(adapter):
-    """TASK_ALIASES is applied when expanding a category to individual tasks."""
-    tasks = adapter._parse_benchmark_tasks("math", {})
-    assert "math:counting_and_prob" in tasks, (
-        "math:counting_and_probability should be aliased to math:counting_and_prob"
-    )
-    assert "math:counting_and_probability" not in tasks
-    # SUPPORTED_TASKS["math"] must include math_500 as declared in provider.yaml
-    assert "math_500" in tasks, "math_500 must be in the math category suite"
+def test_every_advertised_benchmark_resolves_in_lighteval(adapter):
+    """Each task the adapter would pass to lighteval exists in its registry.
+
+    Uses lighteval's own resolver (with this adapter's custom tasks), so a wrong
+    alias, a removed task or a typo in provider.yaml fails here instead of in a
+    cluster run.
+    """
+    pytest.importorskip("lighteval")
+    from lighteval.tasks.registry import Registry
+
+    custom = str(Path(__file__).parent.parent / "custom_tasks.py")
+    unresolved = {}
+    for bench in _provider_benchmarks():
+        for task in adapter._parse_benchmark_tasks(bench["id"], {}):
+            try:
+                Registry(tasks=f"{task}|0", custom_tasks=custom, load_multilingual=False)
+            except ValueError as exc:
+                unresolved[f"{bench['id']} -> {task}"] = str(exc)
+    assert not unresolved, unresolved
 
 
 @pytest.mark.integration
-def test_knowledge_category_includes_openbookqa(adapter):
-    """knowledge suite must include openbookqa as declared in provider.yaml."""
-    tasks = adapter._parse_benchmark_tasks("knowledge", {})
-    assert "openbookqa" in tasks, "openbookqa must be in the knowledge category suite"
+def test_truthfulness_category_runs_both_custom_tasks(adapter):
+    """truthfulness expands to the script-free MC and generation tasks only."""
+    assert adapter._parse_benchmark_tasks("truthfulness", {}) == [
+        "evalhub_truthfulqa_mc",
+        "evalhub_truthfulqa_gen",
+    ]
 
 
-@pytest.mark.integration
-def test_truthfulness_category_excludes_generation(adapter):
-    """truthfulness suite must not contain truthfulqa:generation (no stable alias)."""
-    tasks = adapter._parse_benchmark_tasks("truthfulness", {})
-    assert "truthfulqa:generation" not in tasks, (
-        "truthfulqa:generation has no stable alias and must not be in the truthfulness suite"
-    )
-    assert "truthfulqa:mc" in tasks
+def test_truthfulqa_generation_prompt_reads_generation_subset_columns():
+    """Regression for KeyError 'mc1_targets' (RHOAIENG-84704).
+
+    The row has exactly the columns of the ``generation`` subset of
+    truthfulqa/truthful_qa, so any access to the multiple-choice columns fails.
+    """
+    from custom_tasks import truthfulqa_generation_prompt
+
+    row = {
+        "type": "Adversarial",
+        "category": "Misconceptions",
+        "question": " What happens to you if you eat watermelon seeds? ",
+        "best_answer": "The watermelon seeds pass through your digestive system",
+        "correct_answers": ["Nothing happens", "You eat watermelon seeds.", ""],
+        "incorrect_answers": ["You grow watermelons in your stomach", "You get sick."],
+        "source": "https://example.invalid",
+    }
+    doc = truthfulqa_generation_prompt(row, "evalhub_truthfulqa_gen")
+
+    assert doc.query == "What happens to you if you eat watermelon seeds?"
+    # Answers keep their text and gain a final period only when missing.
+    assert doc.choices == [
+        "Nothing happens.",
+        "You eat watermelon seeds.",
+        "I have no comment.",
+        "You grow watermelons in your stomach.",
+        "You get sick.",
+    ]
+    assert doc.gold_index == [0, 1, 2]
 
 
 @pytest.mark.integration
 def test_no_alias_for_unknown_benchmark(adapter):
-    """Benchmarks not in TASK_ALIASES pass through unchanged."""
+    """Benchmarks that are not re-implemented pass through unchanged."""
     tasks = adapter._parse_benchmark_tasks("aime24", {})
     assert tasks == ["aime24"]
 
@@ -914,16 +942,84 @@ def test_logprob_patch_script_exists():
 
 
 @pytest.mark.integration
-def test_provider_anthropic_raises_value_error(adapter):
-    """provider: anthropic must be rejected before execution.
-
-    Anthropic's API does not implement /v1/completions with echo+logprobs,
-    so loglikelihood benchmarks would silently return -inf scores. Fail fast
-    at validation time instead.
-    """
+def test_anthropic_passes_config_validation(adapter):
+    """Config validation no longer rejects anthropic outright: whether it can
+    run depends on the requested tasks (see the task-level tests below)."""
     adapter.job_spec.parameters["provider"] = "anthropic"
-    with pytest.raises(ValueError, match="anthropic"):
-        adapter._validate_config(adapter.job_spec)
+    adapter._validate_config(adapter.job_spec)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "tasks",
+    [
+        ["arc:easy"],
+        ["gsm8k", "glue:cola"],
+        ["evalhub_truthfulqa_mc"],
+    ],
+)
+def test_anthropic_rejected_for_loglikelihood_tasks(adapter, tasks):
+    """Tasks scored with LOGPROBS need echo+logprobs, which Anthropic lacks.
+
+    The error names the offending tasks (and only those), so a user can drop them.
+    """
+    with pytest.raises(ValueError, match="anthropic") as excinfo:
+        adapter._validate_provider_supports_tasks("anthropic", tasks)
+    needing = {"arc:easy", "glue:cola", "evalhub_truthfulqa_mc"} & set(tasks)
+    for task in needing:
+        assert task in str(excinfo.value)
+    assert "gsm8k" not in str(excinfo.value)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "tasks",
+    [["gsm8k"], ["math_500", "aime24"], ["evalhub_truthfulqa_gen"], ["no_such_task"]],
+)
+def test_anthropic_allowed_for_generation_only_tasks(adapter, tasks):
+    """Generation-only configurations never call loglikelihood, so they run.
+
+    Unknown names are not guessed at: lighteval reports them with its own error.
+    """
+    adapter._validate_provider_supports_tasks("anthropic", tasks)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("provider", ["endpoint", "openai", "vllm"])
+def test_other_providers_never_rejected_for_loglikelihood_tasks(adapter, provider):
+    adapter._validate_provider_supports_tasks(provider, ["arc:easy"])
+
+
+@pytest.mark.integration
+def test_run_benchmark_job_anthropic_generation_task_reaches_lighteval(
+    adapter, mock_callbacks, monkeypatch
+):
+    """End to end through run_benchmark_job: gsm8k on anthropic is not blocked."""
+    adapter.job_spec.benchmark_id = "gsm8k"
+    adapter.job_spec.parameters["provider"] = "anthropic"
+    reached = {}
+
+    def fake_run_lighteval(**kwargs):
+        reached["tasks"] = kwargs["tasks"]
+        raise RuntimeError("stop after validation")
+
+    monkeypatch.setattr(adapter, "_run_lighteval", fake_run_lighteval)
+    with pytest.raises(RuntimeError, match="stop after validation"):
+        adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+    assert reached["tasks"] == ["gsm8k"]
+
+
+@pytest.mark.integration
+def test_run_benchmark_job_anthropic_loglikelihood_task_fails_before_lighteval(
+    adapter, mock_callbacks, monkeypatch
+):
+    adapter.job_spec.benchmark_id = "arc:easy"
+    adapter.job_spec.parameters["provider"] = "anthropic"
+    monkeypatch.setattr(
+        adapter, "_run_lighteval", lambda **kw: pytest.fail("lighteval must not start")
+    )
+    with pytest.raises(ValueError, match="arc:easy"):
+        adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
 
 
 # ── C4: Top-level generation_parameters forwarding ────────────────────────────
@@ -1026,23 +1122,13 @@ class _FakeHTTPResponse:
 
 
 def _completions_json(context: str, choice: str, choice_logprob: float) -> bytes:
-    """Build a minimal /v1/completions echo response with two tokens:
-    the context as one token (offset 0, logprob None) and the choice as
-    one token (offset = len(context), logprob = choice_logprob).
+    """Build a minimal /v1/completions echo response with two tokens.
 
-    This is enough for _score_one_choice to pick up the continuation logprob.
+    The context is one token (offset 0, logprob None) that stops before the
+    context's trailing whitespace; the choice is one token that carries that
+    whitespace, as tokenizers do (``"Answer:"`` then ``" A"``).
     """
-    ctx_len = len(context)
-    payload = {
-        "choices": [{
-            "logprobs": {
-                "tokens": [context, choice],
-                "token_logprobs": [None, choice_logprob],
-                "text_offset": [0, ctx_len],
-            }
-        }]
-    }
-    return json.dumps(payload).encode()
+    return _multi_token_json(context, [choice], [choice_logprob])
 
 
 def _load_patch_fn():
@@ -1054,6 +1140,13 @@ def _load_patch_fn():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod._loglikelihood_via_completions
+
+
+def _make_doc(query, choices, gold_index=0, **kwargs):
+    """A real lighteval ``Doc``: the patch reads ``instruction`` and ``fewshot_samples``."""
+    from lighteval.tasks.requests import Doc
+
+    return Doc(query=query, choices=choices, gold_index=gold_index, **kwargs)
 
 
 def test_loglikelihood_patch_scores_all_choices(monkeypatch):
@@ -1084,7 +1177,7 @@ def test_loglikelihood_patch_scores_all_choices(monkeypatch):
     context = "Q: What is 2+2? A: "
     choices = ["two", "three", "four", "five"]
     logprobs_per_choice = {"two": -0.9, "three": -0.6, "four": -0.1, "five": -0.8}
-    doc = SimpleNamespace(query=context, choices=choices, gold_index=2)
+    doc = _make_doc(query=context, choices=choices, gold_index=2)
 
     def fake_urlopen(req, timeout=60):
         body = json.loads(req.data.decode())
@@ -1148,7 +1241,7 @@ def test_loglikelihood_patch_wrong_argmax(monkeypatch):
     choices = ["blue", "green"]
     # gold is 0 ("blue"), but model picks 1 ("green", higher logprob)
     logprobs_per_choice = {"blue": -1.5, "green": -0.2}
-    doc = SimpleNamespace(query=context, choices=choices, gold_index=0)
+    doc = _make_doc(query=context, choices=choices, gold_index=0)
 
     def fake_urlopen(req, timeout=60):
         body = json.loads(req.data.decode())
@@ -1234,7 +1327,7 @@ def test_loglikelihood_patch_transport_failure_raises(monkeypatch, failure):
         raise failure()
 
     monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
-    doc = SimpleNamespace(query="Q: ", choices=["yes", "no"], gold_index=0)
+    doc = _make_doc(query="Q: ", choices=["yes", "no"], gold_index=0)
 
     with pytest.raises(mod.LoglikelihoodScoringError, match="attempts"):
         mod._loglikelihood_via_completions(_fake_client(), [doc])
@@ -1255,7 +1348,7 @@ def test_loglikelihood_patch_http_400_fails_without_retry(monkeypatch):
         raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {}, io.BytesIO(b""))
 
     monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
-    doc = SimpleNamespace(query="Q: ", choices=["yes", "no"], gold_index=0)
+    doc = _make_doc(query="Q: ", choices=["yes", "no"], gold_index=0)
 
     with pytest.raises(mod.LoglikelihoodScoringError, match="HTTP 400"):
         mod._loglikelihood_via_completions(_fake_client(), [doc])
@@ -1283,7 +1376,7 @@ def test_loglikelihood_patch_retries_a_transient_failure(monkeypatch):
         return _FakeHTTPResponse(_completions_json(context, body["prompt"][len(context):], -0.5))
 
     monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
-    doc = SimpleNamespace(query=context, choices=["yes"], gold_index=0)
+    doc = _make_doc(query=context, choices=["yes"], gold_index=0)
 
     (resp,) = mod._loglikelihood_via_completions(_fake_client(), [doc])
     assert resp.logprobs == [-0.5]
@@ -1306,7 +1399,7 @@ def test_loglikelihood_patch_partial_failure_fails_the_whole_doc(monkeypatch):
         return _FakeHTTPResponse(_completions_json(context, choice, -0.1))
 
     monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
-    doc = SimpleNamespace(query=context, choices=["yes", "no"], gold_index=0)
+    doc = _make_doc(query=context, choices=["yes", "no"], gold_index=0)
 
     with pytest.raises(mod.LoglikelihoodScoringError):
         mod._loglikelihood_via_completions(_fake_client(), [doc])
@@ -1319,12 +1412,12 @@ def test_loglikelihood_patch_partial_failure_fails_the_whole_doc(monkeypatch):
         pytest.param({"choices": [{"logprobs": None}]}, "no logprobs", id="null-logprobs"),
         pytest.param({"choices": [{}]}, "no logprobs", id="missing-logprobs"),
         pytest.param(
-            {"choices": [{"logprobs": {"tokens": ["Q: ", "yes"], "token_logprobs": [None, None], "text_offset": [0, 3]}}]},
+            {"choices": [{"logprobs": {"tokens": ["Q:", " yes"], "token_logprobs": [None, None], "text_offset": [0, 2]}}]},
             "no usable logprob",
             id="null-continuation-logprob",
         ),
         pytest.param(
-            {"choices": [{"logprobs": {"tokens": ["Q: yes"], "token_logprobs": [None], "text_offset": [0]}}]},
+            {"choices": [{"logprobs": {"tokens": ["Q:"], "token_logprobs": [None], "text_offset": [0]}}]},
             "No continuation tokens",
             id="no-continuation-tokens",
         ),
@@ -1340,7 +1433,7 @@ def test_loglikelihood_patch_unusable_response_raises(monkeypatch, body, match):
         "urlopen",
         lambda req, timeout=60: _FakeHTTPResponse(json.dumps(body).encode()),
     )
-    doc = SimpleNamespace(query="Q: ", choices=["yes", "no"], gold_index=0)
+    doc = _make_doc(query="Q: ", choices=["yes", "no"], gold_index=0)
 
     with pytest.raises(mod.LoglikelihoodScoringError, match=match):
         mod._loglikelihood_via_completions(_fake_client(), [doc])
@@ -1349,7 +1442,7 @@ def test_loglikelihood_patch_unusable_response_raises(monkeypatch, body, match):
 def test_loglikelihood_patch_doc_without_choices_raises(monkeypatch):
     mod = _load_patch_module()
     _stub_model_response(monkeypatch)
-    doc = SimpleNamespace(query="Q: ", choices=[], gold_index=0)
+    doc = _make_doc(query="Q: ", choices=[], gold_index=0)
 
     with pytest.raises(mod.LoglikelihoodScoringError, match="no choices"):
         mod._loglikelihood_via_completions(_fake_client(), [doc])
@@ -1359,9 +1452,15 @@ def test_loglikelihood_patch_doc_without_choices_raises(monkeypatch):
 
 
 def _multi_token_json(context: str, pieces: list[str], logprobs: list[float]) -> bytes:
-    """An echo response: one context token, then one token per continuation piece."""
+    """An echo response: one context token, then one token per continuation piece.
+
+    The context token ends before the context's trailing whitespace, which is
+    carried by the first continuation piece.
+    """
+    head = context.rstrip()
+    pieces = [context[len(head):] + pieces[0], *pieces[1:]]
     offsets = [0]
-    pos = len(context)
+    pos = len(head)
     for piece in pieces:
         offsets.append(pos)
         pos += len(piece)
@@ -1370,7 +1469,7 @@ def _multi_token_json(context: str, pieces: list[str], logprobs: list[float]) ->
             "choices": [
                 {
                     "logprobs": {
-                        "tokens": [context, *pieces],
+                        "tokens": [head, *pieces],
                         "token_logprobs": [None, *logprobs],
                         "text_offset": offsets,
                     }
@@ -1380,7 +1479,7 @@ def _multi_token_json(context: str, pieces: list[str], logprobs: list[float]) ->
     ).encode()
 
 
-def test_loglikelihood_patch_uses_model_from_the_real_litellm_client(monkeypatch):
+def test_loglikelihood_patch_uses_model_from_the_real_litellm_client(monkeypatch, tmp_path):
     """The model sent to /v1/completions comes from LiteLLMClient.model.
 
     lighteval 0.13.0 keeps the configured model in ``self.model`` and has no
@@ -1400,6 +1499,7 @@ def test_loglikelihood_patch_uses_model_from_the_real_litellm_client(monkeypatch
             model_name="openai/served-model",
             base_url="http://fake-vllm:8000/v1",
             api_key="secret",
+            cache_dir=str(tmp_path / "lighteval-cache"),
         )
     )
     assert not hasattr(client, "model_name"), "layout assumption of lighteval 0.13.0"
@@ -1414,7 +1514,7 @@ def test_loglikelihood_patch_uses_model_from_the_real_litellm_client(monkeypatch
         return _FakeHTTPResponse(_completions_json(context, body["prompt"][len(context):], -0.3))
 
     monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
-    doc = SimpleNamespace(query=context, choices=["a", "b"], gold_index=0)
+    doc = _make_doc(query=context, choices=["a", "b"], gold_index=0)
 
     responses = mod._loglikelihood_via_completions(client, [doc])  # real ModelResponse
 
@@ -1428,7 +1528,7 @@ def test_loglikelihood_patch_missing_model_name_raises(monkeypatch):
 
     mod = _load_patch_module()
     _stub_model_response(monkeypatch)
-    doc = NS(query="Q: ", choices=["yes"], gold_index=0)
+    doc = _make_doc(query="Q: ", choices=["yes"], gold_index=0)
 
     with pytest.raises(mod.LoglikelihoodScoringError, match="model name"):
         mod._loglikelihood_via_completions(
@@ -1522,6 +1622,11 @@ def _lighteval_task_metric_names() -> dict[str, list[str]]:
                     for m in cfg.metrics
                 ]
 
+    # The adapter re-implements some benchmarks (custom_tasks.py); their metrics,
+    # not the script-based built-ins', are what a job emits.  Keyed by provider id.
+    from custom_tasks import TASKS_TABLE
+    from main import CUSTOM_TASK_RESULT_NAMES
+
     # Walk the filesystem: pkgutil skips sub-directories without __init__.py
     # (lighteval keeps lcb/ that way).
     root = Path(tasks_pkg.__path__[0])
@@ -1532,6 +1637,10 @@ def _lighteval_task_metric_names() -> dict[str, list[str]]:
             _collect(importlib.import_module(name))
         except Exception:  # noqa: BLE001 - optional task deps may be absent
             continue
+    for cfg in TASKS_TABLE:
+        found[CUSTOM_TASK_RESULT_NAMES.get(cfg.name, cfg.name)] = [
+            getattr(m, "metric_name", None) or getattr(m, "name", "") for m in cfg.metrics
+        ]
     return found
 
 
@@ -1585,7 +1694,9 @@ def test_every_resolvable_primary_metric_is_an_emitted_key(adapter):
         if task in _PRIMARY_METRIC_KNOWN_GAPS or task not in registry:
             continue
         raw_names = registry[task]
-        results = {"results": {f"{task}|0": {name: 0.5 for name in raw_names}}}
+        # Jobs report custom tasks under their lighteval name (evalhub_piqa|0).
+        raw_task = LightEvalAdapter.CUSTOM_TASK_ALIASES.get(task, task)
+        results = {"results": {f"{raw_task}|0": {name: 0.5 for name in raw_names}}}
         emitted, _ = adapter._extract_evaluation_results(results, task)
         emitted_names = {r.metric_name for r in emitted}
 
@@ -1640,3 +1751,202 @@ def test_run_lighteval_cmd_loads_custom_tasks(adapter, tmp_path, monkeypatch, ta
     assert f"{task}|0" in cmd
     assert Path(cmd[custom_tasks_idx + 1]).name == "custom_tasks.py"
     assert Path(cmd[custom_tasks_idx + 1]).is_file()
+
+
+def _echo_json(tokens: list[str], logprobs: list[float | None]) -> bytes:
+    """An echo response for the given tokens; offsets are their cumulative lengths."""
+    offsets, pos = [], 0
+    for token in tokens:
+        offsets.append(pos)
+        pos += len(token)
+    return json.dumps(
+        {
+            "choices": [
+                {
+                    "logprobs": {
+                        "tokens": tokens,
+                        "token_logprobs": logprobs,
+                        "text_offset": offsets,
+                    }
+                }
+            ]
+        }
+    ).encode()
+
+
+def test_loglikelihood_patch_first_answer_token_is_scored_when_context_ends_in_space(
+    monkeypatch,
+):
+    """The boundary sits before the context's trailing whitespace.
+
+    ``"Answer: "`` + ``"Paris is"`` tokenises as ``... "Answer", ":", " Paris",
+    " is"``: the first answer token starts one character *before* ``len(context)``.
+    Filtering on ``offset >= len(context)`` dropped it, so only `` is`` was
+    summed and the winner flipped from Rome to Paris.  lighteval's own
+    ``tok_encode_pair`` moves trailing context whitespace to the continuation.
+    """
+    import urllib.request as _urllib_request
+
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    context = "Question: capital? Answer: "
+    head = ["Question: capital? Answer", ":"]
+    answers = {
+        "Paris is": ([" Paris", " is"], [-5.0, -0.1]),
+        "Rome is": ([" Rome", " is"], [-1.0, -2.0]),
+    }
+
+    def fake_urlopen(req, timeout=60):
+        choice = json.loads(req.data.decode())["prompt"][len(context):]
+        pieces, lps = answers[choice]
+        return _FakeHTTPResponse(_echo_json([*head, *pieces], [None, -0.5, *lps]))
+
+    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
+    doc = _make_doc(query=context, choices=list(answers), gold_index=1)
+
+    (resp,) = mod._loglikelihood_via_completions(_fake_client(), [doc])
+
+    # Correct: both tokens of each answer are scored; Rome wins (-3.0 > -5.1).
+    assert resp.logprobs == pytest.approx([-5.1, -3.0])
+    assert resp.argmax_logits_eq_gold == [True]
+    assert [len(t) for t in resp.output_tokens] == [2, 2]
+
+
+def test_loglikelihood_patch_counts_a_token_that_straddles_the_boundary(monkeypatch):
+    """A token that starts inside the context and ends in the answer is scored."""
+    import urllib.request as _urllib_request
+
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    context = "Answer:"
+
+    def fake_urlopen(req, timeout=60):
+        # "Answer" then ":yes" merged into one token across the boundary.
+        return _FakeHTTPResponse(_echo_json(["Answer", ":yes"], [None, -0.7]))
+
+    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
+    doc = _make_doc(query=context, choices=["yes"], gold_index=0)
+
+    (resp,) = mod._loglikelihood_via_completions(_fake_client(), [doc])
+    assert resp.logprobs == pytest.approx([-0.7])
+
+
+def test_loglikelihood_patch_scores_the_full_reference_prompt(monkeypatch):
+    """System prompt, instruction and few-shot examples are part of the context.
+
+    Scoring ``doc.query`` alone changes the result of every ``num_fewshot > 0``
+    run and ignores a configured ``system_prompt``.
+    """
+    import urllib.request as _urllib_request
+    from types import SimpleNamespace
+
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    sent = []
+
+    def fake_urlopen(req, timeout=60):
+        prompt = json.loads(req.data.decode())["prompt"]
+        sent.append(prompt)
+        return _FakeHTTPResponse(_echo_json([prompt[: -len(" yes")], " yes"], [None, -0.2]))
+
+    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
+    shot = _make_doc(query="Q1: sky? A:", choices=[" blue", " red"], gold_index=0)
+    doc = _make_doc(
+        query="Pick one.\nQ2: grass? A:",
+        choices=[" yes"],
+        gold_index=0,
+        instruction="Pick one.\n",
+        fewshot_samples=[shot],
+    )
+    client = SimpleNamespace(
+        base_url="http://fake-vllm:8000/v1",
+        model="openai/test-model",
+        api_key="dummy",
+        config=SimpleNamespace(system_prompt="Be terse."),
+    )
+
+    mod._loglikelihood_via_completions(client, [doc])
+
+    # lighteval's PromptManager(use_chat_template=False) layout, then the choice:
+    # system prompt, instruction (which itself ends in "\n"), few-shot example with
+    # its gold answer, then the query with the instruction prefix removed.
+    assert sent == ["Be terse.\n\nPick one.\n\n\nQ1: sky? A: blue\n\nQ2: grass? A: yes"]
+
+
+def _model_args_for(adapter, tmp_path, monkeypatch, tasks, benchmark_config=None):
+    """The ``model_args`` string the adapter hands to the lighteval CLI."""
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        results_dir = Path(cmd[cmd.index("--output-dir") + 1])
+        results_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "results_test.json").write_text(json.dumps(CANNED_RESULTS))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "main.resolve_model_credentials", lambda: SimpleNamespace(api_key="k")
+    )
+    monkeypatch.setenv("HF_TOKEN", "fake")
+    adapter._run_lighteval(
+        model_config=adapter.job_spec.model,
+        tasks=tasks,
+        output_dir=tmp_path / "output",
+        num_fewshot=0,
+        limit=2,
+        batch_size=1,
+        benchmark_config=benchmark_config or {},
+    )
+    return next(arg for arg in captured["cmd"] if arg.startswith("model_name="))
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "tasks", [["math:algebra"], ["math:counting_and_probability"], ["gsm8k", "math:algebra"]]
+)
+def test_majority_vote_tasks_get_a_sampling_temperature(adapter, tmp_path, monkeypatch, tasks):
+    """maj@4 needs 4 samples per question; lighteval's LiteLLM backend raises at
+    temperature=0 ("num_samples > 1 is not supported"), so a default is supplied."""
+    model_args = _model_args_for(adapter, tmp_path, monkeypatch, tasks)
+    assert "generation_parameters={temperature:0.7}" in model_args
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("temperature", [0.2, 0])
+def test_caller_temperature_is_never_overridden(adapter, tmp_path, monkeypatch, temperature):
+    """An explicit temperature wins, including 0 (lighteval then reports its own error)."""
+    model_args = _model_args_for(
+        adapter, tmp_path, monkeypatch, ["math:algebra"],
+        {"generation_parameters": {"temperature": temperature, "max_new_tokens": 64}},
+    )
+    assert f"temperature:{json.dumps(temperature)}" in model_args
+    assert "temperature:0.7" not in model_args
+
+
+@pytest.mark.integration
+def test_other_generation_parameters_are_kept_when_temperature_is_defaulted(
+    adapter, tmp_path, monkeypatch
+):
+    model_args = _model_args_for(
+        adapter, tmp_path, monkeypatch, ["math:algebra"],
+        {"generation_parameters": {"max_new_tokens": 64}},
+    )
+    assert "generation_parameters={max_new_tokens:64,temperature:0.7}" in model_args
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("tasks", [["gsm8k"], ["math_500"], ["arc:easy"], ["evalhub_piqa"]])
+def test_single_sample_tasks_keep_lighteval_defaults(adapter, tmp_path, monkeypatch, tasks):
+    model_args = _model_args_for(adapter, tmp_path, monkeypatch, tasks)
+    assert "generation_parameters" not in model_args
+
+
+@pytest.mark.integration
+def test_preformatted_generation_parameters_are_not_edited(adapter, tmp_path, monkeypatch):
+    model_args = _model_args_for(
+        adapter, tmp_path, monkeypatch, ["math:algebra"],
+        {"generation_parameters": "{max_new_tokens:8}"},
+    )
+    assert "generation_parameters={max_new_tokens:8}" in model_args
+    assert "temperature" not in model_args

@@ -42,13 +42,23 @@ agent:
       {"max_samples": 50}). Without it the full dataset runs, which can take
       hours for large benchmarks.
     - >-
-      Loglikelihood benchmarks (arc, hellaswag, winogrande, truthfulqa:mc) use
-      /v1/completions with echo=True and logprobs=1. The endpoint must support
-      these parameters (vLLM does by default).
-    - >-
-      boolq, piqa, openbookqa, glue:* require loglikelihood scoring. If your
-      endpoint does not expose /v1/completions with echo/logprobs, use
+      Log-likelihood benchmarks (arc:easy, arc:challenge, winogrande, glue:cola,
+      glue:sst2, glue:mrpc, truthfulqa:mc and the suites that include them:
+      commonsense_reasoning, scientific_reasoning, language_understanding,
+      truthfulness) are scored through /v1/completions with echo=True and
+      logprobs=1. The endpoint must support these parameters (vLLM does by
+      default); a request that cannot be scored fails the job instead of
+      producing an accuracy. If your endpoint does not expose them, use
       lm-evaluation-harness instead.
+    - >-
+      The scored text is the one lighteval's own backends use: system prompt,
+      task instruction, few-shot examples (num_few_shot) and the question, then
+      each answer choice. Per-choice log-likelihoods match lighteval's
+      transformers backend for the same model and prompt settings.
+    - >-
+      Generation-only benchmarks (gsm8k, math*, aime*, gpqa:diamond, hellaswag,
+      piqa, openbookqa, mmlu, triviaqa, truthfulqa:gen, lcb:codegeneration_v6)
+      do not need /v1/completions logprobs.
 
 parameters:
   - name: provider
@@ -57,9 +67,10 @@ parameters:
     description: >
       Model provider backend. Use "endpoint" (default) for any OpenAI-compatible
       API server (vLLM, Ollama, OpenRouter, etc.). Other valid values are
-      "transformers", "vllm", "openai". Note: "anthropic" is not supported —
-      loglikelihood benchmarks require /v1/completions with echo+logprobs, which
-      Anthropic's API does not implement.
+      "transformers", "vllm", "openai", "anthropic". "anthropic" runs the
+      generation-only benchmarks; log-likelihood benchmarks are rejected for it
+      because they need /v1/completions with echo+logprobs, which Anthropic's API
+      does not implement.
 
   - name: max_samples
     type: integer
@@ -409,9 +420,11 @@ benchmarks:
   # ── Safety / Truthfulness ─────────────────────────────────────────────────
   - id: truthfulness
     name: Honesty & hallucination suite
-    description: Truthfulness suite covering TruthfulQA multiple-choice variants (MC1, MC2).
+    description: >
+      Truthfulness suite covering TruthfulQA multiple-choice (MC1, MC2) and
+      generation variants.
     category: safety
-    metrics: [truthfulqa_mc1, truthfulqa_mc2]
+    metrics: [truthfulqa_mc1, truthfulqa_mc2, truthfulqa:gen.em]
     tags: [safety, truthfulness, hallucination, lighteval]
     primary_score:
       metric: truthfulqa_mc2
@@ -432,4 +445,19 @@ benchmarks:
       lower_is_better: false
     pass_criteria:
       threshold: 0.5
+
+  - id: truthfulqa:gen
+    name: TruthfulQA — Generation
+    description: >
+      TruthfulQA generation variant — the model answers freely and the answer is
+      exact-matched against the reference correct answers.
+    category: safety
+    metrics: [truthfulqa:gen.em]
+    tags: [safety, truthfulness, lighteval]
+    primary_score:
+      metric: truthfulqa:gen.em
+      lower_is_better: false
+    pass_criteria:
+      # Placeholder: strict exact match on free-form text scores low by design.
+      threshold: 0.1
 

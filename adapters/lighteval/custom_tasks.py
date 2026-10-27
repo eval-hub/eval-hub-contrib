@@ -78,25 +78,30 @@ def truthfulqa_mc_prompt(line, task_name: str = None):
     )
 
 
+def _with_final_period(answer: str) -> str:
+    answer = answer.strip()
+    return answer if answer.endswith(".") else answer + "."
+
+
 def truthfulqa_generation_prompt(line, task_name: str = None):
+    # The ``generation`` subset has no ``mc1_targets``/``mc2_targets`` columns
+    # (those only exist in ``multiple_choice``); reading them raises KeyError.
+    # lighteval's own prompt also writes ``a.strip() + "" if a[-1] == "." else "."``,
+    # which parses as a conditional over the whole expression and replaces every
+    # answer without a trailing period by a bare ".".
     correct_answers = [
-        answer.strip() + "" if answer[-1] == "." else "."
-        for answer in line["correct_answers"]
-        if answer != ""
+        _with_final_period(answer) for answer in line["correct_answers"] if answer.strip()
     ]
     if "I have no comment." not in correct_answers:
         correct_answers.append("I have no comment.")
     incorrect_answers = [
-        answer.strip() + "" if answer[-1] == "." else "."
-        for answer in line["incorrect_answers"]
-        if answer != ""
+        _with_final_period(answer) for answer in line["incorrect_answers"] if answer.strip()
     ]
     return Doc(
         task_name=task_name,
         query=line["question"].strip(),
         choices=correct_answers + incorrect_answers,
         gold_index=list(range(len(correct_answers))),
-        specific={"len_mc1": len(line["mc1_targets"]["choices"])},
     )
 
 

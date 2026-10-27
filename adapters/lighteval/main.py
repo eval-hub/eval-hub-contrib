@@ -11,6 +11,7 @@ The adapter:
 5. Returns structured JobResults
 """
 
+import functools
 import json
 import logging
 import os
@@ -51,6 +52,22 @@ CUSTOM_TASK_RESULT_NAMES = {
     custom_name: task_name for task_name, custom_name in CUSTOM_TASK_ALIASES.items()
 }
 
+#: Temperature used when a task samples several answers per question (maj@n)
+#: and the caller did not choose one.  lighteval's LiteLLM backend refuses
+#: ``num_samples > 1`` at its default ``temperature=0``.
+DEFAULT_SAMPLING_TEMPERATURE = 0.7
+
+
+@functools.lru_cache(maxsize=1)
+def _task_configs() -> dict[str, Any]:
+    """lighteval's task registry plus this adapter's custom tasks, loaded once."""
+    from lighteval.tasks.registry import Registry
+
+    return Registry.load_all_task_configs(
+        custom_tasks=str(Path(__file__).with_name("custom_tasks.py")),
+        load_multilingual=False,
+    )
+
 
 class LightEvalAdapter(FrameworkAdapter):
     """LightEval framework adapter.
@@ -65,7 +82,7 @@ class LightEvalAdapter(FrameworkAdapter):
         "commonsense_reasoning": ["hellaswag", "winogrande", "openbookqa", "arc:easy"],
         "scientific_reasoning": ["arc:easy", "arc:challenge"],
         "physical_commonsense": ["piqa"],
-        "truthfulness": ["truthfulqa:mc"],
+        "truthfulness": ["truthfulqa:mc", "truthfulqa:gen"],
         "math": ["gsm8k", "math:algebra", "math:counting_and_probability", "math_500"],
         "knowledge": ["mmlu", "triviaqa", "openbookqa"],
         "language_understanding": ["glue:cola", "glue:sst2", "glue:mrpc"],
@@ -99,6 +116,9 @@ class LightEvalAdapter(FrameworkAdapter):
 
             self._validate_config(config)
             tasks = self._parse_benchmark_tasks(config.benchmark_id, config.parameters)
+            self._validate_provider_supports_tasks(
+                config.parameters.get("provider", "endpoint"), tasks
+            )
             output_dir = Path(tempfile.mkdtemp(prefix="lighteval_"))
             logger.info(f"Configuration validated. Tasks: {tasks}, Output dir: {output_dir}")
 
@@ -279,14 +299,9 @@ class LightEvalAdapter(FrameworkAdapter):
 
         # Validate model provider (from benchmark_config)
         provider = config.parameters.get("provider", "endpoint")
-        valid_providers = ["transformers", "vllm", "openai", "endpoint", "litellm"]
-        if provider == "anthropic":
-            raise ValueError(
-                "provider: anthropic is not supported. The loglikelihood patch uses "
-                "/v1/completions with echo=True and logprobs=1, which Anthropic's API "
-                "does not implement. Use provider: endpoint with a vLLM-compatible server "
-                "for MC benchmarks (arc, hellaswag, winogrande, truthfulqa:mc)."
-            )
+        valid_providers = [
+            "transformers", "vllm", "openai", "anthropic", "endpoint", "litellm",
+        ]
         if provider not in valid_providers:
             logger.warning(
                 f"Unknown model provider '{provider}'. "
@@ -294,15 +309,6 @@ class LightEvalAdapter(FrameworkAdapter):
             )
 
         logger.debug("Configuration validated successfully")
-
-    # Task name aliases: provider.yaml ID → lighteval task registry name.
-    # Add entries here when the EvalHub benchmark ID differs from the lighteval CLI name.
-    # Note: truthfulqa:generation is NOT aliased — its correct registry name varies
-    # across lighteval releases. Submit it as a direct task ID and handle the
-    # resulting ValueError at the lighteval CLI level if unavailable.
-    TASK_ALIASES: dict[str, str] = {
-        "math:counting_and_probability": "math:counting_and_prob",
-    }
 
     def _parse_benchmark_tasks(
         self, benchmark_id: str, benchmark_config: dict[str, Any]
@@ -334,10 +340,91 @@ class LightEvalAdapter(FrameworkAdapter):
 
         return [self._resolve_task_alias(task) for task in tasks]
 
+    @staticmethod
+    def _loglikelihood_tasks(tasks: list[str]) -> list[str]:
+        """Return the tasks that score with ``SamplingMethod.LOGPROBS``.
+
+        Read from lighteval's own task registry (plus this adapter's custom
+        tasks), so the answer follows the installed lighteval version instead of
+        a hand-kept list.  Unknown task names are left for lighteval to reject.
+        """
+        from lighteval.tasks.requests import SamplingMethod
+
+        configs = _task_configs()
+        needing = []
+        for task in tasks:
+            config = configs.get(task.split("|", 1)[0])
+            if config is not None and any(
+                metric.category == SamplingMethod.LOGPROBS for metric in config.metrics
+            ):
+                needing.append(task)
+        return needing
+
+    @staticmethod
+    def _max_samples_per_prompt(tasks: list[str]) -> int:
+        """Most answers any of ``tasks`` samples per question (``maj@4`` -> 4)."""
+        from lighteval.tasks.lighteval_task import LightevalTask
+
+        configs = _task_configs()
+        most = 1
+        for task in tasks:
+            config = configs.get(task.split("|", 1)[0])
+            if config is not None:
+                most = max(most, *LightevalTask(config).num_samples)
+        return most
+
+    def _with_sampling_temperature(
+        self, tasks: list[str], generation_parameters: Any
+    ) -> Any:
+        """Give majority-vote tasks a sampling temperature unless the caller set one.
+
+        ``math:algebra`` and ``math:counting_and_probability`` score ``maj@4``.
+        lighteval's LiteLLM backend raises "num_samples > 1 is not supported with
+        temperature=0", so without this the benchmarks fail on every endpoint.
+        A temperature given by the caller (even 0) is left alone.
+        """
+        if generation_parameters is not None and not isinstance(generation_parameters, dict):
+            return generation_parameters  # pre-formatted string: not ours to edit
+        params = dict(generation_parameters or {})
+        if "temperature" in params:
+            return generation_parameters
+        samples = self._max_samples_per_prompt(tasks)
+        if samples <= 1:
+            return generation_parameters
+        params["temperature"] = DEFAULT_SAMPLING_TEMPERATURE
+        logger.warning(
+            "Tasks %s sample %d answers per question, which needs temperature > 0; "
+            "using temperature=%s. Set generation_parameters.temperature to override.",
+            tasks, samples, DEFAULT_SAMPLING_TEMPERATURE,
+        )
+        return params
+
+    def _validate_provider_supports_tasks(self, provider: str, tasks: list[str]) -> None:
+        """Reject a provider only for the tasks that need a capability it lacks.
+
+        Log-likelihood scoring is served through ``/v1/completions`` with
+        ``echo=True`` and ``logprobs``, which Anthropic's API does not offer.
+        Generation-only tasks do not use it and run fine on Anthropic.
+        """
+        if provider != "anthropic":
+            return
+        needing = self._loglikelihood_tasks(tasks)
+        if needing:
+            raise ValueError(
+                "provider: anthropic cannot run log-likelihood benchmarks "
+                f"({', '.join(needing)}): they are scored through /v1/completions with "
+                "echo=True and logprobs=1, which Anthropic's API does not implement. "
+                "Use provider: endpoint with a vLLM-compatible server for these tasks."
+            )
+
     @classmethod
     def _resolve_task_alias(cls, task: str) -> str:
-        """Map a provider benchmark id to the task name lighteval registers."""
-        return cls.CUSTOM_TASK_ALIASES.get(task) or cls.TASK_ALIASES.get(task, task)
+        """Map a provider benchmark id to the task name lighteval registers.
+
+        Only the benchmarks this adapter re-implements (see ``custom_tasks.py``)
+        are renamed; every other id is already a lighteval 0.13.0 registry name.
+        """
+        return cls.CUSTOM_TASK_ALIASES.get(task, task)
 
     def _run_lighteval(
         self,
@@ -432,6 +519,11 @@ class LightEvalAdapter(FrameworkAdapter):
             # forward it if not already overridden by the nested "parameters" sub-key.
             if "generation_parameters" in benchmark_config and "generation_parameters" not in parameters:
                 parameters["generation_parameters"] = benchmark_config["generation_parameters"]
+            sampling_params = self._with_sampling_temperature(
+                tasks, parameters.get("generation_parameters")
+            )
+            if sampling_params is not None:
+                parameters["generation_parameters"] = sampling_params
             for key, value in parameters.items():
                 if key == "generation_parameters":
                     value = self._format_generation_parameters(value)

@@ -18,6 +18,16 @@ The patch:
   choice 0, which can be the gold answer, and the job would report an accuracy
   for a model that was never actually evaluated.  Generative-only evaluations
   never call ``loglikelihood`` and are unaffected.
+- Scores the same text lighteval's reference backends (transformers, vLLM) score:
+  ``PromptManager(use_chat_template=False).prepare_prompt(doc)``, i.e. the system
+  prompt, the task instruction, the few-shot examples and the query, joined by
+  blank lines, followed by the choice.  Scoring ``doc.query`` alone silently drops
+  every few-shot example and changes the accuracy of ``num_fewshot > 0`` runs.
+- Splits context from continuation the way lighteval's ``tok_encode_pair`` does:
+  whitespace at the end of the context belongs to the continuation, and a token
+  that straddles the boundary counts toward the continuation.  Splitting at
+  ``len(context)`` instead drops the first answer token whenever the context ends
+  in a space or newline (``"Answer: "`` + ``"A"`` tokenises as ``" A"``).
 - Reports the number of scored continuation tokens per choice in
   ``ModelResponse.output_tokens`` so token-normalised metrics
   (``LogProbTokenNorm``) can divide by it.  The completions API returns token
@@ -64,6 +74,20 @@ _RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 # loglikelihood implementation via /v1/completions echo + logprobs
 # ---------------------------------------------------------------------------
 
+def _build_context(system_prompt: str | None, doc: "Doc") -> str:
+    """Return the text lighteval's reference backends condition on for ``doc``.
+
+    ``/v1/completions`` takes raw text, so this is the plain-text prompt
+    (``use_chat_template=False``), the same one ``TransformersModel`` and
+    ``VLLMModel`` use for log-likelihood scoring.
+    """
+    from lighteval.tasks.prompt_manager import PromptManager  # noqa: PLC0415
+
+    return PromptManager(
+        use_chat_template=False, system_prompt=system_prompt
+    ).prepare_prompt(doc)
+
+
 def _post_completion(req: urllib.request.Request) -> dict:
     """POST ``req`` and return the decoded JSON body, retrying transient failures."""
     last_exc: Exception | None = None
@@ -105,7 +129,9 @@ def _score_one_choice(
     failed request.
     """
     full_prompt = context + choice
-    ctx_char_len = len(context)
+    # Trailing whitespace of the context is scored as part of the continuation
+    # (lighteval's ``tok_encode_pair``), so the boundary sits before it.
+    boundary = len(context.rstrip())
 
     payload = {
         "model": model_name,
@@ -134,16 +160,27 @@ def _score_one_choice(
             )
         token_logprobs: list[float | None] = logprobs_obj["token_logprobs"]
         text_offsets: list[int] = logprobs_obj["text_offset"]
+        tokens: list[str] = logprobs_obj.get("tokens") or []
     except (IndexError, KeyError, TypeError, AttributeError) as exc:
         raise LoglikelihoodScoringError(
             f"{completions_url} returned a malformed completions response for "
             f"choice {choice[:40]!r}: {exc!r}"
         ) from exc
 
+    # End of the last echoed token: from its own text when the endpoint sends
+    # one, so a truncated echo is detected instead of assumed to cover the prompt.
+    if text_offsets and len(tokens) == len(text_offsets):
+        last_end = text_offsets[-1] + len(tokens[-1])
+    else:
+        last_end = len(full_prompt)
+
     cont_sum = 0.0
     positions: list[int] = []
     for i, offset in enumerate(text_offsets):
-        if offset < ctx_char_len:
+        # A token belongs to the continuation if it reaches past the boundary;
+        # its end is where the next echoed token starts.
+        end = text_offsets[i + 1] if i + 1 < len(text_offsets) else last_end
+        if end <= boundary:
             continue
         lp = token_logprobs[i] if i < len(token_logprobs) else None
         if lp is None or not math.isfinite(lp):
@@ -207,6 +244,12 @@ def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelRespon
 
     api_key: str = getattr(self, "api_key", "") or getattr(self, "_api_key", "") or "dummy"
 
+    # The system prompt configured for the run (``system_prompt=`` in model_args)
+    # is part of the prompt lighteval's reference backends score.
+    system_prompt: str | None = getattr(getattr(self, "config", None), "system_prompt", None)
+    if system_prompt is None:
+        system_prompt = getattr(getattr(self, "prompt_manager", None), "system_prompt", None)
+
     logger.info(
         "loglikelihood patch: %d docs via %s model=%s",
         len(docs),
@@ -218,7 +261,7 @@ def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelRespon
         # lighteval 0.13.0 Doc.choices holds ALL candidate continuations for this
         # sample.  We must score every choice and return per-choice sums so that
         # LoglikelihoodAcc can pick the argmax (logprobs[:n_choices]).
-        context: str = getattr(doc, "query", "") or ""
+        context: str = _build_context(system_prompt, doc)
         choices: list[str] = list(getattr(doc, "choices", None) or [])
         if not choices:
             raise LoglikelihoodScoringError(
