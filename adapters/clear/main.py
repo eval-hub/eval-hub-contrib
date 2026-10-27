@@ -37,7 +37,7 @@ from evalhub.adapter import (
     configure_telemetry,
 )
 from evalhub.adapter.mlflow import MlflowClient as EvalHubMlflowClient
-from evalhub.adapter.auth import resolve_model_credentials
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 from evalhub.adapter.mlflow import MlflowArtifact, MlflowFileArtifact, TracesNamespace
 
 from themes import RED_HAT_CLEAR_DASHBOARD_CSS, RED_HAT_DASHBOARD_JS_PATCHES
@@ -607,9 +607,10 @@ class ClearAdapter(FrameworkAdapter):
                 )
             )
 
-            if config.model.url and config.parameters.get("inference_backend") != "endpoint":
-                os.environ["OPENAI_BASE_URL"] = config.model.url
-                self._ensure_openai_api_key_for_litellm()
+            judge_url = self._judge_url(config)
+            if judge_url:
+                os.environ["OPENAI_BASE_URL"] = judge_url
+            self._ensure_openai_api_key_for_litellm()
 
             agentic_config = self._build_agentic_config(config, data_dir, output_dir)
             _run_clear_unified_pipeline(agentic_config, output_dir)
@@ -757,18 +758,34 @@ class ClearAdapter(FrameworkAdapter):
 
     @staticmethod
     def _ensure_openai_api_key_for_litellm() -> None:
-        """Set OPENAI_API_KEY from env or from model auth secret mount (not job parameters)."""
-        if os.getenv("OPENAI_API_KEY"):
-            return
-        creds = resolve_model_credentials()
-        if creds.api_key:
-            os.environ["OPENAI_API_KEY"] = creds.api_key
-            return
-        logger.info("OPENAI_API_KEY not set; some OpenAI-compatible gateways still work without it")
+        """Overwrite runtime credentials with the model Secret connection."""
+        os.environ["OPENAI_API_KEY"] = (
+            read_model_auth_key("judge_api-key")
+            or resolve_model_credentials().api_key
+            or "local"
+        )
+
+    @staticmethod
+    def _judge_url(config: JobSpec) -> str:
+        for key in ("endpoint_url", "inference_url", "judge_url", "judge_api_key"):
+            if key in config.parameters:
+                raise ValueError(
+                    f"parameters.{key} is no longer supported; "
+                    "use judge_url and judge_api-key in model.auth.secret_ref"
+                )
+        url = read_model_auth_key("judge_url")
+        if url and not read_model_auth_key("judge_api-key"):
+            raise ValueError("judge_url in model.auth.secret_ref requires judge_api-key")
+        return url or config.model.url
 
     def _build_agentic_config(
         self, config: JobSpec, data_dir: str, output_dir: Path
     ) -> dict[str, Any]:
+        if config.parameters["provider"] != "openai":
+            raise ValueError(
+                "Secret-based CLEAR routing currently requires provider=openai; "
+                "other authentication protocols need sidecar support"
+            )
         agentic_config = {
             "data_dir": data_dir,
             "results_dir": str(output_dir.parent),
@@ -790,12 +807,8 @@ class ClearAdapter(FrameworkAdapter):
             # the remaining params are set internally in clear
         }
 
-        if config.model.url:
-            ep = (
-                config.parameters.get("endpoint_url")
-                or config.parameters.get("inference_url")
-                or config.model.url
-            )
+        ep = self._judge_url(config)
+        if ep:
             if agentic_config.get("inference_backend") == "endpoint" and not ep:
                 raise ValueError(
                     "model.url or parameters.endpoint_url (or inference_url) is required "
@@ -810,6 +823,11 @@ class ClearAdapter(FrameworkAdapter):
             )
 
         if "eval_model_params" in config.parameters:
+            for key in config.parameters["eval_model_params"]:
+                if key in {"api_key", "api_base", "base_url", "endpoint_url", "inference_url"}:
+                    raise ValueError(
+                        f"parameters.eval_model_params.{key} must come from model.auth.secret_ref"
+                    )
             agentic_config["eval_model_params"] = config.parameters["eval_model_params"]
 
         if config.parameters and "evaluation_criteria" in config.parameters:
