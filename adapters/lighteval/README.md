@@ -82,9 +82,33 @@ The adapter supports all LightEval tasks, organised by category:
 - **transformers**: HuggingFace Transformers models
 - **vllm**: vLLM inference engine
 - **openai**: OpenAI API
-- **anthropic**: Anthropic API
+- **anthropic**: Anthropic API (generation-only benchmarks; see below)
 - **endpoint**: Custom OpenAI-compatible endpoints
 - **litellm**: LiteLLM proxy
+
+## How endpoint scoring works
+
+Against an OpenAI-compatible endpoint (`endpoint`, `openai`, `litellm`) benchmarks are scored one of two ways:
+
+- **Generation benchmarks** (GSM8K, MATH-500, AIME, GPQA Diamond, HellaSwag, PIQA, OpenBookQA, MMLU, TriviaQA, TruthfulQA generation, LiveCodeBench) send chat requests and need nothing special from the endpoint.
+- **Log-likelihood benchmarks** (ARC Easy/Challenge, WinoGrande, GLUE CoLA/SST-2/MRPC, TruthfulQA multiple choice, and the suites that include them: `commonsense_reasoning`, `scientific_reasoning`, `language_understanding`, `truthfulness`) compare the probability the model gives each answer choice. lighteval's LiteLLM backend does not implement this (`NotImplementedError` in `loglikelihood`), so `lighteval_logprob_patch.py` implements it through `/v1/completions` with `echo=true` and `logprobs=1`. vLLM supports both. 
+
+The log-likelihood path is designed to give the same per-choice scores as lighteval's own `transformers` backend for the same model and prompt settings:
+
+- The scored text is lighteval's plain-text prompt: system prompt, task instruction, `num_few_shot` examples and the question, followed by the choice.
+- Whitespace at the end of the question counts as part of the answer, as in lighteval's `tok_encode_pair`. A token that straddles the question/answer boundary counts toward the answer.
+- Echoed token offsets are aligned with the prompt before the question/answer split: vLLM counts the text of a leading BOS token (`<s>`) in `text_offset`, which shifts every offset. An echo that is shorter than the prompt, or whose extra text is not whole leading tokens, fails the job.
+- A request that cannot be scored (HTTP error, timeout, missing `logprobs`) fails the job. It is never turned into a score, so a broken endpoint cannot produce an accuracy. Timeouts, connection errors and HTTP 408/429/5xx are retried up to 3 times first.
+- Known limit: lighteval's PMI-normalised metrics (`Doc.unconditioned_query`) are not supported.
+- Known limit, tokenization at the question/answer boundary: lighteval's `transformers` backend tokenizes the question and the answer separately and joins the token ids (`tok_encode_pair(..., pairwise=True)`). `/v1/completions` takes text, so the endpoint tokenizes question and answer together. The two produce the same tokens when the boundary is a clean split, which is the usual case for GPT-style tokenizers and for prompts like `Answer:` followed by ` Paris`. They differ when a token would merge across the boundary, and more often with SentencePiece tokenizers (Llama, Mistral) when the question ends in a newline or a quote, or the answer has no leading space. The model then sees a different token sequence, so its log-likelihoods differ slightly from the `transformers` backend's. `tests/test_logprob_reference.py` keeps two such cases as expected failures. Closing the gap needs token-id prompts, which are specific to vLLM, and is not done yet.
+
+`tests/test_logprob_reference.py` checks this against lighteval's `TransformersModel` using a small local model, with no network.
+
+**Anthropic** has no `echo`/`logprobs`, so it is rejected only for the log-likelihood benchmarks above, with an error that names them. Generation benchmarks run normally.
+
+**Majority-vote benchmarks** (`math:algebra`, `math:counting_and_probability`, which score `maj@4`) need several samples per question, which lighteval refuses at `temperature=0`. When you do not set `generation_parameters.temperature`, the adapter uses `0.7` for the run and logs it. A temperature you set, including `0`, is never overridden. The `math` suite contains these tasks, so the whole suite then runs at that temperature unless you set one.
+
+PIQA and TruthfulQA run from `custom_tasks.py`: lighteval's own definitions load a dataset script that current `datasets` rejects (PIQA) or read a column the `generation` subset does not have (`mc1_targets`). The custom tasks use pinned Parquet datasets and report under the usual names (`piqa`, `truthfulqa:mc`, `truthfulqa:gen`).
 
 ## Supported Request Payload Parameters
 
