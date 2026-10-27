@@ -5,8 +5,8 @@ Scan date: 2026-10-26. Tool: `pip-audit` (PyPI/OSV advisories) on the universal 
 the Linux-only CUDA packages (`nvidia-*`, `cuda-*`, `triton`) that torch pulls into
 the x86_64 and aarch64 images. Environment markers are stripped before auditing,
 because `pip-audit` otherwise evaluates them for the machine it runs on and silently
-skips the Linux-only packages. The git-pinned `lighteval` itself has no PyPI entry,
-but its declared dependencies are in the lock.
+skips the Linux-only packages. `lighteval` 0.13.0 is a normal PyPI release and is
+audited with the rest.
 
 Not covered: operating-system packages in the UBI9 base image (the Trivy workflow
 covers those) and anything outside Python.
@@ -17,7 +17,7 @@ Re-run:
 cd adapters/lighteval
 uv pip compile requirements.txt --override requirements-overrides.txt \
     --universal --python-version 3.12 --no-header --no-annotate -o requirements.lock
-grep -v '^#' requirements.lock | grep -v '^lighteval @' | grep '==' | sed 's/ ;.*//' | sort -u > /tmp/audit-in.txt   # no git pin, no markers
+grep -v '^#' requirements.lock | grep '==' | sed 's/ ;.*//' | sort -u > /tmp/audit-in.txt   # strip markers
 pip-audit -r /tmp/audit-in.txt --no-deps --disable-pip
 ```
 
@@ -26,7 +26,7 @@ pip-audit -r /tmp/audit-in.txt --no-deps --disable-pip
 | | Vulnerable packages | Advisories |
 |---|---|---|
 | Before: `lighteval==0.13.0`, `litellm==1.84.0` | 3 (nltk, litellm, diskcache) | 44 |
-| After: lighteval `main@7fa19dc`, `litellm==1.103.9`, `nltk==3.10.4` | 1 (diskcache) | 1 |
+| After: `lighteval==0.13.0`, `litellm==1.103.9`, `nltk==3.10.4` | 1 (diskcache) | 1 |
 
 "Before" is the tree a fresh resolve of the previous pins gives. A resolve that keeps
 older cached versions of transitive packages is worse, see
@@ -145,30 +145,33 @@ in filelock 4.2.1, so with 1.104 or later the resolver stays on filelock 3.32.x:
 Two of three are Windows-only and the adapter image is Linux; whether anything in the
 image uses `ReadWriteLock` was not checked.
 
-## Pinning lighteval to a git commit
+## Why lighteval stays on the 0.13.0 release
 
-`requirements.txt` pins `lighteval @ git+https://github.com/huggingface/lighteval.git@7fa19dc6f53a713ba8bb6541e7ed66dad2e24fd7`
-(`0.13.1.dev0`, commit of 2026-10-06). The last release, 0.13.0 (2025-11-24), pins
-`nltk==3.9.1`; `main` pins `nltk==3.10.3`.
+An earlier revision of this branch pinned `lighteval @ git+https://github.com/huggingface/lighteval.git@7fa19dc6f53a713ba8bb6541e7ed66dad2e24fd7`
+(`0.13.1.dev0`, 2026-10-06), because `main` pins `nltk==3.10.3` while 0.13.0 pins
+`nltk==3.9.1`. It was dropped for three reasons:
 
-`main` does **not** fix what this adapter patches: `LiteLLMClient.loglikelihood` still
-raises `NotImplementedError`, PIQA still loads a dataset script (`ybisk/piqa`), and
-the `truthfulqa:gen` prompt still reads `mc1_targets`. `lighteval_logprob_patch.py` and
-`custom_tasks.py` stay necessary.
+- **The requirements check rejects it.** `verify-requirements.yml` runs the action
+  `ruivieira/basic-ops-tasks` in `python-index` mode on `requirements.txt`. Its code
+  (`src/requirements.ts`) turns every VCS or direct-URL requirement into
+  `status: 'error'`: "VCS requirements are not supported: only the configured index is
+  queried". That job would fail for a `git+https` line even with the `PYTHON_INDEX`
+  secret present.
+- **No security gain.** nltk is raised to 3.10.4 by `requirements-overrides.txt` either
+  way, and the audit of the lock is identical for both lighteval versions: 183 package
+  versions, only diskcache vulnerable.
+- **`main` fixes none of what this adapter patches.** `LiteLLMClient.loglikelihood`
+  still raises `NotImplementedError`, PIQA still loads a dataset script
+  (`ybisk/piqa`), and the `truthfulqa:gen` prompt still reads `mc1_targets`.
+  `lighteval_logprob_patch.py` and `custom_tasks.py` stay necessary.
 
-Consequences of a VCS pin:
+A git pin would also need `git` and github.com access during the image build (the
+`ubi9/python-311`, `-312` and `-314` images do ship git 2.52.0) and would pin an
+unreleased commit.
 
-- It is an unreleased commit, not a supported release.
-- The `verify-requirements` workflow checks that pins exist on the Red Hat package
-  index; a VCS requirement cannot be checked there. Not tested.
-- The image build needs `git` and access to github.com. The `ubi9/python-311`,
-  `-312` and `-314` images all ship git 2.52.0 (checked by running them).
-- Hermetic or network-restricted builds cannot fetch it.
-- `torch`, `transformers` (5.x), `datasets` (5.x) and `inspect-ai` resolve to newer
-  versions than under 0.13.0. The unit tests, the reference comparison and the
-  end-to-end CLI runs pass on this set.
-- Transitive packages are not locked. The audit above reflects the versions available
-  on the scan date.
+The unit suite (115 tests) and the end-to-end CLI cases pass on both lighteval 0.13.0
+and that `main` commit. Transitive packages are locked in `requirements.lock`, so the
+audit above describes exactly what the image installs.
 
 ## Container image: pip cannot resolve the unpinned set; use the lock
 
@@ -180,7 +183,7 @@ same requirements in seconds.
 
 It comes from the changed pins, not from the base image: `main`'s previous requirements
 (`lighteval==0.13.0`, `litellm==1.84.0`) resolve on the `python-311` image in 2m43s, and
-`lighteval@7fa19dc` with `litellm==1.84.0` resolves in 3m38s. `lighteval==0.13.0` with
+the git-pinned `lighteval@7fa19dc` (a variant tried earlier) with `litellm==1.84.0` resolves in 3m38s. `lighteval==0.13.0` with
 `litellm==1.103.9` had not finished after about 15 minutes and was stopped, so
 litellm 1.103.9 is the likely trigger. Only the 3.12 failure was observed; the unlocked
 set was not built on 3.11 or 3.14.
@@ -259,7 +262,8 @@ worth having if the Red Hat index allows it:
 
 ## What was tested
 
-Python 3.11, lighteval `7fa19dc`, litellm 1.103.9, nltk 3.10.4, eval-hub-sdk 1.0.6:
+Python 3.12, lighteval 0.13.0, litellm 1.103.9, nltk 3.10.4, eval-hub-sdk 1.0.6 (the same
+cases also passed with lighteval `7fa19dc` on Python 3.11 to 3.14):
 
 - Unit tests, including the comparison of per-choice log-likelihoods with lighteval's
   `TransformersModel`: 115 passed.
@@ -270,4 +274,4 @@ Python 3.11, lighteval `7fa19dc`, litellm 1.103.9, nltk 3.10.4, eval-hub-sdk 1.0
   show that the plumbing works.
 
 Not tested: a real RHOAI cluster or vLLM endpoint, the Red Hat package index (whether
-litellm 1.103.9, nltk 3.10.4 and a git pin are accepted), Anthropic, `linux/amd64` builds.
+litellm 1.103.9 and nltk 3.10.4 are available), Anthropic, `linux/amd64` builds.

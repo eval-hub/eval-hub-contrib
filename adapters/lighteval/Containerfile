@@ -9,7 +9,6 @@ WORKDIR /app
 
 # Install the fully pinned dependency set. The resolver is skipped (--no-deps)
 # because pip 24.2 cannot resolve the unpinned requirements.txt (ResolutionTooDeep).
-# lighteval is installed from a pinned git commit, so git must be in the base image.
 COPY requirements.lock .
 RUN pip install --no-cache-dir --no-deps -r requirements.lock
 
