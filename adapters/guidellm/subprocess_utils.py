@@ -6,7 +6,7 @@ import logging
 import re
 import subprocess
 from collections import deque
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 
 _MAX_OUTPUT_LINES = 40
 _MAX_ERROR_OUTPUT_CHARS = 4_000
