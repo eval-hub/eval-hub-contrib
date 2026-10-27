@@ -417,8 +417,7 @@ def _cap_code_grader_memory() -> None:
     ``RLIMIT_AS`` to the child's inherited size plus the budget.  Only the address
     space is limited: ``RLIMIT_STACK`` stays as it was.
     """
-    budget = _code_memory_budget_bytes()
-    if budget == 0:
+    if _code_memory_budget_bytes() == 0:
         logger.info("%s=0: LiveCodeBench grader memory is not capped", _CODE_MEMORY_ENV)
         return
     try:
@@ -434,7 +433,10 @@ def _cap_code_grader_memory() -> None:
         return
 
     def reliability_guard(maximum_memory_bytes=None):
-        if maximum_memory_bytes is None and (inherited := _address_space_bytes()) is not None:
+        # Read the budget here, in the graded child, so the setting in force when a
+        # solution runs is the one that applies, not the one at install time.
+        budget = _code_memory_budget_bytes()
+        if maximum_memory_bytes is None and budget and (inherited := _address_space_bytes()) is not None:
             limit = inherited + budget
             try:
                 resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
@@ -443,8 +445,9 @@ def _cap_code_grader_memory() -> None:
         return original(maximum_memory_bytes)
 
     reliability_guard._evalhub_capped = True  # type: ignore[attr-defined]
+    reliability_guard._evalhub_original = original  # type: ignore[attr-defined]
     codegen_metrics.reliability_guard = reliability_guard
-    logger.info("LiveCodeBench grader memory capped at +%d MiB per solution", budget // (1024 * 1024))
+    logger.info("LiveCodeBench grader memory capped at +%d MiB per solution", _code_memory_budget_bytes() // (1024 * 1024))
 
 
 def _apply_patch() -> None:

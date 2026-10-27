@@ -2082,11 +2082,16 @@ _GRADER_SAMPLE = {
 
 @pytest.fixture
 def lcb_grader(monkeypatch):
-    """lighteval's LiveCodeBench module with ``reliability_guard`` restored afterwards."""
+    """lighteval's LiveCodeBench module with its own ``reliability_guard``, restored afterwards.
+
+    Other tests run ``_apply_patch()`` and leave the cap wrapper installed, so start from
+    the function lighteval ships rather than whatever an earlier test left behind.
+    """
     pytest.importorskip("lighteval")
     from lighteval.tasks.tasks.lcb import codegen_metrics
 
-    monkeypatch.setattr(codegen_metrics, "reliability_guard", codegen_metrics.reliability_guard)
+    shipped = getattr(codegen_metrics.reliability_guard, "_evalhub_original", codegen_metrics.reliability_guard)
+    monkeypatch.setattr(codegen_metrics, "reliability_guard", shipped)
     return codegen_metrics
 
 
@@ -2097,12 +2102,14 @@ def test_code_grader_memory_cap_fails_a_solution_that_allocates_without_limit(lc
     run was OOMKilled at 512 GiB after generating every answer.  With the cap, the
     solution fails and an ordinary one still passes.
 
-    The oversized solution asks for 1 GiB once and then prints the right answer, so the
-    test is cheap, and it passes (instead of failing) when the cap is missing.
+    The oversized solution asks for 512 MiB once and then prints the right answer, so the
+    test is cheap, and it passes (instead of failing) when the cap is missing.  The sizes
+    are kept small because ``bytearray`` touches every page it allocates and the forked
+    child sits on top of an already large test process.
     """
-    monkeypatch.setenv("EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB", "256")
-    greedy = "b = bytearray(1024 * 1024 * 1024)\nprint(input())\n"
-    modest = "b = bytearray(64 * 1024 * 1024)\nprint(input())\n"
+    monkeypatch.setenv("EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB", "128")
+    greedy = "b = bytearray(512 * 1024 * 1024)\nprint(input())\n"
+    modest = "b = bytearray(32 * 1024 * 1024)\nprint(input())\n"
 
     def pass_at_1(code):
         # The path the metric takes: a process pool, then a forked child per solution.
@@ -2153,3 +2160,26 @@ def test_code_grader_memory_cap_is_installed_once_and_leaves_an_explicit_limit_a
     wrapped(5)
     assert limits == [(resource.RLIMIT_AS, (1000 + 1024 * 1024, 1000 + 1024 * 1024))]
     assert calls == [None, 5]
+
+
+def test_code_grader_memory_budget_is_read_when_the_grader_runs_not_when_installed(lcb_grader, monkeypatch):
+    """The wrapper is installed once per process, often before the setting is final (an
+    earlier ``_apply_patch()`` in the same process, a test, a caller that sets the
+    variable later).  The budget in force when a solution runs is the one that applies."""
+    import resource
+
+    mod = _load_patch_module()
+    monkeypatch.setattr(lcb_grader, "reliability_guard", lambda maximum_memory_bytes=None: None)
+    monkeypatch.setattr(mod, "_address_space_bytes", lambda: 0)
+    limits = []
+    monkeypatch.setattr(resource, "setrlimit", lambda which, value: limits.append(value))
+
+    monkeypatch.delenv("EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB", raising=False)
+    mod._cap_code_grader_memory()  # installed with the default budget
+    monkeypatch.setenv("EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB", "3")
+    lcb_grader.reliability_guard()
+    assert limits == [(3 * 1024 * 1024,) * 2]
+
+    monkeypatch.setenv("EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB", "0")
+    lcb_grader.reliability_guard()
+    assert len(limits) == 1, "0 switches the cap off even after it was installed"
