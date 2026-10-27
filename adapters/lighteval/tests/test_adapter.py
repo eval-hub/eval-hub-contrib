@@ -1109,6 +1109,14 @@ def test_generation_parameters_nested_takes_precedence(adapter, tmp_path, monkey
 # ── C1: Multi-choice aggregate scoring in loglikelihood patch ──────────────────
 
 
+@pytest.fixture(autouse=True)
+def _joint_tokenization_for_text_stubs(monkeypatch):
+    """The stubs in this file answer a text prompt with a fixed echo, which is the joint
+    path (``EVALHUB_LIGHTEVAL_LOGLIKELIHOOD_TOKENIZATION=joint``).  The default, pairwise
+    path sends token ids and is covered by its own tests, which opt back in."""
+    monkeypatch.setenv("EVALHUB_LIGHTEVAL_LOGLIKELIHOOD_TOKENIZATION", "joint")
+
+
 class _FakeHTTPResponse:
     """Proper context manager for monkeypatching urllib.request.urlopen."""
     def __init__(self, data: bytes):
@@ -2081,3 +2089,121 @@ def test_memory_cap_is_copied_into_the_image():
     containerfile = (Path(__file__).parent.parent / "Containerfile").read_text()
     assert "COPY lighteval_memory_cap.py" in containerfile
     assert "COPY lighteval_logprob_patch.py" in containerfile
+
+
+# ── Pairwise tokenization: question and answer tokenized separately ──────────────────
+
+
+def _toy_vllm(monkeypatch, *, return_ids=True):
+    """A fake vLLM completions endpoint that accepts text or token ids.
+
+    Tokens are words with their leading whitespace, so ``"capit" + "al"`` is two tokens
+    separately and one token (``"capital"``) as a single string.  A BOS token (id 0) is
+    prepended to text prompts unless ``add_special_tokens`` is false, as vLLM does.
+    Returns the list of request bodies it served.
+    """
+    import re
+    import urllib.request as _urllib_request
+
+    vocab: dict[str, int] = {}
+    served: list[dict] = []
+
+    def encode(text, add_special_tokens=True):
+        ids = [vocab.setdefault(tok, len(vocab) + 1) for tok in re.findall(r"\s*\w+|\s*[^\w\s]", text)]
+        return [0, *ids] if add_special_tokens else ids
+
+    def fake_urlopen(req, timeout=60):
+        body = json.loads(req.data.decode())
+        served.append(body)
+        prompt = body["prompt"]
+        ids = list(prompt) if isinstance(prompt, list) else encode(prompt, body.get("add_special_tokens", True))
+        names = {0: "", **{i: tok for tok, i in vocab.items()}}  # BOS has no text here
+        pieces = [names[i] for i in ids]
+        offsets = [sum(len(piece) for piece in pieces[:i]) for i in range(len(pieces))]
+        choice = {
+            "logprobs": {
+                "tokens": pieces,
+                "token_logprobs": [None] + [-0.1 * (1 + (ids[i] + ids[i - 1]) % 5) for i in range(1, len(ids))],
+                "text_offset": offsets,
+            }
+        }
+        if return_ids and body.get("return_token_ids"):
+            choice["prompt_token_ids"] = ids
+        return _FakeHTTPResponse(json.dumps({"choices": [choice]}).encode())
+
+    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
+    return served, encode
+
+
+def test_pairwise_scores_the_separately_tokenized_ids(monkeypatch):
+    """A token that would merge across the boundary stays two tokens, as in the
+    ``transformers`` backend: the scored prompt is the context ids followed by the
+    choice's own ids, not the ids of the joint string."""
+    monkeypatch.setenv("EVALHUB_LIGHTEVAL_LOGLIKELIHOOD_TOKENIZATION", "pairwise")
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    served, encode = _toy_vllm(monkeypatch)
+    doc = _make_doc(query="Question: capit", choices=["al"], gold_index=0)
+
+    (resp,) = mod._loglikelihood_via_completions(_fake_client(), [doc])
+
+    context_ids = encode("Question: capit")  # with BOS
+    answer_ids = encode("al", add_special_tokens=False)
+    joint_ids = encode("Question: capital")
+    assert joint_ids != context_ids + answer_ids, "the toy tokenizer must merge across the boundary"
+    scoring_request = served[-1]
+    assert scoring_request["prompt"] == context_ids + answer_ids
+    assert "add_special_tokens" not in scoring_request  # ids are sent as they are
+    ids = context_ids + answer_ids
+    expected = -0.1 * (1 + (ids[-1] + ids[-2]) % 5)
+    assert resp.logprobs == pytest.approx([expected])
+    assert resp.output_tokens == [[len(context_ids)]]
+
+
+def test_pairwise_moves_trailing_whitespace_of_the_context_to_the_choice(monkeypatch):
+    monkeypatch.setenv("EVALHUB_LIGHTEVAL_LOGLIKELIHOOD_TOKENIZATION", "pairwise")
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    served, encode = _toy_vllm(monkeypatch)
+    doc = _make_doc(query="Answer: ", choices=["Paris", "Rome"], gold_index=0)
+
+    mod._loglikelihood_via_completions(_fake_client(), [doc])
+
+    texts = [(b["prompt"], b.get("add_special_tokens")) for b in served if isinstance(b["prompt"], str)]
+    # Context without its trailing space (special tokens on), then each choice with that
+    # space in front (special tokens off): the same split as tok_encode_pair.
+    assert texts == [("Answer:", None), (" Paris", False), (" Rome", False)]
+    assert served[-2]["prompt"] == encode("Answer:") + encode(" Paris", add_special_tokens=False)
+
+
+def test_pairwise_needs_token_ids_from_the_endpoint_and_says_how_to_opt_out(monkeypatch):
+    monkeypatch.setenv("EVALHUB_LIGHTEVAL_LOGLIKELIHOOD_TOKENIZATION", "pairwise")
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    _toy_vllm(monkeypatch, return_ids=False)
+    doc = _make_doc(query="Q: ", choices=["yes"], gold_index=0)
+
+    with pytest.raises(mod.LoglikelihoodScoringError, match="prompt_token_ids") as exc:
+        mod._loglikelihood_via_completions(_fake_client(), [doc])
+    assert "EVALHUB_LIGHTEVAL_LOGLIKELIHOOD_TOKENIZATION=joint" in str(exc.value)
+
+
+def test_joint_opt_out_sends_the_text_as_one_prompt(monkeypatch):
+    mod = _load_patch_module()  # the autouse fixture selects joint
+    _stub_model_response(monkeypatch)
+    served, _ = _toy_vllm(monkeypatch, return_ids=False)
+    doc = _make_doc(query="Question: capit", choices=["al"], gold_index=0)
+
+    mod._loglikelihood_via_completions(_fake_client(), [doc])
+
+    assert [b["prompt"] for b in served] == ["Question: capital"]
+
+
+def test_unknown_tokenization_mode_is_rejected(monkeypatch):
+    monkeypatch.setenv("EVALHUB_LIGHTEVAL_LOGLIKELIHOOD_TOKENIZATION", "sideways")
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    doc = _make_doc(query="Q: ", choices=["yes"], gold_index=0)
+
+    with pytest.raises(mod.LoglikelihoodScoringError, match="sideways"):
+        mod._loglikelihood_via_completions(_fake_client(), [doc])
