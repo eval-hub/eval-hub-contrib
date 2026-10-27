@@ -336,7 +336,7 @@ test-lighteval:
 	@echo "Running LightEval adapter tests..."
 	cd adapters/lighteval && \
 	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
-	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt --override requirements-overrides.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ LightEval tests passed"
 

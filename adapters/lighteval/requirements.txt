@@ -1,13 +1,22 @@
 # LightEval framework adapter requirements
 
-# LightEval framework
-lighteval==0.13.0
-# LightEval 0.13.0 uses list_models(model_name=...), removed in Hub v2
+# LightEval framework, pinned to a commit of main (0.13.1.dev0). The last release,
+# 0.13.0 (2025-11-24), pins nltk==3.9.1 (42 advisories); main pins nltk==3.10.3.
+# Everything else this adapter needs (LiteLLM loglikelihood, PIQA, TruthfulQA) is
+# still missing upstream and is provided by lighteval_logprob_patch.py and
+# custom_tasks.py. nltk is raised to 3.10.4 by requirements-overrides.txt.
+lighteval @ git+https://github.com/huggingface/lighteval.git@7fa19dc6f53a713ba8bb6541e7ed66dad2e24fd7
+# lighteval main still calls list_models(model_name=...), removed in Hub v2
 huggingface-hub>=0.30.2,<2
 pyarrow
 
-# LiteLLM for endpoint support
-litellm[caching]==1.84.0
+# LiteLLM for endpoint support.
+# 1.84.0 is affected by PYSEC-2026-4066; 1.103.9 is the newest release that audits
+# clean and does not cap filelock<4 (>=1.104 does, which keeps filelock on its
+# vulnerable 3.x line). Releases >=1.105 also fail outright without extra
+# packages, see DEPENDENCY-SECURITY.md. lighteval_logprob_patch.py turns litellm's
+# response cache off: a cache hit on 1.103.9 needs orjson and soundfile.
+litellm[caching]==1.103.9
 
 # Required dependencies
 requests==2.33.0

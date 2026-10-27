@@ -1,5 +1,5 @@
 # LightEval adapter container for eval-hub
-FROM registry.access.redhat.com/ubi9/python-311:latest
+FROM registry.access.redhat.com/ubi9/python-312:latest
 
 # Switch to root to set up directories
 USER 0
@@ -7,9 +7,11 @@ USER 0
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install the fully pinned dependency set. The resolver is skipped (--no-deps)
+# because pip 24.2 cannot resolve the unpinned requirements.txt (ResolutionTooDeep).
+# lighteval is installed from a pinned git commit, so git must be in the base image.
+COPY requirements.lock .
+RUN pip install --no-cache-dir --no-deps -r requirements.lock
 
 # Copy adapter implementation and loglikelihood patch
 COPY main.py .
