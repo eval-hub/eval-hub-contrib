@@ -225,6 +225,19 @@ def _build_docs() -> dict[str, Doc]:
             choices=["Rome", "Paris"],
             gold_index=0,
         ),
+        # A token spans the context/choice boundary.  The reference slices the joint
+        # encoding at len(tokens(context)), so which tokens count as the answer depends
+        # on how the tokenizer merges, not on where the characters are split.
+        "token-merges-across-boundary": Doc(
+            query="Question: Wh", choices=["at is the capital?", "o is it?"], gold_index=0
+        ),
+        # The joint encoding is as long as the context's own: the reference keeps the
+        # last token as the answer instead of an empty continuation.
+        "merge-keeps-token-count": Doc(
+            query="Question: What is the capital of Italy? Answer: Rome is the ca",
+            choices=["pital.", "rrot."],
+            gold_index=0,
+        ),
         "instruction-fewshot-system": Doc(
             query="Question: What is the capital of Italy? Answer:",
             choices=[" Rome", " Paris", " yes"],
@@ -246,7 +259,24 @@ def _build_docs() -> dict[str, Doc]:
     }
 
 
-@pytest.mark.parametrize("name", list(_docs()))
+# Known gap (PR review of 2026-10-27).  lighteval's TransformersModel scores with
+# ``tok_encode_pair(..., pairwise=True)``: the context and the choice are tokenized
+# separately and the ids concatenated.  A completions endpoint tokenizes the joint
+# string, so wherever a token would merge across the boundary the model sees a different
+# token sequence and the likelihoods differ.  Text-only /v1/completions cannot
+# reproduce the separate tokenization; that needs token-id prompts.  ``strict`` makes
+# these fail loudly once the gap is closed, so the marker gets removed.
+_BOUNDARY_MERGE = pytest.mark.xfail(
+    strict=True, reason="endpoint tokenizes context+choice jointly; the reference does it separately"
+)
+_PARITY_CASES = [
+    pytest.param(name, marks=_BOUNDARY_MERGE) if name in ("token-merges-across-boundary", "merge-keeps-token-count")
+    else name
+    for name in _docs()
+]
+
+
+@pytest.mark.parametrize("name", _PARITY_CASES)
 def test_patch_matches_reference_backend(name, reference_model, patched_client):
     doc = _docs()[name]
 
