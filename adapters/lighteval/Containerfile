@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 COPY lighteval_logprob_patch.py .
 COPY sample_results.py ./
+COPY custom_tasks.py ./
 
 # Create writable cache directories with proper permissions
 # Make site-packages writable for lighteval to cache task data

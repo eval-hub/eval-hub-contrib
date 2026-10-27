@@ -20,6 +20,17 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: Validate container constraints
+        working-directory: adapters/inspect
+        run: |
+          uv pip compile requirements.txt \
+            --constraint constraints.txt \
+            --universal \
+            --python-version 3.12 \
+            --no-header \
+            --no-annotate \
+            --quiet \
+            --output-file "$RUNNER_TEMP/inspect-constraints-check.txt"
       - name: Install test dependencies
         working-directory: adapters/inspect
         run: |

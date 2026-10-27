@@ -51,6 +51,12 @@ def test_guidellm_happy_path(monkeypatch):
     monkeypatch.setattr(adapter, "_run_guidellm", fake_run_guidellm)
 
     results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    from evalhub.adapter.mlflow import MlflowFileArtifact
+
+    artifact, = adapter.mlflow_artifacts
+    assert isinstance(artifact, MlflowFileArtifact)
+    assert artifact.path == "benchmarks.json"
+    assert json.loads(artifact.local_path.read_text()) == CANNED_BENCHMARKS
 
     # FrameworkAdapter contract
     assert results.id == adapter.job_spec.id

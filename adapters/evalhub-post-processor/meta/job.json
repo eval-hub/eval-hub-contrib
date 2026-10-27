@@ -1,0 +1,33 @@
+{
+  "id": "post-processing-job-001",
+  "provider_id": "evalhub-internal",
+  "benchmark_id": "evaluation-post-processor",
+  "benchmark_index": 0,
+  "model": {"name": "evaluation-post-processor", "url": ""},
+  "parameters": {
+    "operations": {
+      "confidence_interval": {
+        "num_parallel_threads": 3,
+        "results_data_ref": {"eval_job": {"id": "completed-evaluation-job-id"}},
+        "calibration_data_ref": [
+          {
+            "pvc": {"claim_name": "calibration-data"},
+            "data_config": {
+              "format": "jsonl",
+              "columns": {
+                "sample_id": "example_id",
+                "label": "human_score",
+                "prediction": "judge_score",
+                "benchmark_id": "benchmark_id",
+                "provider_id": "provider_id"
+              }
+            }
+          }
+        ],
+        "significance_level": 0.05
+      }
+    },
+    "operation_order": ["confidence_interval"]
+  },
+  "callback_url": "http://localhost:8080"
+}

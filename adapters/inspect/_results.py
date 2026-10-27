@@ -12,6 +12,13 @@ from _benchmarks import DIMENSION_ABILITY_MAP, PETRI_PRIMARY_METRIC
 
 logger = logging.getLogger(__name__)
 
+# Inspect Evals' DocVQA scorer reports the ANLS aggregate under the generic
+# ``docvqa_scorer/accuracy`` key. Publish the benchmark's canonical metric name
+# so collection configs can select it without changing the computed value.
+BENCHMARK_METRIC_NAME_MAP: dict[tuple[str, str], str] = {
+    ("inspect/docvqa", "docvqa_scorer/accuracy"): "anls",
+}
+
 
 def parse_log(log_file: Path) -> dict[str, Any]:
     import json
@@ -69,22 +76,34 @@ def extract_results(
                 continue
 
             full_name = f"{dim_name}/{metric_name}"
+            metric_name = BENCHMARK_METRIC_NAME_MAP.get(
+                (benchmark_id, full_name), full_name
+            )
             ability = DIMENSION_ABILITY_MAP.get(
                 dim_name,
                 "alignment_risk" if mode in ("petri", "bloom") else "reasoning",
             )
 
+            metadata = {
+                "framework": "inspect-ai",
+                "mode": mode,
+                "scorer": scorer,
+                "dimension": dim_name,
+            }
+            if metric_name != full_name:
+                metadata["native_metric_name"] = full_name
+
             evaluation_results.append(EvaluationResult(
-                metric_name=full_name,
+                metric_name=metric_name,
                 metric_value=float(value),
                 metric_type="float",
                 num_samples=num_samples,
-                metadata={"framework": "inspect-ai", "mode": mode, "scorer": scorer, "dimension": dim_name},
+                metadata=metadata,
             ))
             capability_entries.append(CapabilityEvalEntry(
                 ability=ability,
                 benchmark=benchmark_id,
-                metric=full_name,
+                metric=metric_name,
                 zero_shot=float(value),
             ))
 

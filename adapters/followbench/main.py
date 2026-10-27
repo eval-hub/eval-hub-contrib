@@ -26,7 +26,7 @@ from evalhub.adapter import (
     MessageInfo,
     configure_telemetry,
 )
-from evalhub.adapter.auth import resolve_model_credentials
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 
 from _evaluation import (
     FollowBenchExample,
@@ -217,8 +217,31 @@ def _build_judge_client(
     request_timeout: int,
 ) -> tuple[Any, str]:
     model_url = str(config.model.url or "").strip().rstrip("/")
-    judge_url = str(parameters.get("judge_url") or model_url).strip().rstrip("/")
-    judge_model = str(parameters.get("judge_model") or config.model.name).strip()
+    if "judge_model" in parameters:
+        if parameters.get("judge_url") or parameters.get("judge_api_key"):
+            raise ValueError(
+                "judge_model cannot be combined with the legacy judge_url or judge_api_key job parameters; "
+                "use judge_url and judge_api-key in model.auth.secret_ref"
+            )
+        judge_model = parameters["judge_model"]
+        if not isinstance(judge_model, str) or not judge_model.strip():
+            raise ValueError("parameters.judge_model must be a non-empty model name")
+        judge_model = judge_model.strip()
+        # The projected URL only works with the projected judge credential:
+        # api-key:ref always selects the target upstream in the sidecar.
+        projected_key = read_model_auth_key("judge_api-key")
+        projected_url = read_model_auth_key("judge_url")
+        if projected_url and not projected_key:
+            raise ValueError("judge_url in model.auth.secret_ref requires judge_api-key")
+        judge_url = projected_url or model_url
+        api_key = projected_key or _resolve_model_api_key(config)
+    else:
+        # Preserve standalone jobs using legacy explicit connection overrides.
+        judge_url = str(parameters.get("judge_url") or model_url).strip().rstrip("/")
+        judge_model = str(parameters.get("judge_model") or config.model.name).strip()
+        api_key = _resolve_judge_api_key(config, parameters, judge_url, model_url)
+
+    judge_url = str(judge_url or "").strip().rstrip("/")
 
     if not judge_url:
         raise ValueError("judge_url or config.model.url is required")
@@ -228,12 +251,7 @@ def _build_judge_client(
 
     client = openai.OpenAI(
         base_url=judge_url,
-        api_key=_resolve_judge_api_key(
-            config,
-            parameters,
-            judge_url,
-            model_url,
-        ),
+        api_key=api_key,
         timeout=request_timeout,
     )
 
@@ -601,7 +619,7 @@ def main() -> None:
     """Load the job, execute FollowBench, and report results."""
     configure_telemetry()
 
-    job_spec_path = os.environ["EVALHUB_JOB_SPEC_PATH"]
+    job_spec_path = os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")
     adapter = FollowBenchAdapter(job_spec_path=job_spec_path)
     callbacks = DefaultCallbacks.from_adapter(adapter)
 

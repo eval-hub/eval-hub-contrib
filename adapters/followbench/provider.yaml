@@ -58,17 +58,20 @@ benchmarks:
 parameters:
   - name: judge_model
     type: string
-    description: External judge model identifier.
+    description: Judge model identifier. Required for the bundled collection.
 
   - name: judge_url
     type: string
-    description: OpenAI-compatible external judge endpoint.
+    description: >
+      Legacy endpoint override for standalone jobs that omit judge_model. When
+      judge_model is set, do not set this or judge_api_key as job parameters;
+      use judge_url and judge_api-key in model.auth.secret_ref instead.
 
   - name: judge_api_key
     type: string
     description: >
-      Optional external judge credential. Prefer injecting
-      FOLLOWBENCH_JUDGE_API_KEY from a Secret.
+      Legacy standalone judge credential. When judge_model is set, use
+      judge_api-key in model.auth.secret_ref instead.
 
   - name: num_examples
     type: integer

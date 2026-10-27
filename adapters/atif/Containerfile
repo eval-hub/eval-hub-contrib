@@ -1,0 +1,29 @@
+# ATIF trajectory adapter container for eval-hub
+FROM registry.access.redhat.com/ubi9/python-312:latest
+
+USER 0
+WORKDIR /app
+
+COPY requirements.lock .
+RUN pip install --no-cache-dir -r requirements.lock
+
+COPY main.py rubric_registry.py scoring_context.py input_collection.py judge_auth.py .
+COPY meta/job.json ./meta/job.json
+COPY tests/fixtures/trajectory.json ./tests/fixtures/trajectory.json
+COPY smoke_test.py .
+
+RUN mkdir -p /tmp/.cache && \
+    chmod 1777 /tmp && \
+    chown -R 1001:0 /app && \
+    chmod -R g+rwX /app && \
+    chown -R 1001:0 /opt/app-root && \
+    chmod -R g+rwX /opt/app-root
+
+ENV PYTHONUNBUFFERED=1 \
+    EVALHUB_MODE=k8s \
+    HOME=/tmp
+
+USER 1001
+RUN python smoke_test.py
+
+ENTRYPOINT ["python", "main.py"]

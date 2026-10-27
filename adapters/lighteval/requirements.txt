@@ -2,6 +2,8 @@
 
 # LightEval framework
 lighteval==0.13.0
+# LightEval 0.13.0 uses list_models(model_name=...), removed in Hub v2
+huggingface-hub>=0.30.2,<2
 pyarrow
 
 # LiteLLM for endpoint support
@@ -18,4 +20,4 @@ xxhash>=3.0.0,<4
 xxhash<4
 
 # EvalHub SDK (framework adapter with adapter extra only)
-eval-hub-sdk[adapter]~=1.0.4
+eval-hub-sdk[adapter]~=1.0.6

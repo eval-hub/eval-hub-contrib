@@ -18,6 +18,7 @@ jobs:
         adapter:
           - clear
           - deepeval
+          - evalhub-post-processor
           - guidellm
           - ifbench
           - inspect
@@ -48,10 +49,10 @@ jobs:
             exit 1
           fi
           declare -A IMAGE_MAP=(
-            [clear]=ibm-clear
+            [clear]=community-ibm-clear
+            [evalhub-post-processor]=evalhub-post-processor
           )
-          suffix="${IMAGE_MAP[$ADAPTER]:-$ADAPTER}"
-          echo "name=community-${suffix}" >> "$GITHUB_OUTPUT"
+          echo "name=${IMAGE_MAP[$ADAPTER]:-community-$ADAPTER}" >> "$GITHUB_OUTPUT"
           if [[ "$BRANCH" == "main" ]]; then
             echo "channel=latest" >> "$GITHUB_OUTPUT"
           else

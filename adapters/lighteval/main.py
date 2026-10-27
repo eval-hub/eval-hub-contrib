@@ -38,9 +38,18 @@ from evalhub.adapter import (
     resolve_model_credentials,
 )
 from evalhub.models import MetricSchema, ResultType
-from evalhub.adapter.mlflow import MlflowArtifact
+from evalhub.adapter.mlflow import MlflowFileArtifact
 
 logger = logging.getLogger(__name__)
+
+CUSTOM_TASK_ALIASES = {
+    "piqa": "evalhub_piqa",
+    "truthfulqa:mc": "evalhub_truthfulqa_mc",
+    "truthfulqa:gen": "evalhub_truthfulqa_gen",
+}
+CUSTOM_TASK_RESULT_NAMES = {
+    custom_name: task_name for task_name, custom_name in CUSTOM_TASK_ALIASES.items()
+}
 
 
 class LightEvalAdapter(FrameworkAdapter):
@@ -61,6 +70,7 @@ class LightEvalAdapter(FrameworkAdapter):
         "knowledge": ["mmlu", "triviaqa", "openbookqa"],
         "language_understanding": ["glue:cola", "glue:sst2", "glue:mrpc"],
     }
+    CUSTOM_TASK_ALIASES = CUSTOM_TASK_ALIASES
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         """Execute a LightEval benchmark evaluation job.
@@ -137,15 +147,6 @@ class LightEvalAdapter(FrameworkAdapter):
                 evaluation_results=evaluation_results,
                 additional_info=additional_info,
             )
-            self.mlflow_artifacts = [
-                MlflowArtifact(
-                    file.name,
-                    file.read_bytes(),
-                    "application/json" if file.suffix == ".json" else "text/plain",
-                )
-                for file in output_files
-            ]
-
             if config.parameters.get("save_sample_results"):
                 from sample_results import save_sample_results
 
@@ -156,6 +157,20 @@ class LightEvalAdapter(FrameworkAdapter):
                 )
                 output_files.append(sample_file)
                 logger.info("Saved %d per-example results to %s", sample_count, sample_file)
+
+            # Keep files available until the synchronous MLflow save in main()
+            # returns. The SDK streams these files without loading them into memory.
+            self.mlflow_artifacts = [
+                MlflowFileArtifact(
+                    path=file.name,
+                    local_path=file,
+                    content_type={
+                        ".json": "application/json",
+                        ".jsonl": "application/x-ndjson",
+                    }.get(file.suffix, "text/plain"),
+                )
+                for file in output_files
+            ]
 
             logger.info(
                 f"Post-processing complete. Overall score: {overall_score}, "
@@ -309,15 +324,20 @@ class LightEvalAdapter(FrameworkAdapter):
             tasks = benchmark_config["tasks"]
             if isinstance(tasks, str):
                 tasks = [tasks]
-            return [self.TASK_ALIASES.get(t, t) for t in tasks]
+        elif benchmark_id in self.SUPPORTED_TASKS:
+            # Check if benchmark_id is a known category
+            tasks = self.SUPPORTED_TASKS[benchmark_id]
+        else:
+            # Otherwise, treat benchmark_id as a single task name
+            # LightEval task names can include colons (e.g., "arc:easy", "truthfulqa:mc")
+            tasks = [benchmark_id]
 
-        # Check if benchmark_id is a known category
-        if benchmark_id in self.SUPPORTED_TASKS:
-            return [self.TASK_ALIASES.get(t, t) for t in self.SUPPORTED_TASKS[benchmark_id]]
+        return [self._resolve_task_alias(task) for task in tasks]
 
-        # Otherwise, treat benchmark_id as a single task name, applying alias if present
-        # LightEval task names can include colons (e.g., "arc:easy", "truthfulqa:mc")
-        return [self.TASK_ALIASES.get(benchmark_id, benchmark_id)]
+    @classmethod
+    def _resolve_task_alias(cls, task: str) -> str:
+        """Map a provider benchmark id to the task name lighteval registers."""
+        return cls.CUSTOM_TASK_ALIASES.get(task) or cls.TASK_ALIASES.get(task, task)
 
     def _run_lighteval(
         self,
@@ -428,6 +448,10 @@ class LightEvalAdapter(FrameworkAdapter):
             "--no-push-to-hub",
             "--save-details",
         ])
+
+        if any(task in self.CUSTOM_TASK_ALIASES.values() for task in tasks):
+            custom_tasks_path = Path(__file__).with_name("custom_tasks.py")
+            cmd.extend(["--custom-tasks", str(custom_tasks_path)])
 
         # Add max-samples limit if specified
         if limit is not None:
@@ -591,8 +615,8 @@ class LightEvalAdapter(FrameworkAdapter):
         # Strip |N fewshot suffix LightEval appends to task names in results JSON
         # (e.g. math_500|0 → math_500)
         if "|" in task_name:
-            return task_name.rsplit("|", 1)[0]
-        return task_name
+            task_name = task_name.rsplit("|", 1)[0]
+        return CUSTOM_TASK_RESULT_NAMES.get(task_name, task_name)
 
     @staticmethod
     def _normalise_metric_name(metric_name: str) -> str:

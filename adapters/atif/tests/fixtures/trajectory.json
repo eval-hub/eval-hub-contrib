@@ -1,0 +1,26 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "trajectory_id": "t1",
+  "agent": {
+    "name": "agent-a",
+    "version": "1.0.0",
+    "model_name": "judge-model"
+  },
+  "extra": {
+    "task_instruction": "Answer user safely and helpfully"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "source": "agent",
+      "message": "I will look up information.",
+      "tool_calls": []
+    },
+    {
+      "step_id": 2,
+      "source": "agent",
+      "message": "Here is the final answer.",
+      "tool_calls": []
+    }
+  ]
+}

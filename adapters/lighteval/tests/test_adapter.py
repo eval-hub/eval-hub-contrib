@@ -166,8 +166,9 @@ def test_oci_export_persists_artifacts(tmp_path, mock_callbacks, monkeypatch, mo
 def test_main_uploads_result_artifacts_to_mlflow(
     adapter, monkeypatch, mock_hf_api, oci_enabled
 ):
-    """MLflow receives the generated result files with or without OCI exports."""
+    """MLflow receives file-based artifacts with or without OCI exports."""
     from evalhub.adapter import DefaultCallbacks
+    from evalhub.adapter.mlflow import MlflowFileArtifact
 
     job = adapter.job_spec.model_dump(mode="json")
     job["experiment_name"] = "test-lighteval"
@@ -205,11 +206,13 @@ def test_main_uploads_result_artifacts_to_mlflow(
     }
     results_dir = adapter.local_jobs_base_path / "results"
     for artifact in artifacts:
-        assert artifact.content == (results_dir / artifact.path).read_bytes()
+        assert isinstance(artifact, MlflowFileArtifact)
+        assert artifact.local_path == results_dir / artifact.path
+        assert artifact.local_path.is_file()
         assert artifact.content_type == (
             "text/plain" if artifact.path.endswith(".txt") else "application/json"
         )
-    assert json.loads(artifacts[0].content) == CANNED_RESULTS
+    assert json.loads(artifacts[0].local_path.read_text()) == CANNED_RESULTS
     reported = callbacks.report_results.call_args.args[0]
     assert reported.mlflow_run_id == "test-run-id"
     assert callbacks.create_oci_artifact.called == oci_enabled
@@ -268,6 +271,12 @@ def test_oci_export_includes_opted_in_sample_results(
     assert "do not export" not in sample_file.read_text()
     assert "Question" not in sample_file.read_text()
     assert not (spec.files_path / "details").exists()
+    sample_artifact = next(
+        artifact for artifact in adapter.mlflow_artifacts
+        if artifact.path == "sample_results.jsonl"
+    )
+    assert sample_artifact.local_path == sample_file
+    assert sample_artifact.content_type == "application/x-ndjson"
 
 
 @pytest.mark.integration
@@ -634,6 +643,76 @@ def test_format_generation_parameters_string_value_in_dict():
 # ---------------------------------------------------------------------------
 # _run_lighteval — CLI command construction
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("benchmark_id", "benchmark_config", "expected"),
+    [
+        ("piqa", {}, ["evalhub_piqa"]),
+        ("physical_commonsense", {}, ["evalhub_piqa"]),
+        (
+            "truthfulness",
+            {},
+            ["evalhub_truthfulqa_mc", "evalhub_truthfulqa_gen"],
+        ),
+        ("truthfulqa:mc", {}, ["evalhub_truthfulqa_mc"]),
+        ("truthfulqa:gen", {}, ["evalhub_truthfulqa_gen"]),
+        ("custom", {"tasks": ["piqa", "boolq"]}, ["evalhub_piqa", "boolq"]),
+        ("custom", {"tasks": "piqa"}, ["evalhub_piqa"]),
+        (
+            "custom",
+            {"tasks": ["truthfulqa:mc"]},
+            ["evalhub_truthfulqa_mc"],
+        ),
+        ("boolq", {}, ["boolq"]),
+    ],
+)
+def test_parse_benchmark_tasks_routes_piqa_to_custom_task(
+    adapter, benchmark_id, benchmark_config, expected
+):
+    assert adapter._parse_benchmark_tasks(benchmark_id, benchmark_config) == expected
+
+
+def test_custom_piqa_task_uses_pinned_parquet_dataset():
+    from custom_tasks import TASKS_TABLE
+
+    task = next(task for task in TASKS_TABLE if task.name == "evalhub_piqa")
+    assert task.name == "evalhub_piqa"
+    assert task.hf_repo == "regisss/piqa"
+    assert task.hf_subset == "default"
+    assert task.hf_revision == "b434c23003a4bee60e2d88b3403259f5487dc5f4"
+    assert tuple(task.evaluation_splits) == ("validation",)
+
+
+@pytest.mark.parametrize(
+    ("task_name", "subset"),
+    [
+        ("evalhub_truthfulqa_mc", "multiple_choice"),
+        ("evalhub_truthfulqa_gen", "generation"),
+    ],
+)
+def test_custom_truthfulqa_tasks_use_pinned_parquet_dataset(task_name, subset):
+    from custom_tasks import TASKS_TABLE, TRUTHFULQA_REVISION
+
+    task = next(task for task in TASKS_TABLE if task.name == task_name)
+    assert task.hf_repo == "truthfulqa/truthful_qa"
+    assert task.hf_subset == subset
+    assert task.hf_revision == TRUTHFULQA_REVISION
+    assert tuple(task.evaluation_splits) == ("validation",)
+
+
+@pytest.mark.parametrize(
+    ("task_name", "expected"),
+    [
+        ("evalhub_piqa|0", "piqa"),
+        ("evalhub_piqa", "piqa"),
+        ("evalhub_truthfulqa_mc|0", "truthfulqa:mc"),
+        ("evalhub_truthfulqa_gen|0", "truthfulqa:gen"),
+        ("boolq|0", "boolq"),
+    ],
+)
+def test_normalise_custom_piqa_task_name(task_name, expected):
+    assert LightEvalAdapter._normalise_task_name(task_name) == expected
 
 
 @pytest.mark.integration
@@ -1521,3 +1600,43 @@ def test_every_resolvable_primary_metric_is_an_emitted_key(adapter):
 
     # Guard against the registry walk silently finding nothing.
     assert len(checked) >= 15, checked
+
+
+@pytest.mark.parametrize(
+    "task",
+    ["evalhub_piqa", "evalhub_truthfulqa_mc"],
+)
+@pytest.mark.integration
+def test_run_lighteval_cmd_loads_custom_tasks(adapter, tmp_path, monkeypatch, task):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        output_idx = cmd.index("--output-dir") + 1
+        results_dir = Path(cmd[output_idx])
+        results_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "results_test.json").write_text(json.dumps(CANNED_RESULTS))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "main.resolve_model_credentials",
+        lambda: SimpleNamespace(api_key="test-key"),
+    )
+    monkeypatch.setenv("HF_TOKEN", "fake")
+
+    adapter._run_lighteval(
+        model_config=adapter.job_spec.model,
+        tasks=[task],
+        output_dir=tmp_path / "output",
+        num_fewshot=0,
+        limit=5,
+        batch_size=1,
+        benchmark_config={},
+    )
+
+    cmd = captured["cmd"]
+    custom_tasks_idx = cmd.index("--custom-tasks")
+    assert f"{task}|0" in cmd
+    assert Path(cmd[custom_tasks_idx + 1]).name == "custom_tasks.py"
+    assert Path(cmd[custom_tasks_idx + 1]).is_file()

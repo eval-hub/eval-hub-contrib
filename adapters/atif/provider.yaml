@@ -1,0 +1,136 @@
+id: atif
+name: ATIF Trajectory Adapter
+description: Evaluate pre-recorded ATIF trajectories using an OpenAI-compatible judge.
+type: builtin
+
+runtime:
+  k8s:
+    image: quay.io/evalhub/community-atif:latest
+    entrypoint:
+      - python
+      - main.py
+    cpu_request: 100m
+    memory_request: 256Mi
+    cpu_limit: 1000m
+    memory_limit: 2Gi
+  local:
+
+benchmarks:
+  - id: atif_trajectory_default
+    name: ATIF Trajectory Evaluation
+    description: Judge-based ATIF trajectory evaluation
+    category: agentic
+    metrics:
+      - atif_overall_score
+      - atif_failure_categorization_rate
+    tags:
+      - atif
+      - trajectory
+    primary_score:
+      metric: atif_overall_score
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
+
+parameters:
+  - name: trajectory_path
+    type: string
+    default: /test_data
+    description: Path to an ATIF file or mixed producer directory. Requires job experiment_name for durable MLflow artifacts.
+  - name: scoring_mode
+    type: string
+    default: auto
+    description: Scoring mode; auto derives criteria, benchmark selects a built-in benchmark rubric, reference uses a local registry, and custom uses an inline or mounted rubric.
+  - name: benchmark_name
+    type: string
+    description: Built-in benchmark rubric selected when scoring_mode is benchmark (swebench-verified, terminal-bench, or humanevalfix).
+  - name: reference_registry_path
+    type: string
+    description: Path to a JSON rubric registry required when scoring_mode is reference.
+  - name: reference_rubric
+    type: string
+    default: default
+    description: Rubric name selected from the reference registry.
+  - name: custom_rubric
+    type: object
+    description: Legacy inline custom scoring rubric; prefer provider_params.rubric when scoring_mode is custom.
+  - name: custom_rubric_path
+    type: string
+    description: Legacy mounted YAML or JSON custom scoring rubric path; prefer provider_params.rubric when scoring_mode is custom.
+  - name: provider_params
+    type: object
+    description: Provider-specific parameters. For custom scoring, rubric accepts an inline object or YAML/JSON document string.
+  - name: concurrency_limit
+    type: integer
+    default: 10
+    description: Max number of trajectories scored concurrently
+  - name: max_file_bytes
+    type: integer
+    default: 10485760
+    description: Maximum size of an individual ATIF JSON file
+  - name: max_trajectory_files
+    type: integer
+    default: 10000
+    description: Maximum number of ATIF JSON files in the input collection
+  - name: max_collection_bytes
+    type: integer
+    default: 67108864
+    description: Collection-wide input byte budget, including ignored and invalid files.
+  - name: max_total_steps
+    type: integer
+    default: 10000
+    description: Maximum steps across all accepted roots and embedded descendants.
+  - name: max_context_bytes
+    type: integer
+    default: 65536
+    description: Maximum serialized judge request bytes; history gets half this budget and drops oldest frames first.
+  - name: invalid_input_policy
+    type: string
+    default: skip_invalid
+    description: skip_invalid records invalid candidates and continues; fail_fast aborts. No valid inputs always fails.
+  - name: max_steps_per_trajectory
+    type: integer
+    default: 500
+    description: Maximum number of steps allowed in each trajectory, including nested subagents
+  - name: max_subagent_depth
+    type: integer
+    default: 3
+    description: Root depth is zero; descendants beyond this depth are explicitly unscored and make ancestors incomplete.
+  - name: subagent_aggregation
+    type: string
+    default: flat
+    description: Aggregation mode for nested trajectories; parent aggregates use step-count-weighted means
+  - name: failure_threshold
+    type: float
+    default: 0.5
+    description: Scores below this threshold trigger failure categorization
+  - name: training_threshold
+    type: float
+    description: Optional aggregate score threshold for complete node-level training selections. Embedded nodes require manifest JSON Pointer selectors; this does not qualify whole source files.
+  - name: completion_threshold
+    type: float
+    default: 0.5
+    description: Score threshold at or above which a trajectory is marked passed
+  - name: job_timeout_seconds
+    type: float
+    default: 3600
+    description: Deadline for the complete scoring phase, including rubric derivation and retries.
+  - name: judge_timeout_seconds
+    type: float
+    default: 30
+    description: Timeout for each judge HTTP request
+  - name: judge_max_attempts
+    type: integer
+    default: 3
+    description: Maximum attempts for a judge request, including the initial attempt
+  - name: judge_initial_backoff_seconds
+    type: float
+    default: 0.5
+    description: Initial exponential backoff delay for retryable judge failures
+  - name: max_judge_requests
+    type: integer
+    description: Optional maximum number of judge HTTP attempts for the complete job
+  - name: partial_result_policy
+    type: string
+    default: fail_fast
+    description: Use fail_fast or skip_failed_trajectory when a trajectory cannot be scored

@@ -767,6 +767,16 @@ benchmarks:
     metrics: [accuracy/accuracy]
     tags: [knowledge, factuality, inspect-evals]
 
+  - id: inspect/docvqa
+    name: DocVQA
+    description: Visual question answering over document images, scored with Average Normalized Levenshtein Similarity (ANLS).
+    category: multimodal
+    metrics: [anls]
+    primary_score:
+      metric: anls
+      lower_is_better: false
+    tags: [multimodal, vision, document-understanding, inspect-evals]
+
   # Agent capabilities
   - id: inspect/gaia
     name: GAIA
@@ -928,8 +938,11 @@ parameters:
     type: string
     default: "claude-opus-4-7"
     description: >
-      Petri/Bloom judge model name. Use the strongest available model — judge
-      quality has the largest impact on audit reliability.
+      Petri/Bloom judge model name. For HLE and CyberSecEval 2 in the bundled
+      collections, provide a non-empty per-job judge_model. With no judge-specific
+      entries in model.auth.secret_ref, this reuses the target connection;
+      judge_api-key selects a separate credential and optional judge_url a
+      separate endpoint.
 
   - name: judge_base_url
     type: string
