@@ -28,6 +28,11 @@ The patch:
   that straddles the boundary counts toward the continuation.  Splitting at
   ``len(context)`` instead drops the first answer token whenever the context ends
   in a space or newline (``"Answer: "`` + ``"A"`` tokenises as ``" A"``).
+- Aligns the echoed token offsets with the prompt first.  vLLM's ``text_offset`` is the
+  running length of the decoded tokens, so a BOS token (``"<s>"``) shifts every offset
+  by its length.  The shift is removed only when whole leading tokens account for it;
+  an echo shorter than the prompt, or one that cannot be explained that way, fails the
+  job instead of being scored.
 - Reports the number of scored continuation tokens per choice in
   ``ModelResponse.output_tokens`` so token-normalised metrics
   (``LogProbTokenNorm``) can divide by it.  The completions API returns token
@@ -120,6 +125,55 @@ def _post_completion(req: urllib.request.Request) -> dict:
     ) from last_exc
 
 
+def _anchor_offsets(
+    completions_url: str,
+    choice: str,
+    full_prompt: str,
+    tokens: list[str],
+    text_offsets: list[int],
+) -> tuple[list[int], int]:
+    """Return ``(offsets, end_of_last_token)`` as character positions in ``full_prompt``.
+
+    vLLM builds ``text_offset`` from the running length of each *decoded* token string,
+    and decodes the first prompt token on its own, so a tokenizer that prepends a BOS
+    token (Llama, Mistral) puts ``"<s>"`` in front: every offset is then larger than
+    the character position in the prompt by ``len("<s>")``.  Comparing those offsets
+    with the context length would count the last few context tokens as part of the
+    answer.
+
+    The shift is the echoed text minus the prompt.  It is only accepted when whole
+    leading tokens add up to it exactly; anything else cannot be aligned, and scoring
+    a guess would produce a number that looks like a likelihood.  An echo shorter than
+    the prompt was cut off.
+    """
+    if not tokens or len(tokens) != len(text_offsets):
+        return text_offsets, len(full_prompt)  # nothing to check against
+
+    echoed_len = text_offsets[-1] + len(tokens[-1])
+    if echoed_len < len(full_prompt):
+        raise LoglikelihoodScoringError(
+            f"{completions_url} echoed {echoed_len} characters for a "
+            f"{len(full_prompt)}-character prompt (choice {choice[:40]!r}): the echoed "
+            "tokens end before the choice begins"
+        )
+    shift = echoed_len - len(full_prompt)
+    if shift == 0:
+        return text_offsets, len(full_prompt)
+
+    covered = 0
+    for token in tokens:
+        covered += len(token)
+        if covered >= shift:
+            break
+    if covered != shift:
+        raise LoglikelihoodScoringError(
+            f"{completions_url} echoed {shift} characters more than the prompt (choice "
+            f"{choice[:40]!r}) and they are not whole leading tokens, so the token "
+            "offsets cannot be aligned with the prompt"
+        )
+    return [max(0, offset - shift) for offset in text_offsets], len(full_prompt)
+
+
 def _score_one_choice(
     completions_url: str,
     model_name: str,
@@ -175,12 +229,9 @@ def _score_one_choice(
             f"choice {choice[:40]!r}: {exc!r}"
         ) from exc
 
-    # End of the last echoed token: from its own text when the endpoint sends
-    # one, so a truncated echo is detected instead of assumed to cover the prompt.
-    if text_offsets and len(tokens) == len(text_offsets):
-        last_end = text_offsets[-1] + len(tokens[-1])
-    else:
-        last_end = len(full_prompt)
+    text_offsets, last_end = _anchor_offsets(
+        completions_url, choice, full_prompt, tokens, text_offsets
+    )
 
     cont_sum = 0.0
     positions: list[int] = []

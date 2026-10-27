@@ -1418,7 +1418,7 @@ def test_loglikelihood_patch_partial_failure_fails_the_whole_doc(monkeypatch):
         ),
         pytest.param(
             {"choices": [{"logprobs": {"tokens": ["Q:"], "token_logprobs": [None], "text_offset": [0]}}]},
-            "No continuation tokens",
+            "end before the choice begins",
             id="no-continuation-tokens",
         ),
     ],
@@ -2016,3 +2016,60 @@ def test_litellm_response_cache_is_disabled_so_cache_hits_cannot_crash(monkeypat
         assert len(served) == 2, "the repeated request must reach the model, not a cache"
     finally:
         server.shutdown()
+
+
+@pytest.mark.parametrize(
+    "leading",
+    [[], ["<s>"], ["<s>", "<|begin_of_text|>"]],
+    ids=["no-special-token", "bos", "two-special-tokens"],
+)
+def test_loglikelihood_patch_ignores_special_token_text_ahead_of_the_prompt(monkeypatch, leading):
+    """vLLM's ``text_offset`` is the running length of the *decoded* tokens, so a BOS
+    token such as ``"<s>"`` shifts every offset by its length.  The shift must not make
+    the last context tokens count as part of the answer (reproduced with a BOS-adding
+    tokenizer in test_logprob_reference.py)."""
+    import urllib.request as _urllib_request
+
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    context = "Question: capital? Answer: "
+    head = [*leading, "Question: capital? Answer", ":"]
+    answers = {
+        "Paris is": ([" Paris", " is"], [-5.0, -0.1]),
+        "Rome is": ([" Rome", " is"], [-1.0, -2.0]),
+    }
+
+    def fake_urlopen(req, timeout=60):
+        choice = json.loads(req.data.decode())["prompt"][len(context):]
+        pieces, lps = answers[choice]
+        # A real endpoint gives no logprob for the first token (BOS or not).
+        logprobs = [None] * len(leading) + [None, -0.5] if leading else [None, -0.5]
+        return _FakeHTTPResponse(_echo_json([*head, *pieces], [*logprobs, *lps]))
+
+    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
+    doc = _make_doc(query=context, choices=list(answers), gold_index=1)
+
+    (resp,) = mod._loglikelihood_via_completions(_fake_client(), [doc])
+
+    assert resp.logprobs == pytest.approx([-5.1, -3.0])
+    assert [len(t) for t in resp.output_tokens] == [2, 2]
+
+
+def test_loglikelihood_patch_rejects_an_echo_it_cannot_align_with_the_prompt(monkeypatch):
+    """Extra echoed text that is not made of whole leading tokens must fail the job.
+
+    Guessing a shift would give a number that looks like a likelihood."""
+    import urllib.request as _urllib_request
+
+    mod = _load_patch_module()
+    _stub_model_response(monkeypatch)
+    monkeypatch.setattr(
+        _urllib_request,
+        "urlopen",
+        # Prompt "Q: yes" is 6 characters; the echo is 7, and no leading token is 1 long.
+        lambda req, timeout=60: _FakeHTTPResponse(_echo_json(["Q:", " yesX"], [None, -0.3])),
+    )
+    doc = _make_doc(query="Q: ", choices=["yes"], gold_index=0)
+
+    with pytest.raises(mod.LoglikelihoodScoringError, match="not whole leading tokens"):
+        mod._loglikelihood_via_completions(_fake_client(), [doc])

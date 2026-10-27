@@ -48,8 +48,10 @@ def _load_patch_module():
     return mod
 
 
-@pytest.fixture(scope="module")
-def tiny_model_dir(tmp_path_factory):
+@pytest.fixture(scope="module", params=[False, True], ids=["no-bos", "bos"])
+def tiny_model_dir(request, tmp_path_factory):
+    """A tiny GPT-2; with ``bos`` its tokenizer prepends a BOS token, as Llama and
+    Mistral tokenizers do and vLLM's completions endpoint keeps by default."""
     from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
     from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast
 
@@ -64,6 +66,13 @@ def tiny_model_dir(tmp_path_factory):
             initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
         ),
     )
+    if request.param:
+        from tokenizers.processors import TemplateProcessing
+
+        tok.post_processor = TemplateProcessing(
+            single="<|endoftext|> $A",
+            special_tokens=[("<|endoftext|>", tok.token_to_id("<|endoftext|>"))],
+        )
     fast = PreTrainedTokenizerFast(
         tokenizer_object=tok,
         eos_token="<|endoftext|>",
@@ -101,24 +110,28 @@ def echo_server(tiny_model_dir):
         def do_POST(self):  # noqa: N802
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             prompts.append(body["prompt"])
-            enc = tokenizer(
-                body["prompt"], return_offsets_mapping=True, add_special_tokens=False
-            )
-            ids = torch.tensor([enc["input_ids"]])
+            # Like vLLM: special tokens are kept, every token is decoded on its own and
+            # ``text_offset`` is the running length of those decoded strings. With a BOS
+            # token that makes every offset larger than the character position in the
+            # prompt by len(decoded BOS).
+            ids = torch.tensor([tokenizer(body["prompt"], add_special_tokens=True)["input_ids"]])
             with torch.no_grad():
                 logp = torch.log_softmax(model(ids).logits[0], dim=-1)
             token_logprobs = [None] + [
                 logp[i - 1, ids[0, i]].item() for i in range(1, ids.shape[1])
             ]
+            pieces = [tokenizer.decode([int(t)]) for t in ids[0]]
+            offsets, running = [], 0
+            for piece in pieces:
+                offsets.append(running)
+                running += len(piece)
             payload = {
                 "choices": [
                     {
                         "logprobs": {
-                            "tokens": [
-                                body["prompt"][s:e] for s, e in enc["offset_mapping"]
-                            ],
+                            "tokens": pieces,
                             "token_logprobs": token_logprobs,
-                            "text_offset": [s for s, _ in enc["offset_mapping"]],
+                            "text_offset": offsets,
                         }
                     }
                 ]

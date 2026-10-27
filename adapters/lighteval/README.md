@@ -97,6 +97,7 @@ The log-likelihood path is designed to give the same per-choice scores as lighte
 
 - The scored text is lighteval's plain-text prompt: system prompt, task instruction, `num_few_shot` examples and the question, followed by the choice.
 - Whitespace at the end of the question counts as part of the answer, and a token that straddles the question/answer boundary counts toward the answer, as in lighteval's `tok_encode_pair`.
+- Echoed token offsets are aligned with the prompt before the question/answer split: vLLM counts the text of a leading BOS token (`<s>`) in `text_offset`, which shifts every offset. An echo that is shorter than the prompt, or whose extra text is not whole leading tokens, fails the job.
 - A request that cannot be scored (HTTP error, timeout, missing `logprobs`) fails the job. It is never turned into a score, so a broken endpoint cannot produce an accuracy. Timeouts, connection errors and HTTP 408/429/5xx are retried up to 3 times first.
 - Known limit: lighteval's PMI-normalised metrics (`Doc.unconditioned_query`) are not supported.
 
