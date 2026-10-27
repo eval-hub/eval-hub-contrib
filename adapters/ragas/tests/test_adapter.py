@@ -14,6 +14,7 @@ from evalhub.adapter import JobCallbacks, JobPhase, OCIArtifactResult
 from main import (
     METRIC_MAPPING,
     RagasAdapter,
+    _resolve_data_path,
     _openai_credentials,
     _run_collections_evaluation,
 )
@@ -49,6 +50,24 @@ def test_provider_declares_separate_judge_parameters():
     data = yaml.safe_load(_PROVIDER_YAML.read_text())
     parameters = {parameter["name"] for parameter in data.get("parameters", [])}
     assert {"judge_model", "judge_url", "judge_api_key"} <= parameters
+
+
+def test_resolve_data_path_falls_back_to_bundled_dataset(monkeypatch, tmp_path):
+    """The image-bundled dataset is available when no staged data is mounted."""
+    test_data_dir = tmp_path / "test-data"
+    default_data_dir = tmp_path / "data"
+    bundled_data_dir = tmp_path / "bundled-data"
+    bundled_data_dir.mkdir()
+    bundled_dataset = bundled_data_dir / "dataset.jsonl"
+    bundled_dataset.write_text('{"user_input": "question"}\n')
+
+    monkeypatch.setattr("main.TEST_DATA_DIR", test_data_dir)
+    monkeypatch.setattr("main.DEFAULT_DATA_DIR", default_data_dir)
+    monkeypatch.setattr("main.BUNDLED_DATA_DIR", bundled_data_dir)
+
+    config = type("Config", (), {"parameters": {}})()
+
+    assert _resolve_data_path(config) == bundled_dataset
 
 
 def test_external_judge_does_not_resolve_model_credentials(monkeypatch):

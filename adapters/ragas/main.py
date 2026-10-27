@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 # When test_data_ref.s3 is set, EvalHub's init container downloads objects here
 TEST_DATA_DIR = Path("/test_data")
 DEFAULT_DATA_DIR = Path("/data")
+BUNDLED_DATA_DIR = Path("/bundled-data")
 SERVICE_CA_PATH = Path("/etc/pki/ca-trust/source/anchors/service-ca.crt")
 DEFAULT_DATASET_FILENAME = "dataset.jsonl"
 _DATA_SUFFIXES = (".jsonl", ".json")
@@ -330,20 +331,15 @@ def _resolve_data_path(config: JobSpec) -> Path:
         p = Path(explicit)
         return p if p.is_absolute() else DEFAULT_DATA_DIR / explicit
 
-    test_data_file = TEST_DATA_DIR / DEFAULT_DATASET_FILENAME
-    if test_data_file.exists():
-        return test_data_file
-    first_in_test = _first_dataset_in_dir(TEST_DATA_DIR)
-    if first_in_test is not None:
-        return first_in_test
+    for data_dir in (TEST_DATA_DIR, DEFAULT_DATA_DIR, BUNDLED_DATA_DIR):
+        dataset_file = data_dir / DEFAULT_DATASET_FILENAME
+        if dataset_file.exists():
+            return dataset_file
+        first_dataset = _first_dataset_in_dir(data_dir)
+        if first_dataset is not None:
+            return first_dataset
 
-    default_file = DEFAULT_DATA_DIR / DEFAULT_DATASET_FILENAME
-    if default_file.exists():
-        return default_file
-    first_in_data = _first_dataset_in_dir(DEFAULT_DATA_DIR)
-    if first_in_data is not None:
-        return first_in_data
-    return default_file
+    return BUNDLED_DATA_DIR / DEFAULT_DATASET_FILENAME
 
 
 def _load_dataset(path: Path) -> list[dict[str, Any]]:
@@ -638,7 +634,11 @@ def main() -> None:
 
     try:
         job_spec_path = os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")
-        adapter = RagasAdapter(job_spec_path=job_spec_path)
+        try:
+            adapter = RagasAdapter(job_spec_path=job_spec_path)
+        except FileNotFoundError as e:
+            logger.error("Job spec not found: %s (set EVALHUB_JOB_SPEC_PATH)", e)
+            sys.exit(1)
         logger.info(
             "Job %s benchmark=%s model=%s",
             adapter.job_spec.id,
@@ -673,7 +673,7 @@ def main() -> None:
         sys.exit(0)
 
     except FileNotFoundError as e:
-        logger.error("Job spec not found: %s (set EVALHUB_JOB_SPEC_PATH)", e)
+        logger.error("Input data file not found: %s", e)
         sys.exit(1)
     except ValueError as e:
         logger.error("Configuration error: %s", e)
