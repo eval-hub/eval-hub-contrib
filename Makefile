@@ -430,7 +430,7 @@ test-ruler:
 	cd adapters/ruler && \
 	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
-	.venv/bin/python -m nltk.downloader -d .venv/nltk_data punkt punkt_tab && \
+	.venv/bin/python -c 'import nltk; exec("for resource in (\"punkt\", \"punkt_tab\"):\n    try:\n        nltk.data.find(f\"tokenizers/{resource}\", paths=[\".venv/nltk_data\"])\n    except LookupError:\n        nltk.download(resource, download_dir=\".venv/nltk_data\", raise_on_error=True)")' && \
 	NLTK_DATA="$$(pwd)/.venv/nltk_data" PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ RULER tests passed"
 
