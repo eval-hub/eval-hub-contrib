@@ -407,7 +407,11 @@ benchmarks:
   # ── Code ──────────────────────────────────────────────────────────────────
   - id: lcb:codegeneration_v6
     name: LiveCodeBench v6 — Code generation
-    description: LiveCodeBench v6 competitive programming and code generation tasks.
+    description: >
+      LiveCodeBench v6 competitive programming and code generation tasks. Runs the code the
+      model writes: each solution is limited to EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB (default
+      2048) above the grader's own memory, so size memory_limit accordingly (see README,
+      "Memory use").
     category: code
     metrics: [lcb:codegeneration_v6.codegen_pass@1]
     tags: [coding, competitive, lighteval]
