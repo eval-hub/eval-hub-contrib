@@ -29,8 +29,9 @@ BASE = "http://localhost:11434/v1"
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 
 #: Largest tolerated difference between vLLM's bfloat16 score of a choice and a float32
-#: forward pass over the same token ids, in nats.
-SCORE_TOLERANCE = 1.0
+#: forward pass over the same token ids, in nats.  The first CI run on vLLM 0.19.1 differed
+#: by at most 0.27 across six choices.
+SCORE_TOLERANCE = 0.5
 
 
 def _vllm_with_token_ids() -> bool:
