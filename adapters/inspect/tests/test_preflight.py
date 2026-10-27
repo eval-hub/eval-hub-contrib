@@ -3,6 +3,7 @@
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from types import SimpleNamespace
 
 import _preflight as pf
 import pytest
@@ -115,11 +116,51 @@ def test_custom_task_file_is_not_probed_by_default():
     assert pf.required_urls("/work/my_task.py", {}) == []
 
 
-def _write_bfcl_assets(root, *, include_function_sources=True):
-    """Create the BFCL files required by the installed Inspect-Evals category manifest."""
-    categories = pf._bfcl_category_manifest()
-    assert categories
+_BFCL_TEST_CATEGORIES = {
+    "simple_python": SimpleNamespace(
+        filename="BFCL_v4_simple_python.json",
+        has_ground_truth_file=True,
+        ground_truth_filename="possible_answer/BFCL_v4_simple_python.json",
+    ),
+    "irrelevance": SimpleNamespace(
+        filename="BFCL_v4_irrelevance.json",
+        has_ground_truth_file=False,
+        ground_truth_filename="",
+    ),
+}
 
+
+def test_bfcl_category_manifest_loads_from_package_path(tmp_path, monkeypatch):
+    """Load the lightweight BFCL manifest without importing inspect-evals' task package."""
+    manifest = tmp_path / "bfcl" / "utils" / "task_categories.py"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "class Category:\n"
+        "    filename = 'BFCL_v4_simple_python.json'\n"
+        "    has_ground_truth_file = True\n"
+        "    ground_truth_filename = 'possible_answer/BFCL_v4_simple_python.json'\n"
+        "CATEGORIES = {'simple_python': Category()}\n"
+    )
+    spec = SimpleNamespace(submodule_search_locations=[str(tmp_path)])
+    monkeypatch.setattr(pf.importlib.util, "find_spec", lambda _name: spec)
+    pf._bfcl_category_manifest.cache_clear()
+    try:
+        categories = pf._bfcl_category_manifest()
+        assert categories is not None
+        assert categories["simple_python"].filename == "BFCL_v4_simple_python.json"
+    finally:
+        pf._bfcl_category_manifest.cache_clear()
+
+
+@pytest.fixture
+def bfcl_category_manifest(monkeypatch):
+    """Use a small manifest because CI intentionally omits adapter runtime dependencies."""
+    monkeypatch.setattr(pf, "_bfcl_category_manifest", lambda: _BFCL_TEST_CATEGORIES)
+    return _BFCL_TEST_CATEGORIES
+
+
+def _write_bfcl_assets(root, categories, *, include_function_sources=True):
+    """Create BFCL files for the test category manifest."""
     bfcl = root / "BFCL"
     for category in categories.values():
         question_file = bfcl / category.filename
@@ -141,7 +182,9 @@ def test_bfcl_needs_github_not_huggingface():
     assert pf.required_urls("inspect_evals/bfcl", {}) == ["https://github.com"]
 
 
-def test_bfcl_requires_upstream_data_sentinel_and_function_sources(tmp_path):
+def test_bfcl_requires_upstream_data_sentinel_and_function_sources(
+    tmp_path, bfcl_category_manifest
+):
     """Partial caches must not suppress the GitHub preflight needed by the default task."""
     env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
     bfcl = tmp_path / "BFCL"
@@ -149,7 +192,9 @@ def test_bfcl_requires_upstream_data_sentinel_and_function_sources(tmp_path):
     (bfcl / "BFCL_v3_simple_python.json").write_text("{}")
     assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
 
-    _write_bfcl_assets(tmp_path, include_function_sources=False)
+    _write_bfcl_assets(
+        tmp_path, bfcl_category_manifest, include_function_sources=False
+    )
     assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
 
     (bfcl / "func_source_code").mkdir()
@@ -157,9 +202,11 @@ def test_bfcl_requires_upstream_data_sentinel_and_function_sources(tmp_path):
     assert pf.required_urls("inspect_evals/bfcl", env) == []
 
 
-def test_configure_staged_bfcl_cache_points_to_test_data(tmp_path):
+def test_configure_staged_bfcl_cache_points_to_test_data(
+    tmp_path, bfcl_category_manifest
+):
     """The adapter maps a complete /test_data BFCL tree to Inspect-Evals' cache root."""
-    _write_bfcl_assets(tmp_path)
+    _write_bfcl_assets(tmp_path, bfcl_category_manifest)
     env = {}
 
     assert pf.configure_staged_bfcl_cache("inspect_evals/bfcl", env, tmp_path)
@@ -167,9 +214,11 @@ def test_configure_staged_bfcl_cache_points_to_test_data(tmp_path):
     assert pf.required_urls("inspect_evals/bfcl", env) == []
 
 
-def test_configure_staged_bfcl_cache_does_not_use_partial_or_unrelated_data(tmp_path):
+def test_configure_staged_bfcl_cache_does_not_use_partial_or_unrelated_data(
+    tmp_path, bfcl_category_manifest
+):
     """Only complete BFCL assets for the BFCL task activate the staged cache."""
-    _write_bfcl_assets(tmp_path)
+    _write_bfcl_assets(tmp_path, bfcl_category_manifest)
     env = {}
 
     assert not pf.configure_staged_bfcl_cache("inspect_evals/mmlu_pro", env, tmp_path)
