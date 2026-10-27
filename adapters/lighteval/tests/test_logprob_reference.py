@@ -114,7 +114,14 @@ def echo_server(tiny_model_dir):
             # ``text_offset`` is the running length of those decoded strings. With a BOS
             # token that makes every offset larger than the character position in the
             # prompt by len(decoded BOS).
-            ids = torch.tensor([tokenizer(body["prompt"], add_special_tokens=True)["input_ids"]])
+            # vLLM accepts text or token ids; ``add_special_tokens`` applies to text only.
+            if isinstance(body["prompt"], list):
+                token_ids = list(body["prompt"])
+            else:
+                token_ids = tokenizer(
+                    body["prompt"], add_special_tokens=body.get("add_special_tokens", True)
+                )["input_ids"]
+            ids = torch.tensor([token_ids])
             with torch.no_grad():
                 logp = torch.log_softmax(model(ids).logits[0], dim=-1)
             token_logprobs = [None] + [
@@ -125,17 +132,16 @@ def echo_server(tiny_model_dir):
             for piece in pieces:
                 offsets.append(running)
                 running += len(piece)
-            payload = {
-                "choices": [
-                    {
-                        "logprobs": {
-                            "tokens": pieces,
-                            "token_logprobs": token_logprobs,
-                            "text_offset": offsets,
-                        }
-                    }
-                ]
+            choice = {
+                "logprobs": {
+                    "tokens": pieces,
+                    "token_logprobs": token_logprobs,
+                    "text_offset": offsets,
+                }
             }
+            if body.get("return_token_ids"):
+                choice["prompt_token_ids"] = token_ids
+            payload = {"choices": [choice]}
             data = json.dumps(payload).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -259,24 +265,10 @@ def _build_docs() -> dict[str, Doc]:
     }
 
 
-# Known gap (PR review of 2026-10-27).  lighteval's TransformersModel scores with
-# ``tok_encode_pair(..., pairwise=True)``: the context and the choice are tokenized
-# separately and the ids concatenated.  A completions endpoint tokenizes the joint
-# string, so wherever a token would merge across the boundary the model sees a different
-# token sequence and the likelihoods differ.  Text-only /v1/completions cannot
-# reproduce the separate tokenization; that needs token-id prompts.  ``strict`` makes
-# these fail loudly once the gap is closed, so the marker gets removed.
-_BOUNDARY_MERGE = pytest.mark.xfail(
-    strict=True, reason="endpoint tokenizes context+choice jointly; the reference does it separately"
-)
-_PARITY_CASES = [
-    pytest.param(name, marks=_BOUNDARY_MERGE) if name in ("token-merges-across-boundary", "merge-keeps-token-count")
-    else name
-    for name in _docs()
-]
+_MERGE_DOCS = ("token-merges-across-boundary", "merge-keeps-token-count")
 
 
-@pytest.mark.parametrize("name", _PARITY_CASES)
+@pytest.mark.parametrize("name", list(_docs()))
 def test_patch_matches_reference_backend(name, reference_model, patched_client):
     doc = _docs()[name]
 
@@ -324,3 +316,20 @@ def test_reference_comparison_is_sensitive_to_prompt_construction(
     assert sent.startswith(SYSTEM_PROMPT)
     assert "Instruction: choose the best answer." in sent
     assert sent.count("Answer:") == 3  # two few-shot examples and the query
+
+
+@pytest.mark.parametrize("name", _MERGE_DOCS)
+def test_joint_tokenization_differs_where_a_token_merges_across_the_boundary(
+    name, reference_model, patched_client, monkeypatch
+):
+    """The opt-out scores the jointly tokenized text, which is not what the transformers
+    backend scores when a token merges across the boundary.  This keeps the comparison
+    above from passing for the wrong reason: if joint scoring matched here too, the merge
+    docs would not be testing separate tokenization at all."""
+    monkeypatch.setenv("EVALHUB_LIGHTEVAL_LOGLIKELIHOOD_TOKENIZATION", "joint")
+    doc = _docs()[name]
+
+    (ref,) = reference_model.loglikelihood([doc])
+    (got,) = patched_client.loglikelihood([doc])
+
+    assert got.logprobs != pytest.approx(ref.logprobs, abs=1e-3)

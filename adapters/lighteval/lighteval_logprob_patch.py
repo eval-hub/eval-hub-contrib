@@ -23,13 +23,21 @@ The patch:
   prompt, the task instruction, the few-shot examples and the query, joined by
   blank lines, followed by the choice.  Scoring ``doc.query`` alone silently drops
   every few-shot example and changes the accuracy of ``num_fewshot > 0`` runs.
-- Splits context from continuation like lighteval's ``tok_encode_pair``:
+- Tokenizes the context and each choice separately and scores the concatenated token
+  ids, as lighteval's ``TransformersModel`` does (``tok_encode_pair(..., pairwise=True)``):
+  whitespace at the end of the context moves to the front of the choice.  The endpoint
+  tokenizes (vLLM ``return_token_ids``) and receives the joined ids as a token prompt,
+  so the model's own tokenizer does the splitting.  Scoring the text as one string gives
+  different tokens wherever a token would merge across the boundary.
+  ``EVALHUB_LIGHTEVAL_LOGLIKELIHOOD_TOKENIZATION=joint`` opts out for servers that cannot
+  return token ids; the points below about splitting at a character position and about
+  BOS offsets then apply.
+- In ``joint`` mode, splits context from continuation like ``tok_encode_pair``:
   whitespace at the end of the context belongs to the continuation.  A token
-  that straddles the boundary counts toward the continuation (see the known gap
-  below for how the reference tokenizes that case).  Splitting at
+  that straddles the boundary counts toward the continuation.  Splitting at
   ``len(context)`` instead drops the first answer token whenever the context ends
   in a space or newline (``"Answer: "`` + ``"A"`` tokenises as ``" A"``).
-- Aligns the echoed token offsets with the prompt first.  vLLM's ``text_offset`` is the
+- In ``joint`` mode, aligns the echoed token offsets with the prompt first.  vLLM's ``text_offset`` is the
   running length of the decoded tokens, so a BOS token (``"<s>"``) shifts every offset
   by its length.  The shift is removed only when whole leading tokens account for it;
   an echo shorter than the prompt, or one that cannot be explained that way, fails the
@@ -49,11 +57,6 @@ The patch:
   prompts, and an evaluation should query the model anyway.
 - Does not support PMI-normalised metrics (``Doc.unconditioned_query`` is
   ignored); lighteval rejects those with its own assertion.
-- Known gap: the reference ``TransformersModel`` tokenizes context and choice
-  separately (``tok_encode_pair(..., pairwise=True)``) and joins the ids, while the
-  endpoint tokenizes the joint text.  They agree when the boundary is a clean split and
-  differ when a token merges across it (see ``tests/test_logprob_reference.py``, the
-  strict-xfail cases).  Matching it needs token-id prompts, which are vLLM specific.
 """
 
 from __future__ import annotations
@@ -61,6 +64,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import sys
 import time
 import urllib.error
@@ -264,6 +268,169 @@ def _score_one_choice(
     return cont_sum, positions
 
 
+#: ``pairwise`` (default) tokenizes the question and each answer separately and scores the
+#: concatenated token ids, as lighteval's ``TransformersModel`` does.  ``joint`` sends the
+#: text and lets the endpoint tokenize it as one string; it works with any server that
+#: supports ``echo``, but differs where a token would merge across the boundary.
+_TOKENIZATION_ENV = "EVALHUB_LIGHTEVAL_LOGLIKELIHOOD_TOKENIZATION"
+
+
+def _tokenization_mode() -> str:
+    raw = os.environ.get(_TOKENIZATION_ENV, "").strip().lower()
+    if raw in ("", "pairwise"):
+        return "pairwise"
+    if raw == "joint":
+        return "joint"
+    raise LoglikelihoodScoringError(
+        f"{_TOKENIZATION_ENV}={raw!r} is not one of 'pairwise' or 'joint'"
+    )
+
+
+def _echo_choice(
+    completions_url: str,
+    model_name: str,
+    api_key: str,
+    prompt: "str | list[int]",
+    label: str,
+    *,
+    add_special_tokens: bool | None = None,
+) -> dict:
+    """POST ``prompt`` (text, or token ids) with ``echo`` and token ids requested.
+
+    Returns the first choice.  ``return_token_ids`` makes vLLM include the ids of the
+    tokens it scored, so the caller knows exactly what the model saw.
+    """
+    payload: dict = {
+        "model": model_name,
+        "prompt": prompt,
+        "max_tokens": 0,
+        "echo": True,
+        "logprobs": 1,
+        "return_token_ids": True,
+    }
+    if add_special_tokens is not None:
+        payload["add_special_tokens"] = add_special_tokens
+    req = urllib.request.Request(
+        completions_url,
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    data = _post_completion(req)
+    try:
+        choice = data["choices"][0]
+        if not choice.get("logprobs"):
+            raise LoglikelihoodScoringError(
+                f"{completions_url} returned no logprobs for {label}; "
+                "the endpoint must support echo=True with logprobs"
+            )
+        return choice
+    except (IndexError, KeyError, TypeError, AttributeError) as exc:
+        raise LoglikelihoodScoringError(
+            f"{completions_url} returned a malformed completions response for {label}: {exc!r}"
+        ) from exc
+
+
+def _returned_token_ids(completions_url: str, choice: dict, label: str) -> list[int]:
+    ids = choice.get("prompt_token_ids")
+    if not isinstance(ids, list) or not ids or not all(isinstance(i, int) for i in ids):
+        raise LoglikelihoodScoringError(
+            f"{completions_url} did not return prompt_token_ids for {label}. Scoring the "
+            "question and the answer as separately tokenized text (what lighteval's "
+            "transformers backend does) needs a vLLM server that supports "
+            f"return_token_ids. Set {_TOKENIZATION_ENV}=joint to score the jointly "
+            "tokenized text instead; results can then differ slightly where a token "
+            "would merge across the question/answer boundary."
+        )
+    return ids
+
+
+def _tokenize_pair(
+    completions_url: str,
+    model_name: str,
+    api_key: str,
+    context: str,
+    choices: list[str],
+) -> tuple[list[int], list[list[int]]]:
+    """Token ids for the context and for each choice, tokenized separately.
+
+    Mirrors ``tok_encode_pair(..., pairwise=True)``: whitespace at the end of the context
+    moves to the front of every choice, the context is encoded with the tokenizer's
+    special tokens (BOS if it adds one) and the choice without any.  The endpoint does
+    the tokenizing, so it is the model's own tokenizer.  (The reference also drops a
+    trailing EOS from the context ids; a context that ends in the literal EOS text is
+    not handled.)
+    """
+    stripped = context.rstrip()
+    if not stripped:
+        raise LoglikelihoodScoringError(
+            "loglikelihood patch: the context is empty, so there is nothing to condition "
+            "the choices on"
+        )
+    whitespace = context[len(stripped):]
+
+    ctx_choice = _echo_choice(
+        completions_url, model_name, api_key, stripped, f"context {stripped[:40]!r}"
+    )
+    context_ids = _returned_token_ids(completions_url, ctx_choice, f"context {stripped[:40]!r}")
+
+    choice_ids: list[list[int]] = []
+    for choice in choices:
+        label = f"choice {choice[:40]!r}"
+        cont_choice = _echo_choice(
+            completions_url, model_name, api_key, whitespace + choice, label,
+            add_special_tokens=False,
+        )
+        ids = _returned_token_ids(completions_url, cont_choice, label)
+        choice_ids.append(ids)
+    return context_ids, choice_ids
+
+
+def _score_token_ids(
+    completions_url: str,
+    model_name: str,
+    api_key: str,
+    context_ids: list[int],
+    choice_ids: list[int],
+    choice: str,
+) -> tuple[float, list[int]]:
+    """Score ``choice_ids`` given ``context_ids`` by echoing their concatenation.
+
+    Returns ``(summed_logprob, token_positions)`` like ``_score_one_choice``.  The ids
+    go to the endpoint as a token prompt, so it scores exactly this sequence.
+    """
+    prompt_ids = [*context_ids, *choice_ids]
+    label = f"choice {choice[:40]!r}"
+    chosen = _echo_choice(completions_url, model_name, api_key, prompt_ids, label)
+    try:
+        token_logprobs: list[float | None] = chosen["logprobs"]["token_logprobs"]
+    except (KeyError, TypeError) as exc:
+        raise LoglikelihoodScoringError(
+            f"{completions_url} returned a malformed completions response for {label}: {exc!r}"
+        ) from exc
+    if len(token_logprobs) != len(prompt_ids):
+        raise LoglikelihoodScoringError(
+            f"{completions_url} returned {len(token_logprobs)} token log-probabilities for "
+            f"a {len(prompt_ids)}-token prompt (choice {choice[:40]!r})"
+        )
+
+    total = 0.0
+    positions: list[int] = []
+    for i in range(len(context_ids), len(prompt_ids)):
+        lp = token_logprobs[i]
+        if lp is None or not math.isfinite(lp):
+            raise LoglikelihoodScoringError(
+                f"{completions_url} returned no usable logprob for continuation "
+                f"token {i} of choice {choice[:40]!r}"
+            )
+        total += lp
+        positions.append(i)
+    return total, positions
+
+
 def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelResponse"]:  # noqa: N802
     """Compute log-likelihood for all choices of each Doc using vLLM echo+logprobs.
 
@@ -322,6 +489,9 @@ def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelRespon
         model_name,
     )
 
+    mode = _tokenization_mode()
+    logger.info("loglikelihood patch: %s tokenization", mode)
+
     for doc in docs:
         # lighteval 0.13.0 Doc.choices holds ALL candidate continuations for this
         # sample.  We must score every choice and return per-choice sums so that
@@ -334,10 +504,19 @@ def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelRespon
                 "no choices to score"
             )
 
-        scored = [
-            _score_one_choice(completions_url, model_name, api_key, context, ch)
-            for ch in choices
-        ]
+        if mode == "pairwise":
+            context_ids, choice_ids = _tokenize_pair(
+                completions_url, model_name, api_key, context, choices
+            )
+            scored = [
+                _score_token_ids(completions_url, model_name, api_key, context_ids, ids, ch)
+                for ch, ids in zip(choices, choice_ids)
+            ]
+        else:
+            scored = [
+                _score_one_choice(completions_url, model_name, api_key, context, ch)
+                for ch in choices
+            ]
         choice_sums = [total for total, _ in scored]
 
         # Determine argmax and compare to gold.
