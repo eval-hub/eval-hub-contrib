@@ -26,7 +26,7 @@ pip-audit -r /tmp/audit-in.txt --no-deps --disable-pip
 | | Vulnerable packages | Advisories |
 |---|---|---|
 | Before: `lighteval==0.13.0`, `litellm==1.84.0` | 3 (nltk, litellm, diskcache) | 44 |
-| After: `lighteval==0.13.0`, `litellm==1.103.9`, `nltk==3.10.4` | 1 (diskcache) | 1 |
+| After: `lighteval==0.13.0`, `litellm==1.102.2`, `nltk==3.10.4` | 1 (diskcache) | 1 |
 
 "Before" is the tree a fresh resolve of the previous pins gives. A resolve that keeps
 older cached versions of transitive packages is worse, see
@@ -82,11 +82,17 @@ nltk 3.10.4 was checked against every nltk call lighteval makes (`word_tokenize`
 The adapter drives lighteval's LiteLLM backend, so the litellm version is ours to
 choose (lighteval only asks for `litellm[caching]>=1.66.0`, as an optional extra).
 
+The version must exist on the Red Hat package index, which `verify-requirements.yml`
+queries. On 2026-10-27 that index offered litellm 1.102.2, 1.84.0, 1.75.8 and 1.74.15.
+1.103.9, which this table first chose from PyPI alone, was not there, so the check
+failed on `main`. 1.102.2 is the newest version the index has, and the one used now.
+
 | litellm | Own advisories | Caps `filelock<4.0` | Repeated request (cache hit) without `orjson`+`soundfile` |
 |---|---|---|---|
 | 1.84.0 (previous pin) | PYSEC-2026-4066 (proxy only, see below) | no | works (tested) |
 | 1.96.2, 1.97.0 | none | no | not tested |
-| **1.103.9 (chosen)** | none | no | **crashes (tested); disabled by the wrapper** |
+| **1.102.2 (chosen, newest on the Red Hat index)** | none (pip-audit of the lock) | no (filelock resolves to 4.2.4) | not tested; the wrapper disables the cache, so a hit cannot occur |
+| 1.103.9 (first pin; not on the Red Hat index) | none | no | **crashes (tested); disabled by the wrapper** |
 | 1.104.7, 1.105.5 | none | **yes** | 1.105.5 crashed in a lighteval run (not isolated) |
 | 1.106.4 (latest, 2026-10-25) | none | **yes** | **crashes (tested)**; wrapper fix also works (tested) |
 
@@ -261,7 +267,8 @@ worth having if the Red Hat index allows it:
 
 ## What was tested
 
-Python 3.12, lighteval 0.13.0, litellm 1.103.9, nltk 3.10.4, eval-hub-sdk 1.0.6 (the same
+Python 3.12, lighteval 0.13.0, litellm 1.103.9, nltk 3.10.4, eval-hub-sdk 1.0.6 (the original
+run, before the pin moved to 1.102.2; the unit suite was rerun on 1.102.2, see below; the same
 cases also passed with lighteval `7fa19dc` on Python 3.11 to 3.14):
 
 - Unit tests, including the comparison of per-choice log-likelihoods with lighteval's
@@ -272,5 +279,31 @@ cases also passed with lighteval `7fa19dc` on Python 3.11 to 3.14):
   `arc:easy` with a system prompt. Scores come from a random-weight model and only
   show that the plumbing works.
 
-Not tested: a real RHOAI cluster or vLLM endpoint, the Red Hat package index (whether
-litellm 1.103.9 and nltk 3.10.4 are available), Anthropic, `linux/amd64` builds.
+After the pin moved to litellm 1.102.2 these were run (2026-10-28):
+
+- The unit suite on the host: 129 passed, 1 skipped, 4 xfailed.
+- Every entry in `requirements.txt` resolves on the Red Hat index that
+  `verify-requirements.yml` uses, including `litellm[caching]==1.102.2`.
+- `pip install -r requirements.lock` on `registry.access.redhat.com/ubi9/python-312`
+  installed `litellm-1.102.2` and `nltk-3.10.4` with no errors. The image build then
+  stopped because the build machine's disk was full, so no image was built from the new
+  lock.
+- A 3-problem `lcb:codegeneration_v6` job through the adapter in a Linux container with
+  litellm 1.102.2 swapped into the earlier image, against a vLLM endpoint: it completed
+  (exit 0, 1 of 3 problems passed, no OOM kill). On a macOS host the same generation
+  requests also succeeded through litellm 1.102.2, but lighteval's code grader does not
+  run on macOS, so that run gave no score.
+
+The other end-to-end CLI cases above were not repeated.
+
+Not tested: a real RHOAI cluster, Anthropic, `linux/amd64` builds, and an image built
+from the new lock.
+
+The CI check only looks at `requirements.txt`. A rough name-and-version match of all 180
+pins in `requirements.lock` against the same index found 29 it could not match: 18
+packages it does not list (the NVIDIA CUDA libraries, `cuda-bindings`, `cuda-pathfinder`
+and `cuda-toolkit`, as expected on a CPU index) and 11 versions it lacks, for example
+`transformers==5.21.0`, `starlette==1.10.0` and `inspect-ai==0.3.285`. Local-version
+builds such as a `+cpu` torch can make that match miss, so treat it as a hint. The
+`Containerfile` installs the lock from the default index, so a build from this repository
+is not affected; a downstream build that installs the lock from the Red Hat index may be.
