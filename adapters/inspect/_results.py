@@ -9,7 +9,7 @@ from typing import Any
 from evalhub.adapter import CapabilityEvalEntry, EvaluationResult
 from evalhub.models.api import PrimaryScore
 
-from _benchmarks import DIMENSION_ABILITY_MAP, fixed_primary_for
+from _benchmarks import DIMENSION_ABILITY_MAP, FIXED_PRIMARY_METRICS, fixed_primary_for
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +170,16 @@ def resolve_primary_score(
             metric=fixed.metric,
             lower_is_better=fixed.lower_is_better,
         )
+    # HLE/BFCL catalog primaries must not fall back to a secondary score when
+    # accuracy is missing (same policy as compute_overall_score).
+    if benchmark_id is not None and benchmark_id in FIXED_PRIMARY_METRICS:
+        logger.warning(
+            "Fixed primary_score metric %s is missing | benchmark_id=%s | candidates=%s",
+            FIXED_PRIMARY_METRICS[benchmark_id].metric,
+            benchmark_id,
+            score_names,
+        )
+        return None
 
     accuracy_like = [
         n for n in score_names

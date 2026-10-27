@@ -155,6 +155,24 @@ def test_resolve_primary_score_bfcl():
     assert ps.metric == "bfcl_scorer/accuracy"
 
 
+def test_resolve_primary_score_bfcl_missing_accuracy_does_not_use_secondary():
+    """Missing bfcl_scorer/accuracy must not pick simple_python_acc as primary."""
+    results = [
+        metric("bfcl_scorer/stderr", 0.1),
+        metric("bfcl_scorer/simple_python_acc", 0.6),
+        metric("bfcl_scorer/simple_python_sterr", 0.1),
+    ]
+    assert (
+        resolve_primary_score(
+            results,
+            mode="standard",
+            benchmark_id="inspect/bfcl",
+            job_primary=None,
+        )
+        is None
+    )
+
+
 @pytest.mark.parametrize("mode,bid", [("petri", "inspect/petri-escalation"), ("bloom", "inspect/bloom-custom")])
 def test_resolve_primary_score_petri_bloom_lower_is_better(mode, bid):
     """Petri/Bloom fallback must mark concerning/mean as lower-is-better."""
