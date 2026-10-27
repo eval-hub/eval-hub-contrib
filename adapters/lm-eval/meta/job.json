@@ -1,0 +1,26 @@
+{
+  "id": "lmeval-gsm8k-001",
+  "provider_id": "lm-eval",
+  "benchmark_id": "lm-eval/gsm8k",
+  "benchmark_index": 0,
+  "model": {
+    "url": "http://127.0.0.1:8000/v1",
+    "name": "meta-llama/Meta-Llama-3-8B-Instruct"
+  },
+  "num_examples": 5,
+  "parameters": {
+    "api_style": "auto",
+    "num_fewshot": 5,
+    "num_concurrent": 4,
+    "max_context_length": 4096,
+    "max_gen_tokens": 512,
+    "batch_size": 1,
+    "dataset_source": "hub"
+  },
+  "callback_url": "http://localhost:8080",
+  "tags": [
+    {"key": "framework", "value": "lm-evaluation-harness"},
+    {"key": "task", "value": "gsm8k"},
+    {"key": "evaluation_type", "value": "generation"}
+  ]
+}
