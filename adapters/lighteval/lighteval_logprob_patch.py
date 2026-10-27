@@ -46,6 +46,15 @@ The patch:
   the benchmark is scored on blank output instead of failing.  A hit needs an
   identical repeated request, so it shows up only on re-runs and duplicated
   prompts, and an evaluation should query the model anyway.
+- Caps the memory of the process that runs a model-written solution when
+  LiveCodeBench is graded.  lighteval's ``reliability_guard()`` is called without a
+  limit (its comment says 4 GB), so a solution that allocates in a loop grows until the
+  container is killed: a 175-problem run generated every answer and was then OOMKilled
+  at 512 GiB.  The grader is a forked child, so the address space it already inherits is
+  not the solution's: the limit is that size plus ``EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB``
+  (default 2048, ``0`` turns it off).  A solution that exceeds it scores as failed.
+  Applies to the fork start method (the default on Linux before Python 3.14), the only
+  one under which lighteval's grader runs.
 - Does not support PMI-normalised metrics (``Doc.unconditioned_query`` is
   ignored); lighteval rejects those with its own assertion.
 """
@@ -55,6 +64,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import sys
 import time
 import urllib.error
@@ -372,7 +382,73 @@ def _disable_litellm_response_cache() -> None:
         logger.info("litellm response cache disabled (cache hits need proxy-only packages)")
 
 
+_CODE_MEMORY_ENV = "EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB"
+_DEFAULT_CODE_MEMORY_MIB = 2048
+
+
+def _address_space_bytes() -> int | None:
+    """Current virtual size of this process (``VmSize``), or None where unavailable."""
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmSize:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _code_memory_budget_bytes() -> int:
+    """Memory a graded solution may add to what its process inherited; 0 means no cap."""
+    raw = os.environ.get(_CODE_MEMORY_ENV, "")
+    try:
+        mib = int(raw) if raw.strip() else _DEFAULT_CODE_MEMORY_MIB
+    except ValueError:
+        logger.warning("ignoring %s=%r (not an integer)", _CODE_MEMORY_ENV, raw)
+        mib = _DEFAULT_CODE_MEMORY_MIB
+    return max(mib, 0) * 1024 * 1024
+
+
+def _cap_code_grader_memory() -> None:
+    """Give lighteval's LiveCodeBench grader the memory limit it was meant to have.
+
+    ``run_test`` calls ``reliability_guard()`` with no limit, so a solution that
+    allocates without bound is stopped only by the container.  Wrap it to set
+    ``RLIMIT_AS`` to the child's inherited size plus the budget.  Only the address
+    space is limited: ``RLIMIT_STACK`` stays as it was.
+    """
+    budget = _code_memory_budget_bytes()
+    if budget == 0:
+        logger.info("%s=0: LiveCodeBench grader memory is not capped", _CODE_MEMORY_ENV)
+        return
+    try:
+        import resource  # noqa: PLC0415 (reliability_guard hides it from the graded code)
+
+        from lighteval.tasks.tasks.lcb import codegen_metrics  # noqa: PLC0415
+    except ImportError as exc:
+        logger.info("LiveCodeBench grader memory cap skipped: %s", exc)
+        return
+
+    original = codegen_metrics.reliability_guard
+    if getattr(original, "_evalhub_capped", False):
+        return
+
+    def reliability_guard(maximum_memory_bytes=None):
+        if maximum_memory_bytes is None and (inherited := _address_space_bytes()) is not None:
+            limit = inherited + budget
+            try:
+                resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+            except (ValueError, OSError) as exc:
+                logger.warning("could not cap grader memory at %d bytes: %s", limit, exc)
+        return original(maximum_memory_bytes)
+
+    reliability_guard._evalhub_capped = True  # type: ignore[attr-defined]
+    codegen_metrics.reliability_guard = reliability_guard
+    logger.info("LiveCodeBench grader memory capped at +%d MiB per solution", budget // (1024 * 1024))
+
+
 def _apply_patch() -> None:
+    _cap_code_grader_memory()
     try:
         from lighteval.models.endpoints.litellm_model import LiteLLMClient  # noqa: PLC0415
     except ImportError as exc:
