@@ -155,8 +155,7 @@ An earlier revision of this branch pinned `lighteval @ git+https://github.com/hu
   `ruivieira/basic-ops-tasks` in `python-index` mode on `requirements.txt`. Its code
   (`src/requirements.ts`) turns every VCS or direct-URL requirement into
   `status: 'error'`: "VCS requirements are not supported: only the configured index is
-  queried". That job would fail for a `git+https` line even with the `PYTHON_INDEX`
-  secret present.
+  queried". That job would fail for a `git+https` line even with the index set.
 - **No security gain.** nltk is raised to 3.10.4 by `requirements-overrides.txt` either
   way, and the audit of the lock is identical for both lighteval versions: 183 package
   versions, only diskcache vulnerable.
