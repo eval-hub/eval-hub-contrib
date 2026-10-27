@@ -301,7 +301,7 @@ class GuideLLMAdapter(FrameworkAdapter):
         if profiles:
             if isinstance(profiles, str):
                 profiles = [part.strip() for part in profiles.split(",") if part.strip()]
-            resolved = list(profiles)
+            resolved = list(dict.fromkeys(profiles))
             self._validate_profiles(resolved)
             return resolved
 

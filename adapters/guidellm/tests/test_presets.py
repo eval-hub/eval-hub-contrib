@@ -130,6 +130,22 @@ def test_full_preset_can_be_limited_to_selected_profiles(adapter: GuideLLMAdapte
     assert adapter._resolve_run_profiles(single) == ["concurrent"]
 
 
+def test_duplicate_explicit_profiles_are_deduplicated(adapter: GuideLLMAdapter):
+    duplicated = _spec(
+        adapter,
+        FULL_BENCHMARK_ID,
+        parameters={"profiles": ["sweep", "poisson", "sweep"]},
+    )
+    assert adapter._resolve_run_profiles(duplicated) == ["sweep", "poisson"]
+
+    comma_separated = _spec(
+        adapter,
+        FULL_BENCHMARK_ID,
+        parameters={"profiles": "concurrent, sweep ,concurrent"},
+    )
+    assert adapter._resolve_run_profiles(comma_separated) == ["concurrent", "sweep"]
+
+
 def test_unknown_benchmark_keeps_single_profile_behaviour(adapter: GuideLLMAdapter):
     spec = _spec(adapter, "local_quick")
 
