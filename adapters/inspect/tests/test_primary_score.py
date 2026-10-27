@@ -8,7 +8,9 @@ import pytest
 from evalhub.adapter import EvaluationResult
 
 import main
-from _results import compute_overall_score, extract_results
+from evalhub.models.api import PrimaryScore
+
+from _results import compute_overall_score, extract_results, resolve_primary_score
 from main import InspectAdapter
 
 
@@ -81,9 +83,12 @@ def test_job_overall_and_confirmed_zero_shot_follow_accuracy(
     if missing:
         assert result.overall_score is None
         assert "zero_shot" not in result.additional_info
+        assert result.primary_score is None
     else:
         assert result.overall_score == value
         assert result.additional_info["zero_shot"] == value
+        assert result.primary_score is not None
+        assert result.primary_score.metric == f"{scorer}/{key}"
 
 
 def test_other_benchmark_aggregation_is_unchanged():
@@ -102,3 +107,99 @@ def test_petri_bloom_primary_selection_is_unchanged(bid):
 def test_petri_bloom_missing_primary_retains_legacy_fallback(bid):
     results = [metric("a/mean", 2), metric("b/mean", 4), metric("a/stderr", 0.1)]
     assert compute_overall_score(results, "petri" if "petri" in bid else "bloom", bid) == 3
+
+
+def test_resolve_primary_score_custom_unique_accuracy():
+    """inspect/custom: pick the unique */accuracy scorer key for the event."""
+    results = [
+        metric("choice/accuracy", 0.2),
+        metric("choice/stderr", 0.01),
+    ]
+    ps = resolve_primary_score(
+        results,
+        mode="standard",
+        benchmark_id="inspect/custom",
+        job_primary=PrimaryScore(metric="accuracy/accuracy"),
+    )
+    assert ps is not None
+    assert ps.metric == "choice/accuracy"
+
+
+def test_resolve_primary_score_prefers_job_when_present():
+    results = [
+        metric("choice/accuracy", 0.2),
+        metric("match/accuracy", 0.9),
+    ]
+    ps = resolve_primary_score(
+        results,
+        mode="standard",
+        benchmark_id="inspect/custom",
+        job_primary=PrimaryScore(metric="match/accuracy"),
+    )
+    assert ps is not None
+    assert ps.metric == "match/accuracy"
+
+
+def test_resolve_primary_score_bfcl():
+    results = [
+        metric("bfcl_scorer/accuracy", 0.8),
+        metric("bfcl_scorer/stderr", 0.1),
+    ]
+    ps = resolve_primary_score(
+        results,
+        mode="standard",
+        benchmark_id="inspect/bfcl",
+        job_primary=None,
+    )
+    assert ps is not None
+    assert ps.metric == "bfcl_scorer/accuracy"
+
+
+def test_resolve_primary_score_bfcl_missing_accuracy_does_not_use_secondary():
+    """Missing bfcl_scorer/accuracy must not pick simple_python_acc as primary."""
+    results = [
+        metric("bfcl_scorer/stderr", 0.1),
+        metric("bfcl_scorer/simple_python_acc", 0.6),
+        metric("bfcl_scorer/simple_python_sterr", 0.1),
+    ]
+    assert (
+        resolve_primary_score(
+            results,
+            mode="standard",
+            benchmark_id="inspect/bfcl",
+            job_primary=None,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("mode,bid", [("petri", "inspect/petri-escalation"), ("bloom", "inspect/bloom-custom")])
+def test_resolve_primary_score_petri_bloom_lower_is_better(mode, bid):
+    """Petri/Bloom fallback must mark concerning/mean as lower-is-better."""
+    from _benchmarks import PETRI_BLOOM_PRIMARY
+
+    results = [
+        metric(PETRI_BLOOM_PRIMARY.metric, 0.8),
+        metric("other/mean", 0.1),
+    ]
+    ps = resolve_primary_score(results, mode=mode, benchmark_id=bid, job_primary=None)
+    assert ps is not None
+    assert ps.metric == PETRI_BLOOM_PRIMARY.metric
+    assert ps.lower_is_better is True
+
+
+def test_resolve_primary_score_ambiguous_custom_returns_none():
+    """Multiple non-accuracy scores: no unique primary without job primary_score."""
+    results = [
+        metric("choice/f1", 0.2),
+        metric("match/em", 0.9),
+    ]
+    assert (
+        resolve_primary_score(
+            results,
+            mode="standard",
+            benchmark_id="inspect/custom",
+            job_primary=None,
+        )
+        is None
+    )
