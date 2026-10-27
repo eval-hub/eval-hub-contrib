@@ -2073,3 +2073,11 @@ def test_loglikelihood_patch_rejects_an_echo_it_cannot_align_with_the_prompt(mon
 
     with pytest.raises(mod.LoglikelihoodScoringError, match="not whole leading tokens"):
         mod._loglikelihood_via_completions(_fake_client(), [doc])
+
+
+def test_memory_cap_is_copied_into_the_image():
+    """The Containerfile copies the cap module next to the patch launcher; without it the
+    launcher would run lighteval with its grader uncapped."""
+    containerfile = (Path(__file__).parent.parent / "Containerfile").read_text()
+    assert "COPY lighteval_memory_cap.py" in containerfile
+    assert "COPY lighteval_logprob_patch.py" in containerfile

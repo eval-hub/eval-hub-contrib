@@ -412,6 +412,11 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     _apply_patch()
 
+    # Give lighteval's LiveCodeBench grader the memory limit it was meant to have.
+    from lighteval_memory_cap import cap_code_grader_memory  # noqa: PLC0415
+
+    cap_code_grader_memory()
+
     # Forward all CLI arguments to the real lighteval main
     from lighteval.__main__ import app  # noqa: PLC0415
 

@@ -416,6 +416,30 @@ docker run \
 
 This will run all tasks in the "commonsense_reasoning" category.
 
+## Memory use
+
+Most benchmarks stay near the baseline of the LightEval process, about 2 GiB.
+
+`lcb:codegeneration_v6` (LiveCodeBench) is the exception, because it runs the code the model
+wrote. LightEval starts a child process per solution and calls `reliability_guard()` without a
+memory limit (its comment says 4 GB), so a solution that allocates in a loop grows until the
+container is killed. A 175-problem run then fails after every answer has been generated, with
+all the work lost. Only one solution is graded at a time, so a very large figure is one
+runaway solution, and it depends on what the model wrote.
+
+The launcher that starts the LightEval CLI for every provider (`lighteval_logprob_patch.py`)
+calls `lighteval_memory_cap.py`, which limits each graded
+solution to the address space its process already had plus `EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB`
+(default `2048`; `0` turns the limit off). A solution that needs more fails that problem and
+the run continues. Size the pod for the LightEval process plus that allowance, plus margin.
+Solutions that legitimately need more memory than the allowance fail, so raise the variable
+together with the pod limit.
+
+Set the variable in the adapter container's environment. The limit applies on Linux with the
+`fork` start method (the default before Python 3.14), which is the only one LightEval's
+grader works with. Upstream, LightEval should enforce a limit itself; this wrapper covers the
+gap until it does.
+
 ## LightEval Results and Eval Card Fields
 
 ### How the Adapter Processes LightEval Output
