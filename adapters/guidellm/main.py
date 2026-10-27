@@ -17,7 +17,6 @@ Architecture:
 import json
 import logging
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -39,6 +38,7 @@ from evalhub.adapter import (
 )
 from evalhub.adapter.auth import resolve_model_credentials
 from evalhub.adapter.mlflow import MlflowFileArtifact
+from subprocess_utils import run_streaming_subprocess
 
 # Configure logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -398,27 +398,13 @@ class GuideLLMAdapter(FrameworkAdapter):
                     cmd.extend(["--backend-kwargs", json.dumps({"api_key": creds.api_key})])
                 logger.info("Auth: injected API key into guidellm --backend-kwargs")
 
-            process = subprocess.Popen(
+            run_streaming_subprocess(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
+                name="GuideLLM",
+                logger=logger,
                 env=env,
+                sensitive_values=(creds.api_key,),
             )
-
-            # Stream output
-            if process.stdout:
-                for line in process.stdout:
-                    line = line.rstrip()
-                    if line:
-                        logger.info(f"GuideLLM: {line}")
-
-            # Wait for completion
-            return_code = process.wait()
-
-            if return_code != 0:
-                raise RuntimeError(f"GuideLLM failed with exit code {return_code}")
 
         except Exception as e:
             logger.error(f"Failed to execute GuideLLM: {e}")
