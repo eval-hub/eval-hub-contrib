@@ -32,6 +32,7 @@ def _sanitize_output_line(line: str, sensitive_values: Iterable[str]) -> str:
 
 
 def _bounded_output_tail(lines: Iterable[str]) -> str:
+    """Join recent output lines and cap the diagnostic text to the configured limit."""
     output = "\n".join(lines)
     if len(output) <= _MAX_ERROR_OUTPUT_CHARS:
         return output

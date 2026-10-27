@@ -7,20 +7,26 @@ import subprocess_utils
 
 
 class FakeProcess:
+    """Minimal subprocess double for deterministic streaming-output tests."""
+
     def __init__(self, output: str, return_code: int):
+        """Prepare captured stdout and the exit code returned by wait()."""
         self.stdout = io.StringIO(output)
         self.return_code = return_code
 
     def wait(self) -> int:
+        """Return the configured subprocess exit status."""
         return self.return_code
 
 
 def test_failure_includes_only_the_bounded_tail_and_logs_it(monkeypatch, caplog):
+    """Keep only the configured line tail in errors while streaming output to logs."""
     output = "".join(f"line-{index}\n" for index in range(45))
     process = FakeProcess(output, return_code=1)
     popen_kwargs = {}
 
     def fake_popen(*args, **kwargs):
+        """Capture subprocess options and return the configured process double."""
         popen_kwargs.update(kwargs)
         return process
 
@@ -44,6 +50,7 @@ def test_failure_includes_only_the_bounded_tail_and_logs_it(monkeypatch, caplog)
 
 
 def test_failure_redacts_known_and_labeled_credentials(monkeypatch, caplog):
+    """Redact known secrets, credential assignments, and URL credentials."""
     output = (
         "api_key=known-secret\n"
         "Authorization: Bearer bearer-secret\n"
@@ -78,6 +85,7 @@ def test_failure_redacts_known_and_labeled_credentials(monkeypatch, caplog):
 
 
 def test_failure_output_is_truncated_by_character_limit(monkeypatch):
+    """Cap oversized subprocess diagnostics and mark that earlier text was dropped."""
     output = "".join(f"{index}: {'x' * 300}\n" for index in range(20))
     process = FakeProcess(output, return_code=1)
     monkeypatch.setattr(subprocess_utils.subprocess, "Popen", lambda *args, **kwargs: process)
@@ -95,6 +103,7 @@ def test_failure_output_is_truncated_by_character_limit(monkeypatch):
 
 
 def test_success_does_not_raise(monkeypatch):
+    """Return normally when the subprocess exits successfully."""
     process = FakeProcess("finished successfully\n", return_code=0)
     monkeypatch.setattr(subprocess_utils.subprocess, "Popen", lambda *args, **kwargs: process)
 
@@ -104,6 +113,7 @@ def test_success_does_not_raise(monkeypatch):
 
 
 def test_failure_without_output_keeps_concise_error(monkeypatch):
+    """Keep the exit-code error concise when the subprocess produced no output."""
     process = FakeProcess("", return_code=1)
     monkeypatch.setattr(subprocess_utils.subprocess, "Popen", lambda *args, **kwargs: process)
 

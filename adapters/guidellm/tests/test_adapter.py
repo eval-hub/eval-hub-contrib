@@ -117,6 +117,7 @@ def test_guidellm_primary_score_override(monkeypatch):
 
 
 def test_guidellm_subprocess_diagnostics_are_reported_in_failure_status(monkeypatch):
+    """Propagate bounded subprocess diagnostics through the failed status callback."""
     adapter = GuideLLMAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
     callbacks.create_oci_artifact.return_value = OCIArtifactResult(
@@ -128,6 +129,7 @@ def test_guidellm_subprocess_diagnostics_are_reported_in_failure_status(monkeypa
     )
 
     def fail_with_diagnostics(_cmd):
+        """Simulate a GuideLLM subprocess failure with captured output."""
         raise RuntimeError(diagnostic)
 
     monkeypatch.setattr(adapter, "_run_guidellm", fail_with_diagnostics)
