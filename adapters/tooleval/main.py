@@ -23,7 +23,6 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
 
 import httpx
 import openai
@@ -49,7 +48,6 @@ logger = logging.getLogger(__name__)
 
 _PROVIDER_ID = "tooleval"
 _ADAPTER_VERSION = "0.3.0"
-_SIDECAR_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _PASS_SCORES = {"solved": 1.0, "unsure": 0.5, "unsolved": 0.0}
 _DEBUG_IO_LIMIT = 2048
 _debug_io_enabled = False
@@ -609,31 +607,19 @@ def _build_judge_client(
     timeout: float,
 ) -> tuple[openai.OpenAI, str, str]:
     judge_model = str(params.get("judge_model") or model_name).strip() or model_name
-    param_judge_url = str(params.get("judge_url") or "").strip().rstrip("/")
-    param_judge_key = params.get("judge_api_key")
+    for key in ("judge_url", "judge_base_url", "judge_api_key"):
+        if key in params:
+            raise ValueError(
+                f"parameters.{key} is no longer supported; "
+                "use judge_url and judge_api-key in model.auth.secret_ref"
+            )
     secret_judge_key = read_model_auth_key("judge_api-key")
     secret_judge_url = read_model_auth_key("judge_url")
 
-    if param_judge_url:
-        judge_url = param_judge_url
-        if param_judge_key:
-            api_key = str(param_judge_key)
-        elif urlparse(judge_url).hostname in _SIDECAR_HOSTS and secret_judge_key:
-            api_key = secret_judge_key
-        elif judge_url == model_url:
-            api_key = _resolve_mut_api_key(config)
-        else:
-            api_key = (
-                os.getenv("TOOLEVAL_JUDGE_API_KEY")
-                or os.getenv("OPENAI_API_KEY")
-                or "DUMMY"
-            )
-    elif secret_judge_url and secret_judge_key:
-        judge_url = secret_judge_url.strip().rstrip("/")
-        api_key = secret_judge_key
-    else:
-        judge_url = model_url
-        api_key = str(param_judge_key) if param_judge_key else _resolve_mut_api_key(config)
+    if secret_judge_url and not secret_judge_key:
+        raise ValueError("judge_url in model.auth.secret_ref requires judge_api-key")
+    judge_url = (secret_judge_url or model_url).strip().rstrip("/")
+    api_key = secret_judge_key or read_model_auth_key("api-key") or "DUMMY"
 
     return (
         _build_openai_client(base_url=judge_url, api_key=api_key, timeout=timeout),

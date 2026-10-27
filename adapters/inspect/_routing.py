@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from _benchmarks import _CLIENT_ANTHROPIC, _CLIENT_OLLAMA, _CLIENT_OPENAI_COMPAT
+from _model_auth import role_connection, validate_connection_parameters
 
 
 def _is_ollama_endpoint(url: str | None) -> bool:
@@ -130,48 +131,12 @@ def target_model_spec(
     This spec must be passed via --model-role CLI flag (not env var) because
     JSON dicts with commas break inspect_ai's env var role parser.
     """
-    # Do NOT fall back to model_url here. build_env already sets OPENAI_BASE_URL
-    # from config.model.url, so the provider picks it up via env var. Including
-    # base_url in the JSON role spec requires a newer inspect_ai that explicitly
-    # pops it from the role dict before GenerateConfig validation.
-    role_base_url = params.get("target_base_url") or None
-    role_api_key = params.get("target_api_key") or None
-    role_anthropic_base_url = params.get("target_anthropic_base_url") or None
-    role_anthropic_api_key = params.get("target_anthropic_api_key") or None
-
-    if role_anthropic_base_url:
-        cfg: dict[str, Any] = {
-            "model": route_model(model_name, _CLIENT_ANTHROPIC),
-            "base_url": role_anthropic_base_url,
-        }
-        if role_anthropic_api_key or role_api_key:
-            cfg["api_key"] = role_anthropic_api_key or role_api_key
-        return json.dumps(cfg)
-
-    # Determine client: explicit base URL takes precedence over global env
-    if role_base_url:
-        client = _CLIENT_OLLAMA if _is_ollama_endpoint(role_base_url) else _CLIENT_OPENAI_COMPAT
-    else:
-        client = select_client(env, endpoint_url=model_url)
-
-    model_str = route_model(model_name, client)
-
+    validate_connection_parameters(params)
+    client = select_client(env, endpoint_url=model_url)
+    model = route_model(model_name, client)
     if client == _CLIENT_OPENAI_COMPAT:
-        cfg = {"model": model_str, "model_args": {"responses_api": False}}
-        if role_base_url:
-            cfg["base_url"] = role_base_url
-        if role_api_key:
-            cfg["api_key"] = role_api_key
-        return json.dumps(cfg)
-
-    # Ollama or Anthropic fallback (no model_args injection needed)
-    return build_role_spec(
-        model_name=model_name,
-        global_env=env,
-        role_base_url=role_base_url,
-        role_api_key=role_api_key,
-        role_anthropic_api_key=role_anthropic_api_key,
-    )
+        return json.dumps({"model": model, "model_args": {"responses_api": False}})
+    return model
 
 
 def role_model_spec(
@@ -180,11 +145,20 @@ def role_model_spec(
     params: dict[str, Any],
     env: dict[str, str],
 ) -> str:
-    return build_role_spec(
-        model_name=model_name,
-        global_env=env,
-        role_base_url=params.get(f"{role}_base_url"),
-        role_api_key=params.get(f"{role}_api_key"),
-        role_anthropic_base_url=params.get(f"{role}_anthropic_base_url"),
-        role_anthropic_api_key=params.get(f"{role}_anthropic_api_key"),
-    )
+    validate_connection_parameters(params)
+    url, key = role_connection(role, env.get("EVALHUB_MODEL_URL", ""))
+    client = _CLIENT_OPENAI_COMPAT
+    if model_name.startswith("openai/"):
+        model_name = model_name.removeprefix("openai/")
+    elif model_name.startswith("ollama/"):
+        client = _CLIENT_OLLAMA
+        model_name = model_name.removeprefix("ollama/")
+    if model_name.startswith("anthropic/"):
+        raise ValueError(
+            "Secret-based role routing currently requires an OpenAI-compatible model; "
+            "native Anthropic authentication needs sidecar support"
+        )
+    return json.dumps({
+        "model": route_model(model_name, client),
+        "model_args": {"responses_api": False, "base_url": url, "api_key": key},
+    })

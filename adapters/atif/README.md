@@ -63,16 +63,21 @@ source-manifest contract. Local paths are not automatically downloadable URLs.
 
 ## Judge routing and authentication
 
-- **Kubernetes:** call the invocation's `model.url`; the server rewrites it to the
-  runtime sidecar and preserves the provider path. `EVALHUB_JUDGE_PROXY_URL` remains
-  an explicit override for unusual deployments. With `model.auth` configured, send only
-  `Bearer api-key:ref`. The adapter does not read cluster credential files. The
-  sidecar owns upstream authentication and TLS.
-- **Local:** use the invocation's `model.url` directly. `model.auth.secret_ref` must
-  be an absolute `file:///` directory URL containing `api-key` and optionally
-  `ca_cert`. Send the actual local key; verify HTTPS using that CA or system trust.
-  Do not put credentials in the job spec, input, image, or source control. A
-  different on-disk JobSpec is never used to discover credentials.
+All auxiliary model credentials and endpoints come from `model.auth.secret_ref`.
+Use `<role>_api-key` and optional `<role>_url` entries in that Secret; model IDs
+remain benchmark parameters. When a role has no entries, it reuses `model.url`
+and the primary `api-key` from the same Secret. A role URL requires its matching
+role key, even when the real key equals the primary key. Kubernetes adapters see
+only projected references and localhost URLs; the sidecar selects the upstream
+and injects its credential. Local jobs use the SDK's `file:///` auth directory.
+
+Inline role URLs/keys are rejected. Role credentials and endpoints are not read
+from environment variables. See [model-role authentication](../../docs/model-role-auth.md)
+for the Secret layout, supported roles, migration, and sidecar limitations.
+
+ATIF uses `judge_api-key`/`judge_url` when present, with the invocation's model
+name. `EVALHUB_JUDGE_PROXY_URL` is ignored. Local auth-directory reads remain
+bounded and reject symlinks. The sidecar owns cluster TLS and upstream credentials.
 
 One asynchronous HTTP client is reused for the scoring phase. A fixed worker set
 bounds root concurrency; each tree's steps and children are scored sequentially.

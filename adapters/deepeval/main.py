@@ -45,7 +45,7 @@ from evalhub.adapter import (
     OCIArtifactSpec,
     configure_telemetry,
 )
-from evalhub.adapter.auth import resolve_model_credentials
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 from evalhub.adapter.mlflow import MlflowArtifact
 
 logger = logging.getLogger(__name__)
@@ -214,19 +214,21 @@ def _build_conversational_test_cases(
     return test_cases
 
 
-def _resolve_judge_model(judge_name: str, judge_url: str) -> Any:
+def _resolve_judge_model(judge_name: str, model_url: str) -> Any:
     """Return a GPTModel pointed at an OpenAI-compatible endpoint.
 
-    Credentials are resolved via the EvalHub SDK (mounted secret file or env var)
-    so the adapter never reads the key name directly.
+    Both the judge endpoint and credential come from the model auth Secret.
     JSON mode is forced to ensure small local models return parseable output.
     """
     from deepeval.models.llms import GPTModel
 
-    creds = resolve_model_credentials()
-    api_key = creds.api_key
+    api_key = read_model_auth_key("judge_api-key")
+    judge_url = read_model_auth_key("judge_url")
+    if judge_url and not api_key:
+        raise ValueError("judge_url in model.auth.secret_ref requires judge_api-key")
+    api_key = api_key or resolve_model_credentials().api_key
 
-    url = judge_url.rstrip("/")
+    url = (judge_url or model_url).strip().rstrip("/")
     if not url.endswith("/v1"):
         url = f"{url}/v1"
 
@@ -297,7 +299,12 @@ class DeepEvalAdapter(FrameworkAdapter):
             model_url = config.model.url.strip().rstrip("/")
             model_name = config.model.name
             judge_name = config.parameters.get("eval_model_name") or model_name
-            judge_url = config.parameters.get("eval_model_url") or model_url
+            for key in ("eval_model_url", "judge_url", "judge_base_url", "judge_api_key"):
+                if key in config.parameters:
+                    raise ValueError(
+                        f"parameters.{key} is no longer supported; "
+                        "use judge_url and judge_api-key in model.auth.secret_ref"
+                    )
             threshold = float(config.parameters.get("threshold", 0.5))
             dataset_format = config.parameters.get("dataset_format", "csv")
 
@@ -332,7 +339,7 @@ class DeepEvalAdapter(FrameworkAdapter):
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
             )
 
-            judge = _resolve_judge_model(judge_name, judge_url)
+            judge = _resolve_judge_model(judge_name, model_url)
             metric = _create_metric(benchmark_id, judge, threshold)
             throttle_value = float(config.parameters.get("throttle_value", 0))
             max_concurrent = int(config.parameters.get("max_concurrent", 1))

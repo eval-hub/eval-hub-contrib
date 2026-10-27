@@ -7,7 +7,8 @@ from pathlib import Path
 from evalhub.adapter import JobCallbacks, JobPhase, JobSpec, JobStatus, JobStatusUpdate, MessageInfo
 
 from _benchmarks import BLOOM_TEMPLATE_MAP
-from _routing import _is_ollama_endpoint, route_model, select_client
+from _model_auth import role_connection, validate_connection_parameters
+from _routing import route_model
 
 logger = logging.getLogger(__name__)
 
@@ -50,26 +51,28 @@ def bloom_prepare(
 
     p = config.parameters
     scenarios_name = p.get("scenarios_model") or p.get("auditor_model") or "claude-sonnet-4-6"
-    scenarios_base_url = p.get("scenarios_base_url") or None
-    scenarios_api_key = p.get("scenarios_api_key") or None
+    validate_connection_parameters(p)
+    scenarios_base_url, scenarios_api_key = role_connection("scenarios", config.model.url)
 
     # bloom CLI doesn't support the JSON dict model spec (model_args etc.) —
     # use a bare client/model string, but resolve the client from the
     # scenarios-specific endpoint so requests go to the right provider.
-    client = select_client(env, endpoint_url=scenarios_base_url)
+    # Bloom's bare model-role form cannot pass an explicit Ollama API key.
+    # Use its OpenAI-compatible interface so OPENAI_API_KEY carries the ref.
+    if scenarios_name.startswith("anthropic/"):
+        raise ValueError("Native Anthropic scenario authentication needs sidecar support")
+    for prefix in ("openai/", "ollama/"):
+        scenarios_name = scenarios_name.removeprefix(prefix)
+    client = "openai"
     scenarios_model = route_model(scenarios_name, client)
     logger.info(f"Running bloom scenarios with model={scenarios_model}")
 
     # Overlay scenarios routing overrides onto a copy of the global env so the
     # bloom subprocess targets the correct provider without affecting other roles.
     scenarios_env = dict(env)
-    if scenarios_base_url:
-        if _is_ollama_endpoint(scenarios_base_url):
-            scenarios_env["OLLAMA_BASE_URL"] = scenarios_base_url
-        else:
-            scenarios_env["OPENAI_BASE_URL"] = scenarios_base_url
-    if scenarios_api_key:
-        scenarios_env["OPENAI_API_KEY"] = scenarios_api_key
+    scenarios_env.pop("OLLAMA_BASE_URL", None)
+    scenarios_env["OPENAI_BASE_URL"] = scenarios_base_url
+    scenarios_env["OPENAI_API_KEY"] = scenarios_api_key
 
     callbacks.report_status(
         JobStatusUpdate(
