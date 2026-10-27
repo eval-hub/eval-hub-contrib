@@ -1950,3 +1950,69 @@ def test_preformatted_generation_parameters_are_not_edited(adapter, tmp_path, mo
     )
     assert "generation_parameters={max_new_tokens:8}" in model_args
     assert "temperature" not in model_args
+
+
+def test_litellm_response_cache_is_disabled_so_cache_hits_cannot_crash(monkeypatch, tmp_path):
+    """A litellm cache hit must not be able to turn into an empty answer.
+
+    lighteval installs a disk response cache and sends ``caching=True``.  On
+    litellm 1.103.9 a hit imports ``litellm.proxy`` modules that need ``orjson``
+    and ``soundfile`` (not installed by ``litellm[caching]``), so the repeated
+    request raised ``ModuleNotFoundError``; lighteval retried and finally returned
+    an empty answer.  The wrapper switches the cache off, so every request goes
+    to the model and no proxy-only package is needed.
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    pytest.importorskip("lighteval")
+    import litellm
+    from litellm.caching.caching import Cache, LiteLLMCacheType
+    from lighteval.models.endpoints.litellm_model import LiteLLMClient
+
+    served = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            served.append(self.path)
+            self.rfile.read(int(self.headers["Content-Length"]))
+            body = json.dumps({
+                "id": "x", "object": "chat.completion", "created": 0, "model": "tiny",
+                "choices": [{"index": 0, "finish_reason": "stop",
+                             "message": {"role": "assistant", "content": "A"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            return None
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    # Both globals are restored after the test: _apply_patch replaces them.
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path)))
+    monkeypatch.setattr(LiteLLMClient, "loglikelihood", LiteLLMClient.loglikelihood)
+
+    try:
+        _load_patch_module()._apply_patch()
+        assert litellm.cache is None
+
+        request = {
+            "model": "openai/tiny",
+            "messages": [{"role": "user", "content": "same prompt twice"}],
+            "max_tokens": 5,
+            "base_url": f"http://127.0.0.1:{server.server_address[1]}/v1",
+            "api_key": "dummy",
+            "caching": True,
+            "timeout": 10,
+        }
+        for _ in range(2):
+            assert litellm.completion(**request).choices[0].message.content == "A"
+        assert len(served) == 2, "the repeated request must reach the model, not a cache"
+    finally:
+        server.shutdown()

@@ -33,6 +33,14 @@ The patch:
   (``LogProbTokenNorm``) can divide by it.  The completions API returns token
   strings, not IDs, so the entries are positions in the echoed sequence: only
   their count is meaningful.
+- Turns off litellm's disk response cache.  lighteval enables it at import
+  (``litellm.cache = Cache(DISK)`` plus ``caching=True`` on every request), and on
+  litellm >= 1.10x a cache *hit* imports ``litellm.proxy`` modules that need
+  ``orjson`` and ``soundfile``, which ``litellm[caching]`` does not install.  The
+  request then raises, lighteval retries and finally returns an empty answer, so
+  the benchmark is scored on blank output instead of failing.  A hit needs an
+  identical repeated request, so it shows up only on re-runs and duplicated
+  prompts, and an evaluation should query the model anyway.
 - Does not support PMI-normalised metrics (``Doc.unconditioned_query`` is
   ignored); lighteval rejects those with its own assertion.
 """
@@ -300,12 +308,27 @@ def _loglikelihood_via_completions(self, docs: list["Doc"]) -> list["ModelRespon
 # Apply the patch before lighteval's CLI runs
 # ---------------------------------------------------------------------------
 
+def _disable_litellm_response_cache() -> None:
+    """Drop the disk response cache lighteval installs when it imports litellm.
+
+    Must run after ``lighteval.models.endpoints.litellm_model`` has been imported:
+    that import is what sets ``litellm.cache``, and later imports are no-ops.
+    """
+    import litellm  # noqa: PLC0415
+
+    if getattr(litellm, "cache", None) is not None:
+        litellm.cache = None
+        logger.info("litellm response cache disabled (cache hits need proxy-only packages)")
+
+
 def _apply_patch() -> None:
     try:
         from lighteval.models.endpoints.litellm_model import LiteLLMClient  # noqa: PLC0415
     except ImportError as exc:
         logger.warning("Could not import LiteLLMClient — patch skipped: %s", exc)
         return
+
+    _disable_litellm_response_cache()
 
     # Guard: only patch when the method still raises NotImplementedError so that
     # a future lighteval release that ships a real implementation is not clobbered.
