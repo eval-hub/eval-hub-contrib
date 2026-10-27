@@ -16,8 +16,5 @@ evals @ git+https://github.com/gsma-labs/evals.git@708f1c5498793536824eae9919ae0
 # Required by inspect_evals/makemesay for word tokenization and lemmatization.
 # Data (punkt, punkt_tab, wordnet) is pre-seeded in the image at build time —
 # no network access required at runtime.
-# GHSA-8mgp-746c-j5xp (CVE-2026-81726): no patched release exists yet (3.10.3 is the
-# latest). It affects nltk's parser/perceptron model save/load APIs, which nothing in
-# this image calls (inspect-evals uses only tokenizers, data lookup and BLEU).
-# Revisit when a fixed nltk is released.
-nltk==3.10.3
+# Use the security update available in the AIPCC index.
+nltk==3.10.4
