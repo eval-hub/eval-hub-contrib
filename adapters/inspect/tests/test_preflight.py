@@ -3,10 +3,10 @@
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-
-import pytest
+from types import SimpleNamespace
 
 import _preflight as pf
+import pytest
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -116,13 +116,197 @@ def test_custom_task_file_is_not_probed_by_default():
     assert pf.required_urls("/work/my_task.py", {}) == []
 
 
-def test_bfcl_needs_github_not_huggingface(tmp_path):
+_BFCL_TEST_CATEGORIES = {
+    "simple_python": SimpleNamespace(
+        filename="BFCL_v4_simple_python.json",
+        has_ground_truth_file=True,
+        ground_truth_filename="possible_answer/BFCL_v4_simple_python.json",
+        category_version="v1",
+        is_multi_turn=False,
+        is_agentic=False,
+    ),
+    "irrelevance": SimpleNamespace(
+        filename="BFCL_v4_irrelevance.json",
+        has_ground_truth_file=False,
+        ground_truth_filename="",
+        category_version="v1",
+        is_multi_turn=False,
+        is_agentic=False,
+    ),
+    "multi_turn_base": SimpleNamespace(
+        filename="BFCL_v4_multi_turn_base.json",
+        has_ground_truth_file=True,
+        ground_truth_filename="possible_answer/BFCL_v4_multi_turn_base.json",
+        category_version="v3",
+        is_multi_turn=True,
+        is_agentic=False,
+    ),
+    "memory_kv": SimpleNamespace(
+        filename="BFCL_v4_memory.json",
+        has_ground_truth_file=True,
+        ground_truth_filename="possible_answer/BFCL_v4_memory.json",
+        category_version="v4",
+        is_multi_turn=False,
+        is_agentic=True,
+    ),
+}
+
+_TEST_MULTI_TURN_MODULES = {
+    "gorilla_file_system.py",
+    "math_api.py",
+    "message_api.py",
+    "posting_api.py",
+    "ticket_api.py",
+    "trading_bot.py",
+    "travel_booking.py",
+    "vehicle_control.py",
+    "long_context.py",
+}
+_TEST_MULTI_TURN_DOCS = {
+    "gorilla_file_system.json",
+    "math_api.json",
+    "message_api.json",
+    "posting_api.json",
+    "ticket_api.json",
+    "trading_bot.json",
+    "travel_booking.json",
+    "vehicle_control.json",
+}
+
+
+def test_bfcl_category_manifest_loads_from_package_path(tmp_path, monkeypatch):
+    """Load the lightweight BFCL manifest without importing inspect-evals' task package."""
+    manifest = tmp_path / "bfcl" / "utils" / "task_categories.py"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "class Category:\n"
+        "    filename = 'BFCL_v4_simple_python.json'\n"
+        "    has_ground_truth_file = True\n"
+        "    ground_truth_filename = 'possible_answer/BFCL_v4_simple_python.json'\n"
+        "CATEGORIES = {'simple_python': Category()}\n"
+    )
+    spec = SimpleNamespace(submodule_search_locations=[str(tmp_path)])
+    monkeypatch.setattr(pf.importlib.util, "find_spec", lambda _name: spec)
+    pf._bfcl_category_manifest.cache_clear()
+    try:
+        categories = pf._bfcl_category_manifest()
+        assert categories is not None
+        assert categories["simple_python"].filename == "BFCL_v4_simple_python.json"
+    finally:
+        pf._bfcl_category_manifest.cache_clear()
+
+
+@pytest.fixture
+def bfcl_category_manifest(monkeypatch):
+    """Use a small manifest because CI intentionally omits adapter runtime dependencies."""
+    monkeypatch.setattr(pf, "_bfcl_category_manifest", lambda: _BFCL_TEST_CATEGORIES)
+    return _BFCL_TEST_CATEGORIES
+
+
+def _write_bfcl_assets(root, categories):
+    """Create the dataset files for the test category manifest."""
+    bfcl = root / "BFCL"
+    for category in categories.values():
+        question_file = bfcl / category.filename
+        question_file.parent.mkdir(parents=True, exist_ok=True)
+        question_file.write_text("[]")
+        if category.has_ground_truth_file:
+            answer_file = bfcl / category.ground_truth_filename
+            answer_file.parent.mkdir(parents=True, exist_ok=True)
+            answer_file.write_text("{}")
+
+
+def _write_bfcl_runtime_assets(root, modules, docs):
+    """Create selected backend modules and function-doc files for an offline test."""
+    function_sources = root / "BFCL" / "func_source_code"
+    function_docs = root / "BFCL" / "multi_turn_func_doc"
+    function_sources.mkdir(parents=True, exist_ok=True)
+    function_docs.mkdir(parents=True, exist_ok=True)
+    for name in modules:
+        (function_sources / name).write_text("# staged backend\n")
+    for name in docs:
+        (function_docs / name).write_text("{}\n")
+
+
+def test_bfcl_needs_github_not_huggingface():
     """BFCL downloads from GitHub, not HuggingFace; HF must never be probed for it."""
-    env = {"INSPECT_EVALS_CACHE_DIR": str(tmp_path)}
+    assert pf.required_urls("inspect_evals/bfcl", {}) == ["https://github.com"]
+
+
+def test_bfcl_requires_data_docs_and_selected_backend_modules(
+    tmp_path, bfcl_category_manifest
+):
+    """Missing multi-turn docs or a selected backend module must retain GitHub preflight."""
+    env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
+    _write_bfcl_assets(tmp_path, bfcl_category_manifest)
     assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
-    (tmp_path / "BFCL").mkdir()
-    (tmp_path / "BFCL" / "BFCL_v4_simple_python.json").write_text("{}")
+
+    _write_bfcl_runtime_assets(tmp_path, _TEST_MULTI_TURN_MODULES, _TEST_MULTI_TURN_DOCS)
     assert pf.required_urls("inspect_evals/bfcl", env) == []
+
+    (tmp_path / "BFCL" / "multi_turn_func_doc" / "math_api.json").unlink()
+    assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
+    (tmp_path / "BFCL" / "multi_turn_func_doc" / "math_api.json").write_text("{}\n")
+
+    (tmp_path / "BFCL" / "func_source_code" / "math_api.py").unlink()
+    assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
+
+
+def test_bfcl_single_turn_selection_does_not_require_multiturn_assets(
+    tmp_path, bfcl_category_manifest
+):
+    """A V1-only BFCL selection does not need multi-turn backend code or function docs."""
+    _write_bfcl_assets(tmp_path, bfcl_category_manifest)
+    env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
+
+    assert pf.required_urls(
+        "inspect_evals/bfcl", env, {"categories": "simple_python"}
+    ) == []
+
+
+def test_bfcl_agentic_selection_checks_its_own_runtime_assets(
+    tmp_path, bfcl_category_manifest
+):
+    """Agentic categories require their own backend module and function-doc file."""
+    _write_bfcl_assets(tmp_path, bfcl_category_manifest)
+    env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
+    selection = {"categories": "memory_kv"}
+
+    assert pf.required_urls("inspect_evals/bfcl", env, selection) == ["https://github.com"]
+    _write_bfcl_runtime_assets(
+        tmp_path,
+        {"memory_kv.py", "memory_api_metaclass.py"},
+        {"memory_kv.json"},
+    )
+    assert pf.required_urls("inspect_evals/bfcl", env, selection) == []
+
+
+def test_configure_staged_bfcl_cache_points_to_test_data(
+    tmp_path, bfcl_category_manifest
+):
+    """The adapter maps a complete /test_data BFCL tree to Inspect-Evals' cache root."""
+    _write_bfcl_assets(tmp_path, bfcl_category_manifest)
+    _write_bfcl_runtime_assets(tmp_path, _TEST_MULTI_TURN_MODULES, _TEST_MULTI_TURN_DOCS)
+    env = {}
+
+    assert pf.configure_staged_bfcl_cache("inspect_evals/bfcl", env, tmp_path)
+    assert env[pf.INSPECT_EVALS_CACHE_DIR_ENV] == str(tmp_path)
+    assert pf.required_urls("inspect_evals/bfcl", env) == []
+
+
+def test_configure_staged_bfcl_cache_does_not_use_partial_or_unrelated_data(
+    tmp_path, bfcl_category_manifest
+):
+    """Only complete BFCL assets for the BFCL task activate the staged cache."""
+    _write_bfcl_assets(tmp_path, bfcl_category_manifest)
+    _write_bfcl_runtime_assets(tmp_path, _TEST_MULTI_TURN_MODULES, _TEST_MULTI_TURN_DOCS)
+    env = {}
+
+    assert not pf.configure_staged_bfcl_cache("inspect_evals/mmlu_pro", env, tmp_path)
+    assert not pf.configure_staged_bfcl_cache(
+        "inspect_evals/bfcl", env, tmp_path / "missing"
+    )
+    assert pf.INSPECT_EVALS_CACHE_DIR_ENV not in env
 
 
 def test_run_preflight_returns_within_deadline_when_dns_stalls(monkeypatch):

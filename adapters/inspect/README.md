@@ -149,6 +149,15 @@ Point `test_data_ref.s3` at `s3://<bucket>/mmlu-pro-hf/`. Any S3-compatible stor
 this flow was verified against RustFS (upload, download into `/test_data`, then a run with
 the internet blackholed).
 
+BFCL downloads its assets from GitHub rather than the HuggingFace Hub. For a disconnected
+run, stage the complete BFCL data tree under `/test_data/BFCL`, including every question
+file and applicable ground-truth file expected by the category manifest in the pinned
+`inspect-evals` release. Categories that use multi-turn or agentic backends also require
+all corresponding files under `func_source_code/` and `multi_turn_func_doc/`; the adapter
+checks the selected `categories` task argument (or Inspect-Evals' default categories)
+before setting `INSPECT_EVALS_CACHE_DIR=/test_data` and skipping GitHub preflight. A partial
+cache continues to require GitHub and fails fast offline with the default `preflight` mode.
+
 When online, the adapter reads an
 `hf-token` secret mounted at `/var/run/secrets/model/hf-token` and injects it as
 `HF_TOKEN` and `HUGGING_FACE_HUB_TOKEN`. Sidecar `:ref` placeholders are ignored.
@@ -174,7 +183,7 @@ Hosts probed (a ranged `GET`, `Range: bytes=0-0`, body not read; any HTTP answer
 | Task | Host |
 |---|---|
 | `inspect_evals/*`, `evals/*` | `$HF_ENDPOINT`, default `https://huggingface.co` (skipped when `HF_HUB_OFFLINE=1`) |
-| `inspect_evals/bfcl*` | `https://github.com` (skipped once BFCL data is in `$INSPECT_EVALS_CACHE_DIR/BFCL`) |
+| `inspect_evals/bfcl*` | `https://github.com` (skipped when pinned BFCL data files and the selected categories' backend modules/function docs are present in `$INSPECT_EVALS_CACHE_DIR/BFCL`) |
 | any, optional | URLs you list in `preflight_hosts` |
 
 Petri, Bloom and custom task files are not probed unless you list hosts.

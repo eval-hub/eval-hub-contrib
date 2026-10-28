@@ -21,6 +21,22 @@ def _write_log_script(log_dir) -> str:
     return f"import json,pathlib; pathlib.Path({str(log_dir)!r}, 'run.json').write_text('{{}}')"
 
 
+def test_task_args_from_command_extracts_categories_only():
+    """Pass the BFCL category selection to staged-cache validation and preflight."""
+    cmd = [
+        "inspect",
+        "eval",
+        "inspect_evals/bfcl",
+        "-T",
+        "categories=['multi_turn_base', 'simple_python']",
+        "-T",
+        "max_tasks=2",
+    ]
+    assert ex._task_args_from_command(cmd) == {
+        "categories": "['multi_turn_base', 'simple_python']"
+    }
+
+
 # -- streaming ----------------------------------------------------------------------------------
 
 def test_output_is_streamed_to_the_adapter_log(tmp_path, caplog):
