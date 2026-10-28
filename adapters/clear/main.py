@@ -831,6 +831,11 @@ class ClearAdapter(FrameworkAdapter):
     @staticmethod
     def _without_connection_options(value: Any) -> Any:
         """Copy framework model options without inline connection settings."""
+        # CLEAR forwards eval_model_params to its model backend. Nested credentials
+        # or URLs could override the Secret-derived connection even if the adapter
+        # ignores top-level fields. Copy options recursively without those overrides,
+        # retaining generation settings so legacy jobs continue. Secret resolution
+        # happens separately.
         if isinstance(value, dict):
             return {
                 key: ClearAdapter._without_connection_options(child)

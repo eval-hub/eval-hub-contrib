@@ -228,6 +228,11 @@ def _build_eval_config(
 
 def _without_connection_options(value: Any) -> Any:
     """Copy passthrough settings without model credentials or endpoint overrides."""
+    # Promptfoo consumes passthrough YAML, grader options and strategy settings.
+    # Ignoring top-level fields alone would still let nested credentials/URLs
+    # override the Secret-derived connection. Copy settings recursively without
+    # those overrides, retaining generation settings and test data so legacy jobs
+    # continue. Secret resolution happens separately.
     if isinstance(value, dict):
         result = {}
         for key, child in value.items():

@@ -7,6 +7,10 @@ from evalhub.adapter.auth import read_model_auth_key
 
 def without_connection_options(value: Any) -> Any:
     """Copy model options without inline credentials or endpoint overrides."""
+    # Inspect consumes model_args directly, so ignoring top-level connection
+    # fields would still let nested credentials/URLs override Secret routing.
+    # Copy options recursively without those overrides, retaining generation
+    # settings so legacy jobs continue. Secret resolution happens separately.
     if isinstance(value, dict):
         return {
             key: without_connection_options(child)
