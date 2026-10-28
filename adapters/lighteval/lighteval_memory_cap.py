@@ -23,6 +23,15 @@ about 2.1 GiB, and the graded child adds up to the allowance on top of that.  Wi
 2070 MiB baseline and no longer prevented an OOM kill at 2150 MiB, which is why the
 default is 1024.
 
+The limit is on address space, so it does not bound the inherited pages the child
+dirties (copy-on-write).  In the real LightEval process (about 1.5 GiB resident at the
+grading call, about 1.0M gc-tracked objects, the same with 3 and with 30 problems) a
+child that ran ``gc.collect()`` grew the container by about 280 MiB more than a plain
+solution, and the same child followed by a runaway allocation grew it by 1.28 GiB with
+the 1024 allowance.  That growth is not capped; the pod needs margin for it.  A solution
+that deliberately wrote to everything it inherited could dirty more, which was not
+measured.
+
 Applies on Linux under the ``fork`` start method (the default before Python 3.14), the
 only one under which lighteval's grader runs.
 

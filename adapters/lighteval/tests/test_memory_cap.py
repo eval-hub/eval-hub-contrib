@@ -90,7 +90,9 @@ def test_default_allowance_fits_the_pod_memory_limit(monkeypatch):
     resident at about 2.1 GiB (2070 MiB in a 175-problem run, 2121 MiB in a smaller one).  In a
     4 GiB container a 2048 MiB allowance left 12 MiB of headroom and, at 2150 MiB, the runaway
     solution was OOM-killed despite the cap, so the default and ``memory_limit`` in
-    ``provider.yaml`` have to be changed together."""
+    ``provider.yaml`` have to be changed together.  The cap is on address space, so it does not
+    bound inherited pages the child dirties (copy-on-write): a child that ran ``gc.collect()``
+    in the real process grew the container by about 280 MiB more than a plain solution."""
     import re
 
     import yaml
@@ -106,10 +108,13 @@ def test_default_allowance_fits_the_pod_memory_limit(monkeypatch):
     limit_mib = int(parsed.group(1)) * (1024 if parsed.group(2) == "Gi" else 1)
 
     lighteval_process_mib = 2250  # measured 2070 to 2121 MiB, with some room
-    margin_mib = 512
-    assert lighteval_process_mib + allowance_mib + margin_mib <= limit_mib, (
-        f"{lighteval_process_mib} MiB process + {allowance_mib} MiB allowance + {margin_mib} MiB margin "
-        f"does not fit {limit}: lower the default allowance or raise memory_limit"
+    copy_on_write_mib = 300  # measured about 280 MiB for a child running gc.collect()
+    margin_mib = 256
+    needed_mib = lighteval_process_mib + allowance_mib + copy_on_write_mib + margin_mib
+    assert needed_mib <= limit_mib, (
+        f"{lighteval_process_mib} MiB process + {allowance_mib} MiB allowance + {copy_on_write_mib} MiB "
+        f"copy-on-write + {margin_mib} MiB margin = {needed_mib} MiB does not fit {limit}: "
+        "lower the default allowance or raise memory_limit"
     )
 
 
