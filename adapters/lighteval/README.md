@@ -430,10 +430,19 @@ runaway solution, and it depends on what the model wrote.
 The launcher that starts the LightEval CLI for every provider (`lighteval_logprob_patch.py`)
 calls `lighteval_memory_cap.py`, which limits each graded
 solution to the address space its process already had plus `EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB`
-(default `2048`; `0` turns the limit off). A solution that needs more fails that problem and
-the run continues. Size the pod for the LightEval process plus that allowance, plus margin.
-Solutions that legitimately need more memory than the allowance fail, so raise the variable
-together with the pod limit.
+(default `1024`; `0` turns the limit off). A solution that needs more fails that problem and
+the run continues. Size the pod for the LightEval process plus that allowance, plus margin:
+the process is resident at about 2.1 GiB, so the default fits the 4Gi limit in
+`provider.yaml` with about 0.65 GiB to spare, while `2048` left almost none (a runaway
+solution still got the container OOM-killed once the process was 80 MiB larger). Solutions
+that legitimately need more memory than the allowance fail, so raise the variable together
+with the pod limit.
+
+The limit counts the address space a solution adds, not the inherited pages it writes to
+(copy-on-write). In the LightEval process a solution that ran a full `gc.collect()` grew the
+container by about 280 MiB more than a plain one, and that growth is not capped, so keep at
+least that much of the margin free. A solution that deliberately wrote to everything it
+inherited could dirty more; that was not measured.
 
 Set the variable in the adapter container's environment. The limit applies on Linux with the
 `fork` start method (the default before Python 3.14), which is the only one LightEval's
