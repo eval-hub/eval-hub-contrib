@@ -10,12 +10,12 @@ huggingface-hub>=0.30.2,<2
 pyarrow
 
 # LiteLLM for endpoint support.
-# 1.84.0 is affected by PYSEC-2026-4066; 1.103.9 is the newest release that audits
+# 1.84.0 is affected by PYSEC-2026-4066; 1.102.2 is the newest release on the Red Hat
+# package index (1.103.x is not there, verify-requirements.yml rejects it) that audits
 # clean and does not cap filelock<4 (>=1.104 does, which keeps filelock on its
-# vulnerable 3.x line). Releases >=1.105 also fail outright without extra
-# packages, see DEPENDENCY-SECURITY.md. lighteval_logprob_patch.py turns litellm's
-# response cache off: a cache hit on 1.103.9 needs orjson and soundfile.
-litellm[caching]==1.103.9
+# vulnerable 3.x line). See DEPENDENCY-SECURITY.md. lighteval_logprob_patch.py turns
+# litellm's response cache off (a cache hit on 1.103.9 needed orjson and soundfile).
+litellm[caching]==1.102.2
 
 # Required dependencies
 requests==2.33.0
