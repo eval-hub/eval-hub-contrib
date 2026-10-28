@@ -40,6 +40,14 @@ def test_clear_judge_secret_overrides_runtime_env(
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-env-key")
     spec = config()
     spec.parameters["inference_backend"] = backend
+    spec.parameters.update(
+        {
+            "judge_api_key": "legacy-key",
+            "judge_url": "https://legacy.example/v1",
+            "endpoint_url": "https://legacy.example/endpoint",
+            "inference_url": "https://legacy.example/inference",
+        }
+    )
     adapter = main.ClearAdapter(job_spec_path="meta/job.json")
     adapter._ensure_openai_api_key_for_litellm()
     result = adapter._build_agentic_config(spec, "/data", tmp_path)
@@ -59,11 +67,12 @@ def test_clear_url_requires_matching_secret_key(model_secret):
 @pytest.mark.parametrize(
     "parameter", ["endpoint_url", "inference_url", "judge_url", "judge_api_key"]
 )
-def test_clear_legacy_model_connections_rejected(model_secret, parameter):
+def test_clear_legacy_model_connections_ignored_without_role_entries(
+    model_secret, parameter
+):
     spec = config()
     spec.parameters[parameter] = "legacy-value"
-    with pytest.raises(ValueError, match="model.auth.secret_ref"):
-        main.ClearAdapter._judge_url(spec)
+    assert main.ClearAdapter._judge_url(spec) == spec.model.url
 
 
 @pytest.mark.parametrize("provider", ["rits", "watsonx", "azure"])
@@ -77,7 +86,19 @@ def test_native_provider_requires_sidecar_support(model_secret, tmp_path, provid
 
 def test_model_params_cannot_override_secret(model_secret, tmp_path):
     spec = config()
-    spec.parameters["eval_model_params"] = {"api_key": "legacy-value"}
+    spec.parameters["eval_model_params"] = {
+        "api_key": "legacy-value",
+        "api-key": "legacy-value",
+        "api_base": "https://legacy.example/v1",
+        "base_url": "https://legacy.example/v1",
+        "temperature": 0.3,
+        "nested": [{"endpoint_url": "https://legacy.example/v1", "timeout": 30}],
+    }
     adapter = main.ClearAdapter(job_spec_path="meta/job.json")
-    with pytest.raises(ValueError, match="model.auth.secret_ref"):
-        adapter._build_agentic_config(spec, "/data", tmp_path)
+    result = adapter._build_agentic_config(spec, "/data", tmp_path)
+    assert result["eval_model_params"] == {
+        "temperature": 0.3,
+        "nested": [{"timeout": 30}],
+    }
+    assert result["endpoint_url"] == spec.model.url
+    assert spec.parameters["eval_model_params"]["api_key"] == "legacy-value"

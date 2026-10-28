@@ -823,7 +823,7 @@ benchmarks:
 parameters:
   # Model IDs are job parameters. Connections come only from model.auth.secret_ref:
   # <role>_api-key and optional <role>_url. Missing roles reuse the primary connection.
-  # See ../../docs/model-role-auth.md. Legacy inline connection parameters are rejected.
+  # See ../../docs/model-role-auth.md. Legacy inline connection parameters are ignored.
   - name: grader_model
     type: string
     default: null

@@ -201,8 +201,8 @@ def _build_eval_config(
         # our injected `providers:` and could point part of the run at the
         # user's original, non-EvalHub-controlled endpoint/credentials.
         parsed.pop("targets", None)
+        parsed = _without_connection_options(parsed)
         parsed["providers"] = [provider]
-        _validate_auxiliary_config({k: v for k, v in parsed.items() if k != "providers"})
         # EvalHub's timeout/concurrency controls win, but preserve any other
         # evaluateOptions keys (e.g. repeat, delay) the passed-through config set.
         parsed.setdefault("evaluateOptions", {}).update(evaluate_options)
@@ -215,7 +215,7 @@ def _build_eval_config(
             "promptfoo-eval requires either parameters.config_yaml, or both "
             "parameters.prompts and parameters.tests"
         )
-    _validate_auxiliary_config(tests)
+    tests = _without_connection_options(tests)
 
     return {
         "description": f"eval-hub job {config.id}",
@@ -226,20 +226,30 @@ def _build_eval_config(
     }
 
 
-def _validate_auxiliary_config(value: Any) -> None:
-    """Prevent passthrough graders from carrying their own credentials/URLs."""
+def _without_connection_options(value: Any) -> Any:
+    """Copy passthrough settings without model credentials or endpoint overrides."""
     if isinstance(value, dict):
+        result = {}
         for key, child in value.items():
-            if key in {"apiKey", "apiBaseUrl", "apiHost", "baseUrl", "api_key", "base_url"} or (
-                isinstance(key, str) and key.endswith(("_API_KEY", "_BASE_URL", "_API_BASE"))
+            # Test variables and prompt content are data, not model options.
+            if key in {"vars", "metadata", "prompts", "messages"}:
+                result[key] = child
+                continue
+            if key in {
+                "apiKey", "apiBaseUrl", "apiHost", "baseUrl",
+                "api_key", "api-key", "api_base", "base_url", "url",
+            } or (
+                isinstance(key, str) and key.endswith((
+                    "_API_KEY", "_BASE_URL", "_API_BASE", "_API_HOST",
+                    "_api_key", "_api-key", "_url",
+                ))
             ):
-                raise ValueError(
-                    f"Auxiliary model configuration {key} must come from model.auth.secret_ref"
-                )
-            _validate_auxiliary_config(child)
-    elif isinstance(value, list):
-        for child in value:
-            _validate_auxiliary_config(child)
+                continue
+            result[key] = _without_connection_options(child)
+        return result
+    if isinstance(value, list):
+        return [_without_connection_options(child) for child in value]
+    return value
 
 
 def _build_redteam_config(
@@ -250,7 +260,7 @@ def _build_redteam_config(
 
     purpose = params.get("purpose", "An AI assistant")
     plugin_ids = params.get("plugins") or list(_OWASP_DEFAULT_PLUGINS)
-    strategies = params.get("strategies", [])
+    strategies = _without_connection_options(params.get("strategies", []))
     num_tests = int(params.get("num_tests_per_plugin", 5))
 
     plugins = [{"id": pid, "numTests": num_tests} for pid in plugin_ids]
@@ -594,13 +604,6 @@ class PromptfooAdapter(FrameworkAdapter):
             )
 
             parameters = config.parameters or {}
-            for key in ("generation_provider_url", "generation_provider_api_key",
-                        "judge_url", "judge_api_key"):
-                if key in parameters:
-                    raise ValueError(
-                        f"parameters.{key} is no longer supported; "
-                        "use <role>_url and <role>_api-key in model.auth.secret_ref"
-                    )
             generation_provider = parameters.get("generation_provider") or provider["id"]
             gen_provider_url, gen_provider_api_key = _role_connection(config, "generation_provider")
             judge_url, judge_api_key = _role_connection(config, "judge")

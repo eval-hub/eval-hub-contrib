@@ -263,6 +263,10 @@ def test_collection_judge_routes_to_grader(job_spec_path, tmp_path, monkeypatch,
     config.model.url = "http://localhost:8080/v1"
     config.parameters = {
         "judge_model": "deployed-judge",
+        "judge_url": "https://legacy.example/v1",
+        "judge_api_key": "legacy-value",
+        "judge_anthropic_api_key": "legacy-value",
+        "grader_base_url": "https://legacy.example/v1",
         "model_args": {"responses_api": False},
         "task_args": (
             {"judge_llm": "null"}
@@ -336,7 +340,6 @@ def test_cyberseceval_without_judge_model_keeps_legacy_task_defaults(job_spec_pa
 
 @pytest.mark.parametrize("parameters, error", [
     ({"judge_model": "  "}, "judge_model"),
-    ({"judge_model": "deployed-judge", "judge_url": "https://external.example/v1"}, "model.auth.secret_ref"),
     ({"judge_model": "deployed-judge", "grader_model": "other"}, "parameters.grader_model"),
     ({"judge_model": "deployed-judge", "task_args": {"judge_llm": "openai/other"}}, "task_args.judge_llm"),
 ])
@@ -684,18 +687,18 @@ def test_target_model_name_preserved_anthropic(job_spec_path):
     assert "claude-opus-4-7" in spec
 
 
-def test_legacy_anthropic_connection_parameter_rejected(job_spec_path):
+def test_legacy_anthropic_connection_parameter_ignored(job_spec_path):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.parameters["judge_anthropic_base_url"] = "legacy-value"
-    with pytest.raises(ValueError, match="model.auth.secret_ref"):
-        adapter._build_env(adapter.job_spec, "petri")
+    env = adapter._build_env(adapter.job_spec, "petri")
+    assert "legacy-value" not in env.values()
 
 
-def test_legacy_role_base_url_parameter_rejected(job_spec_path):
+def test_legacy_role_base_url_parameter_ignored(job_spec_path):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.parameters["judge_base_url"] = "legacy-value"
-    with pytest.raises(ValueError, match="model.auth.secret_ref"):
-        adapter._build_env(adapter.job_spec, "petri")
+    env = adapter._build_env(adapter.job_spec, "petri")
+    assert "legacy-value" not in env.values()
 
 
 # ---------------------------------------------------------------------------
@@ -725,11 +728,11 @@ def test_env_sets_openai_base_url(job_spec_path):
     assert env.get("OPENAI_BASE_URL") == "http://vllm:8080/v1"
 
 
-def test_literal_api_key_parameter_rejected(job_spec_path):
+def test_literal_api_key_parameter_ignored(job_spec_path):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.parameters["api_key"] = "legacy-value"
-    with pytest.raises(ValueError, match="model.auth.secret_ref"):
-        adapter._build_env(adapter.job_spec, "petri")
+    env = adapter._build_env(adapter.job_spec, "petri")
+    assert "legacy-value" not in env.values()
 
 
 def test_env_anthropic_key_set(job_spec_path, monkeypatch):
@@ -740,11 +743,11 @@ def test_env_anthropic_key_set(job_spec_path, monkeypatch):
     assert env.get("ANTHROPIC_API_KEY") == "sk-ant-test"
 
 
-def test_anthropic_api_key_parameter_rejected(job_spec_path):
+def test_anthropic_api_key_parameter_ignored(job_spec_path):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.parameters["anthropic_api_key"] = "legacy-value"
-    with pytest.raises(ValueError, match="model.auth.secret_ref"):
-        adapter._build_env(adapter.job_spec, "petri")
+    env = adapter._build_env(adapter.job_spec, "petri")
+    assert "legacy-value" not in env.values()
 
 
 def test_env_no_url_when_model_url_absent(job_spec_path, monkeypatch):

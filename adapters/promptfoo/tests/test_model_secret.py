@@ -70,6 +70,51 @@ def test_role_url_requires_matching_secret_key(model_secret, role):
         {"env": {"OPENAI_BASE_URL": "https://legacy.example/v1"}},
     ],
 )
-def test_passthrough_grader_cannot_override_secret(value):
-    with pytest.raises(ValueError, match="model.auth.secret_ref"):
-        main._validate_auxiliary_config(value)
+def test_passthrough_connections_are_removed(value):
+    sanitized = main._without_connection_options(value)
+    assert "legacy" not in json.dumps(sanitized)
+    assert "legacy" in json.dumps(value)
+
+
+@pytest.mark.parametrize("use_yaml", [False, True])
+def test_eval_config_ignores_nested_connections_and_preserves_test_data(
+    model_secret, use_yaml
+):
+    import yaml
+
+    spec = config()
+    test = {
+        "vars": {"url": "https://data.example/input", "api_key": "test-input"},
+        "assert": [{"type": "llm-rubric", "value": "Be correct"}],
+        "options": {
+            "provider": {
+                "id": "openai:chat:judge-model",
+                "config": {
+                    "apiKey": "legacy-key",
+                    "apiBaseUrl": "https://legacy.example/v1",
+                    "temperature": 0.3,
+                },
+            }
+        },
+    }
+    params = {"prompts": ["{{url}}"], "tests": [test]}
+    if use_yaml:
+        params = {
+            "config_yaml": yaml.safe_dump(
+                {
+                    **params,
+                    "env": {
+                        "OPENAI_API_KEY": "legacy-key",
+                        "OPENAI_BASE_URL": "https://legacy.example/v1",
+                    },
+                }
+            )
+        }
+    spec.parameters = params
+    provider = main._build_target_provider(spec, "api-key:ref")
+    result = main._build_eval_config(spec, provider, {})
+
+    assert result["providers"] == [provider]
+    assert result["tests"][0]["vars"] == test["vars"]
+    assert result["tests"][0]["options"]["provider"]["config"] == {"temperature": 0.3}
+    assert "legacy" not in json.dumps(result)

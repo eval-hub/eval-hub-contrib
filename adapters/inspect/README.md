@@ -247,16 +247,19 @@ role key, even when the real key equals the primary key. Kubernetes adapters see
 only projected references and localhost URLs; the sidecar selects the upstream
 and injects its credential. Local jobs use the SDK's `file:///` auth directory.
 
-Inline role URLs/keys are rejected. Role credentials and endpoints are not read
+Inline role URLs/keys are ignored. Role credentials and endpoints are not read
 from environment variables. See [model-role authentication](../../docs/model-role-auth.md)
 for the Secret layout, supported roles, migration, and sidecar limitations.
 
 Inspect supports `auditor`, `judge`, `scenarios`, `realism`, and arbitrary named
-roles in `parameters.model_roles`. Model-role values must be model name strings.
+roles in `parameters.model_roles`. Model-role values can be model name strings
+or legacy dictionaries containing `model`; inline connection settings are ignored.
 For example, `model_roles: {critic: deployed-critic}` uses `critic_api-key` and
 `critic_url`. HLE and CyberSecEval's `judge_model`, and StrongREJECT's
 `grader_model`, all use the `judge` Secret pair. Petri/Bloom use `auditor_model`
 and `judge_model`; `scenarios_model` and `realism_model` remain optional.
+Connection overrides in `model_args`, including nested dictionaries and lists,
+are removed before invoking Inspect; generation settings remain available.
 
 OpenAI-compatible endpoints and Inspect's pinned `ollama` client support Bearer
 reference routing. Native `anthropic/` role models are rejected until the

@@ -162,14 +162,16 @@ role key, even when the real key equals the primary key. Kubernetes adapters see
 only projected references and localhost URLs; the sidecar selects the upstream
 and injects its credential. Local jobs use the SDK's `file:///` auth directory.
 
-Inline role URLs/keys are rejected. Role credentials and endpoints are not read
+Inline role URLs/keys are ignored. Role credentials and endpoints are not read
 from environment variables. See [model-role authentication](../../docs/model-role-auth.md)
 for the Secret layout, supported roles, migration, and sidecar limitations.
 
 Both `litellm` and the legacy `endpoint` backend use the `judge` Secret pair.
 The adapter overwrites `OPENAI_API_KEY` with that Secret credential for CLEAR;
 an existing runtime key cannot override it. `endpoint_url`/`inference_url` job
-parameters are rejected. Keep model selection in `eval_model_name` and `provider`.
+parameters are ignored. Connection overrides in `eval_model_params`, including
+nested dictionaries and lists, are removed; generation settings are retained.
+Keep model selection in `eval_model_name` and `provider`.
 
 ## MLflow
 

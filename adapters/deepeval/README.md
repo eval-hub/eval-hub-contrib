@@ -177,15 +177,14 @@ role key, even when the real key equals the primary key. Kubernetes adapters see
 only projected references and localhost URLs; the sidecar selects the upstream
 and injects its credential. Local jobs use the SDK's `file:///` auth directory.
 
-Legacy inline role URLs/keys are ignored when the corresponding Secret entries
-are configured; they never override or fill in missing Secret values. A legacy
-connection parameter without its corresponding Secret entry is an error.
+Legacy inline role URLs/keys are ignored, whether or not role entries exist in
+the Secret. They never override or fill in missing Secret values. With no role
+entries, the primary Secret connection is reused as described above.
 Role credentials and endpoints are not read from environment variables.
 See [model-role authentication](../../docs/model-role-auth.md)
 for the Secret layout, supported roles, migration, and sidecar limitations.
 
 Select the judge model with `eval_model_name`. Its connection uses
-`judge_api-key`/`judge_url`. Legacy `eval_model_url`, `judge_url`, and
-`judge_base_url` parameters require `judge_url` in the Secret; a legacy
-`judge_api_key` parameter requires `judge_api-key` in the Secret. Only the Secret
-values configure the client.
+`judge_api-key`/`judge_url`. Legacy `eval_model_url`, `judge_url`,
+`judge_base_url`, and `judge_api_key` parameters are ignored. Only the Secret
+values configure the auxiliary connection.

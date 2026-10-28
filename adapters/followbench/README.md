@@ -63,7 +63,7 @@ role key, even when the real key equals the primary key. Kubernetes adapters see
 only projected references and localhost URLs; the sidecar selects the upstream
 and injects its credential. Local jobs use the SDK's `file:///` auth directory.
 
-Inline role URLs/keys are rejected. Role credentials and endpoints are not read
+Inline role URLs/keys are ignored. Role credentials and endpoints are not read
 from environment variables. See [model-role authentication](../../docs/model-role-auth.md)
 for the Secret layout, supported roles, migration, and sidecar limitations.
 

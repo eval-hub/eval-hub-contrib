@@ -7,7 +7,7 @@ from pathlib import Path
 from evalhub.adapter import JobCallbacks, JobPhase, JobSpec, JobStatus, JobStatusUpdate, MessageInfo
 
 from _benchmarks import BLOOM_TEMPLATE_MAP
-from _model_auth import role_connection, validate_connection_parameters
+from _model_auth import role_connection
 from _routing import route_model
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,6 @@ def bloom_prepare(
 
     p = config.parameters
     scenarios_name = p.get("scenarios_model") or p.get("auditor_model") or "claude-sonnet-4-6"
-    validate_connection_parameters(p)
     scenarios_base_url, scenarios_api_key = role_connection("scenarios", config.model.url)
 
     # bloom CLI doesn't support the JSON dict model spec (model_args etc.) —

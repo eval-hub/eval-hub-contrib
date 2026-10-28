@@ -55,17 +55,7 @@ def test_judge_url_without_key_fails(model_secret):
         main._resolve_judge_model("gpt-4o-mini", config().model.url)
 
 
-@pytest.mark.parametrize(
-    "parameter", ["eval_model_url", "judge_url", "judge_base_url", "judge_api_key"]
-)
-def test_legacy_connections_require_secret_entries(model_secret, parameter):
-    spec = config()
-    spec.parameters[parameter] = "legacy-value"
-    adapter = main.DeepEvalAdapter(job_spec_path="meta/job.json")
-    with pytest.raises(ValueError, match="model.auth.secret_ref"):
-        adapter.run_benchmark_job(spec, MagicMock())
-
-
+@pytest.mark.parametrize("role_entries", ["pair", "key_only", "none"])
 @pytest.mark.parametrize(
     "parameters",
     [
@@ -81,12 +71,17 @@ def test_legacy_connections_require_secret_entries(model_secret, parameter):
         },
     ],
 )
-def test_job_ignores_legacy_connections_when_secret_configured(
-    model_secret, monkeypatch, parameters
+def test_job_ignores_legacy_connections(
+    model_secret, monkeypatch, parameters, role_entries
 ):
-    secret_url = "http://localhost:8080/judge/v1"
-    (model_secret / "judge_api-key").write_text("judge_api-key:ref")
-    (model_secret / "judge_url").write_text(secret_url)
+    secret_url = config().model.url
+    secret_key = "api-key:ref"
+    if role_entries != "none":
+        secret_key = "judge_api-key:ref"
+        (model_secret / "judge_api-key").write_text(secret_key)
+    if role_entries == "pair":
+        secret_url = "http://localhost:8080/judge/v1"
+        (model_secret / "judge_url").write_text(secret_url)
     spec = config()
     spec.experiment_name = None
     spec.parameters.update(parameters)
@@ -103,7 +98,7 @@ def test_job_ignores_legacy_connections_when_secret_configured(
         client = judge.load_model()
         try:
             assert str(client.base_url).rstrip("/") == secret_url
-            assert client.auth_headers["Authorization"] == "Bearer judge_api-key:ref"
+            assert client.auth_headers["Authorization"] == f"Bearer {secret_key}"
         finally:
             client.close()
         return SimpleNamespace(name="Faithfulness")
@@ -127,26 +122,3 @@ def test_job_ignores_legacy_connections_when_secret_configured(
     evaluation.assert_called_once()
     assert result.num_examples_evaluated == 1
     assert result.overall_score == 1.0
-
-
-@pytest.mark.parametrize("missing_entry", ["judge_api-key", "judge_url"])
-def test_legacy_connections_cannot_fill_missing_secret_entries(
-    model_secret, missing_entry
-):
-    entries = {
-        "judge_api-key": "judge_api-key:ref",
-        "judge_url": "http://localhost:8080/judge/v1",
-    }
-    for key, value in entries.items():
-        if key != missing_entry:
-            (model_secret / key).write_text(value)
-    spec = config()
-    spec.parameters.update(
-        {"judge_url": "https://legacy.example/v1", "judge_api_key": "legacy-key"}
-    )
-    adapter = main.DeepEvalAdapter(job_spec_path="meta/job.json")
-
-    with pytest.raises(
-        ValueError, match=f"set {missing_entry} in model.auth.secret_ref"
-    ):
-        adapter.run_benchmark_job(spec, MagicMock())

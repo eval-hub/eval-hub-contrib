@@ -3,10 +3,11 @@
 Additional model connections belong in the job's `model.auth.secret_ref`, alongside
 the primary model credential. Model IDs remain benchmark parameters. Adapters
 do not use former inline role URL/key parameters or auxiliary runtime environment
-variables to select connections. DeepEval ignores legacy connection parameters
-when their corresponding Secret entries are configured and rejects them otherwise;
-the other adapters reject inline connection parameters. This applies to local and
-Kubernetes jobs. Existing target-only adapter authentication is outside this change.
+variables to select connections. Legacy connection parameters are ignored, whether
+or not role entries exist in the Secret. Their presence alone never fails a job,
+and their values never override or fill in missing Secret values. This applies to
+local and Kubernetes jobs. Existing target-only adapter authentication is outside
+this change.
 
 | Adapter | Secret role prefixes | Model selection |
 | --- | --- | --- |
@@ -134,11 +135,13 @@ was checked for role parsing and Ollama's request transport.
 Move inline URLs/keys (including DeepEval's `eval_model_url`, CLEAR's
 `endpoint_url`/`inference_url`, Inspect's role `*_base_url`/`*_api_key`, and
 Promptfoo's generation connection parameters) to the role entries above.
-DeepEval permits old requests to retain `eval_model_url`, `judge_url`,
-`judge_base_url`, and `judge_api_key` once the corresponding `judge_url` and
-`judge_api-key` entries are present in the Secret. It ignores the parameter values
-and never uses them as a fallback for missing Secret entries.
+Old requests may retain connection parameters: adapters ignore them and use only
+the Secret connection or the primary fallback described above. Connection fields
+in framework model-option dictionaries are removed before invoking the framework;
+unrelated generation settings are retained. Invalid Secret configurations, such as
+a role URL without its matching role key, still fail with an actionable error.
 Remove runtime auxiliary credential/URL variables and keep only model selection
-in benchmark parameters. Inspect model-role dictionaries containing connection
-settings must become model name strings. Update any fixture generator or catalog
-that emits the removed parameters before submitting jobs to these adapter images.
+in benchmark parameters. Inspect also accepts legacy model-role dictionaries with
+a `model` name, ignoring their connection settings. Remove credentials from
+request parameters and fixture generators even though they are ignored, since
+submitted parameters may still be persisted in job metadata.

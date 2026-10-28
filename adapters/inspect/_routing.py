@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from _benchmarks import _CLIENT_ANTHROPIC, _CLIENT_OLLAMA, _CLIENT_OPENAI_COMPAT
-from _model_auth import role_connection, validate_connection_parameters
+from _model_auth import role_connection
 
 
 def _is_ollama_endpoint(url: str | None) -> bool:
@@ -131,7 +131,6 @@ def target_model_spec(
     This spec must be passed via --model-role CLI flag (not env var) because
     JSON dicts with commas break inspect_ai's env var role parser.
     """
-    validate_connection_parameters(params)
     client = select_client(env, endpoint_url=model_url)
     model = route_model(model_name, client)
     if client == _CLIENT_OPENAI_COMPAT:
@@ -145,7 +144,6 @@ def role_model_spec(
     params: dict[str, Any],
     env: dict[str, str],
 ) -> str:
-    validate_connection_parameters(params)
     url, key = role_connection(role, env.get("EVALHUB_MODEL_URL", ""))
     client = _CLIENT_OPENAI_COMPAT
     if model_name.startswith("openai/"):

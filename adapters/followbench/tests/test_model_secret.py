@@ -44,7 +44,16 @@ def test_judge_uses_secret_even_without_judge_model(
     if role_url:
         (model_secret / "judge_url").write_text(role_url)
     spec = config()
-    client, name = main._build_judge_client(spec, {}, 30)
+    client, name = main._build_judge_client(
+        spec,
+        {
+            "judge_api_key": "legacy-key",
+            "judge_api-key": "legacy-key",
+            "judge_url": "https://legacy.example/v1",
+            "judge_base_url": "https://legacy.example/v1",
+        },
+        30,
+    )
     assert name == spec.model.name
     assert str(client.base_url).rstrip("/") == (role_url or spec.model.url)
     assert client.auth_headers["Authorization"] == "Bearer judge_api-key:ref"
@@ -53,6 +62,10 @@ def test_judge_uses_secret_even_without_judge_model(
 
 def test_missing_role_reuses_secret_primary_not_env(model_secret, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-env-key")
-    client, _ = main._build_judge_client(config(), {}, 30)
+    client, _ = main._build_judge_client(
+        config(),
+        {"judge_api_key": "legacy-key", "judge_url": "https://legacy.example/v1"},
+        30,
+    )
     assert client.api_key == "api-key:ref"
     client.close()

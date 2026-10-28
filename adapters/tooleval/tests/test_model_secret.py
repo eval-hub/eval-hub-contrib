@@ -60,7 +60,9 @@ def test_judge_uses_matching_secret_reference(model_secret, monkeypatch, role_ur
     if role_url:
         (model_secret / "judge_url").write_text(role_url)
     spec = config()
-    client, _, url = judge(spec)
+    client, _, url = judge(
+        spec, {"judge_url": "https://legacy.example/v1", "judge_api_key": "legacy-key"}
+    )
     assert url == (role_url or spec.model.url)
     assert client.auth_headers["Authorization"] == "Bearer judge_api-key:ref"
     client.close()
@@ -73,6 +75,11 @@ def test_judge_url_without_key_fails(model_secret):
 
 
 @pytest.mark.parametrize("parameter", ["judge_url", "judge_api_key", "judge_base_url"])
-def test_legacy_job_connections_are_rejected(model_secret, parameter):
-    with pytest.raises(ValueError, match="model.auth.secret_ref"):
-        judge(config(), {parameter: "legacy-value"})
+def test_legacy_job_connections_are_ignored_without_role_entries(
+    model_secret, parameter
+):
+    spec = config()
+    client, _, url = judge(spec, {parameter: "legacy-value"})
+    assert url == spec.model.url
+    assert client.auth_headers["Authorization"] == "Bearer api-key:ref"
+    client.close()

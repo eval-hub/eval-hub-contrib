@@ -193,12 +193,6 @@ def _build_judge_client(
     request_timeout: int,
 ) -> tuple[Any, str]:
     model_url = str(config.model.url or "").strip().rstrip("/")
-    for key in ("judge_url", "judge_base_url", "judge_api_key"):
-        if key in parameters:
-            raise ValueError(
-                f"parameters.{key} is no longer supported; "
-                "use judge_url and judge_api-key in model.auth.secret_ref"
-            )
     if "judge_model" in parameters:
         judge_model = parameters["judge_model"]
         if not isinstance(judge_model, str) or not judge_model.strip():

@@ -607,12 +607,6 @@ def _build_judge_client(
     timeout: float,
 ) -> tuple[openai.OpenAI, str, str]:
     judge_model = str(params.get("judge_model") or model_name).strip() or model_name
-    for key in ("judge_url", "judge_base_url", "judge_api_key"):
-        if key in params:
-            raise ValueError(
-                f"parameters.{key} is no longer supported; "
-                "use judge_url and judge_api-key in model.auth.secret_ref"
-            )
     secret_judge_key = read_model_auth_key("judge_api-key")
     secret_judge_url = read_model_auth_key("judge_url")
 

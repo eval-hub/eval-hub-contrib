@@ -767,12 +767,6 @@ class ClearAdapter(FrameworkAdapter):
 
     @staticmethod
     def _judge_url(config: JobSpec) -> str:
-        for key in ("endpoint_url", "inference_url", "judge_url", "judge_api_key"):
-            if key in config.parameters:
-                raise ValueError(
-                    f"parameters.{key} is no longer supported; "
-                    "use judge_url and judge_api-key in model.auth.secret_ref"
-                )
         url = read_model_auth_key("judge_url")
         if url and not read_model_auth_key("judge_api-key"):
             raise ValueError("judge_url in model.auth.secret_ref requires judge_api-key")
@@ -811,24 +805,21 @@ class ClearAdapter(FrameworkAdapter):
         if ep:
             if agentic_config.get("inference_backend") == "endpoint" and not ep:
                 raise ValueError(
-                    "model.url or parameters.endpoint_url (or inference_url) is required "
+                    "model.url or judge_url in model.auth.secret_ref is required "
                     "when inference_backend is 'endpoint'"
                 )
             agentic_config["endpoint_url"] = ep
             agentic_config["inference_url"] = ep
         elif agentic_config.get("inference_backend") == "endpoint":
             raise ValueError(
-                "model.url or parameters.endpoint_url (or inference_url) is required "
+                "model.url or judge_url in model.auth.secret_ref is required "
                 "when inference_backend is 'endpoint'"
             )
 
         if "eval_model_params" in config.parameters:
-            for key in config.parameters["eval_model_params"]:
-                if key in {"api_key", "api_base", "base_url", "endpoint_url", "inference_url"}:
-                    raise ValueError(
-                        f"parameters.eval_model_params.{key} must come from model.auth.secret_ref"
-                    )
-            agentic_config["eval_model_params"] = config.parameters["eval_model_params"]
+            agentic_config["eval_model_params"] = self._without_connection_options(
+                config.parameters["eval_model_params"]
+            )
 
         if config.parameters and "evaluation_criteria" in config.parameters:
             agentic_config["evaluation_criteria"] = config.parameters["evaluation_criteria"]
@@ -836,6 +827,20 @@ class ClearAdapter(FrameworkAdapter):
             agentic_config["predefined_issues"] = config.parameters["predefined_issues"]
 
         return agentic_config
+
+    @staticmethod
+    def _without_connection_options(value: Any) -> Any:
+        """Copy framework model options without inline connection settings."""
+        if isinstance(value, dict):
+            return {
+                key: ClearAdapter._without_connection_options(child)
+                for key, child in value.items()
+                if key not in {"api_key", "api-key", "api_base", "base_url", "url"}
+                and not key.endswith(("_api_key", "_api-key", "_base_url", "_url"))
+            }
+        if isinstance(value, list):
+            return [ClearAdapter._without_connection_options(child) for child in value]
+        return value
 
     def _extract_agentic_results(self, json_results_path: str) -> list[EvaluationResult]:
         evaluation_results = []

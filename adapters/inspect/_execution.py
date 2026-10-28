@@ -15,7 +15,7 @@ from evalhub.adapter.auth import resolve_model_credentials
 
 from _benchmarks import PETRI_SEED_MAP
 from _hf_auth import apply_hf_hub_auth, refresh_hf_hub_auth
-from _model_auth import role_connection, validate_connection_parameters
+from _model_auth import role_connection, without_connection_options
 from _hf_offline import (
     TEST_DATA_DIR,
     configure_hf_offline_environment,
@@ -68,14 +68,8 @@ def _collection_judge_enabled(config: JobSpec) -> bool:
     name = parameters.get("judge_model")
     if not isinstance(name, str) or not name.strip():
         raise ValueError("parameters.judge_model must be a non-empty model name")
-    conflicting_keys = (
-        "judge_url", "judge_api_key", "judge_base_url",
-        "judge_anthropic_base_url", "judge_anthropic_api_key",
-        "grader_model", "grader_base_url",
-    )
-    for key in conflicting_keys:
-        if parameters.get(key):
-            raise ValueError(f"judge_model cannot be combined with parameters.{key}")
+    if parameters.get("grader_model"):
+        raise ValueError("judge_model cannot be combined with parameters.grader_model")
     return True
 
 
@@ -106,7 +100,6 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
     """
     env = os.environ.copy()
     p = config.parameters
-    validate_connection_parameters(p)
     env["EVALHUB_MODEL_URL"] = config.model.url or ""
     # Never inherit an independent grader connection from the runtime.
     env.pop("OPENAI_JUDGE_API_KEY", None)
@@ -248,8 +241,12 @@ def build_command(
             model_roles = dict(model_roles)
             model_roles["grader"] = _collection_grader_spec(config, env)
         for role, spec in model_roles.items():
+            # Legacy role dictionaries may contain connection settings. Only
+            # their model selection is used; resolve the connection from Secret.
+            if isinstance(spec, dict):
+                spec = spec.get("model")
             if not isinstance(spec, str) or not spec.strip():
-                raise ValueError("parameters.model_roles values must be model name strings")
+                raise ValueError("parameters.model_roles values must select a model name")
             if _collection_judge_enabled(config) and role == "grader":
                 resolved_spec = spec
             else:
@@ -302,7 +299,8 @@ def build_command(
             value = str(value).lower()
         cmd += ["-T", f"{key}={value}"]
 
-    for key, value in config.parameters.get("model_args", {}).items():
+    model_args = without_connection_options(config.parameters.get("model_args", {}))
+    for key, value in model_args.items():
         cmd += ["-M", f"{key}={value}"]
 
     return cmd

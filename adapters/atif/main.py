@@ -1853,12 +1853,6 @@ class ATIFAdapter(FrameworkAdapter):
             raise ValueError(
                 "judge_url in model.auth.secret_ref requires judge_api-key"
             )
-        for parameter in ("judge_url", "judge_api_key"):
-            if parameter in job_spec.parameters:
-                raise ValueError(
-                    f"parameters.{parameter} is no longer supported; "
-                    "use judge_url and judge_api-key in model.auth.secret_ref"
-                )
         primary_key = credentials.api_key
         if primary_key and os.getenv("EVALHUB_MODE") == "k8s":
             primary_key = "api-key:ref"

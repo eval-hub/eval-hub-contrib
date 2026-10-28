@@ -66,22 +66,54 @@ def test_role_url_requires_matching_key(model_secret, role):
         _model_auth.role_connection(role, config().model.url)
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
-        {"judge_api_key": "legacy-value"},
-        {"auditor_base_url": "legacy-value"},
-        {
-            "model_roles": {
-                "grader": {"model": "openai/judge", "api_key": "legacy-value"}
+@pytest.mark.parametrize("role_entries", [False, True])
+def test_inline_connections_are_ignored_in_env_and_command(
+    model_secret, tmp_path, role_entries
+):
+    import _execution
+
+    spec = config()
+    spec.benchmark_id = "inspect/gsm8k"
+    spec.parameters = {
+        "judge_api_key": "legacy-value",
+        "auditor_base_url": "https://legacy.example/v1",
+        "api-key": "legacy-value",
+        "model_roles": {
+            "critic": {
+                "model": "critic-model",
+                "base_url": "https://legacy.example/v1",
+                "api_key": "legacy-value",
+                "model_args": {"api_key": "legacy-value"},
             }
         },
-        {"model_args": {"base_url": "legacy-value"}},
-    ],
-)
-def test_connection_parameters_cannot_bypass_secret(values):
-    with pytest.raises(ValueError, match="model.auth.secret_ref"):
-        _model_auth.validate_connection_parameters(values)
+        "model_args": {
+            "base_url": "https://legacy.example/v1",
+            "api-key": "legacy-value",
+            "temperature": 0.3,
+            "extra": [{"api_key": "legacy-value", "timeout": 30}],
+        },
+        "task_args": {"dataset_url": "https://dataset.example/input"},
+    }
+    url, key = spec.model.url, "api-key:ref"
+    if role_entries:
+        url, key = "http://localhost:8080/critic/v1", "critic_api-key:ref"
+        (model_secret / "critic_url").write_text(url)
+        (model_secret / "critic_api-key").write_text(key)
+    env = _execution.build_env(spec, "standard")
+    command = _execution.build_command(
+        spec, "standard", "test/task", tmp_path, None, env
+    )
+
+    role = next(arg for arg in command if arg.startswith("critic="))
+    resolved = json.loads(role.removeprefix("critic="))
+    assert resolved["model_args"]["base_url"] == url
+    assert resolved["model_args"]["api_key"] == key
+    assert "temperature=0.3" in command
+    assert "extra=[{'timeout': 30}]" in command
+    assert "dataset_url=https://dataset.example/input" in command
+    assert "legacy" not in " ".join(command)
+    assert not any("legacy" in value for value in env.values())
+    assert spec.parameters["model_args"]["api-key"] == "legacy-value"
 
 
 @pytest.mark.parametrize("model", ["anthropic/claude"])
@@ -120,6 +152,8 @@ def test_bloom_scenarios_use_secret_connection(model_secret, monkeypatch, tmp_pa
     spec.parameters = {
         "bloom_template": "test",
         "scenarios_model": "ollama/scenario-model",
+        "scenarios_api_key": "legacy-key",
+        "scenarios_base_url": "https://legacy.example/v1",
     }
     _bloom.bloom_prepare(
         spec, tmp_path, {"OPENAI_API_KEY": "unrelated-env-key"}, MagicMock()

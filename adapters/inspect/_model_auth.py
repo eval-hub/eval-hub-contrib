@@ -5,23 +5,18 @@ from typing import Any
 from evalhub.adapter.auth import read_model_auth_key
 
 
-def validate_connection_parameters(parameters: dict[str, Any]) -> None:
-    """Reject connection overrides before passing parameters to Inspect."""
-
-    def visit(values: dict, prefix: str) -> None:
-        for key, value in values.items():
-            if key in {"api_key", "anthropic_api_key", "base_url"} or key.endswith(
-                ("_api_key", "_api-key", "_base_url", "_url")
-            ):
-                raise ValueError(
-                    f"{prefix}.{key} is no longer supported for model connections; "
-                    "use <role>_api-key and <role>_url in model.auth.secret_ref"
-                )
-            if isinstance(value, dict):
-                visit(value, f"{prefix}.{key}")
-
-    # task_args may include unrelated dataset URLs. Only inspect model configuration.
-    visit({k: v for k, v in parameters.items() if k != "task_args"}, "parameters")
+def without_connection_options(value: Any) -> Any:
+    """Copy model options without inline credentials or endpoint overrides."""
+    if isinstance(value, dict):
+        return {
+            key: without_connection_options(child)
+            for key, child in value.items()
+            if key not in {"api_key", "api-key", "api_base", "base_url", "url"}
+            and not key.endswith(("_api_key", "_api-key", "_base_url", "_url"))
+        }
+    if isinstance(value, list):
+        return [without_connection_options(child) for child in value]
+    return value
 
 
 def role_connection(role: str, model_url: str) -> tuple[str, str]:

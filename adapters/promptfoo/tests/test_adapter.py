@@ -975,13 +975,40 @@ def test_promptfoo_redteam_generation_ignores_target_env_key(monkeypatch):
     assert gen_call["api_key"] == "not-required"
 
 
-def test_promptfoo_redteam_explicit_gen_url_does_not_leak_target_key(monkeypatch):
+@pytest.mark.parametrize("role_entries", [False, True])
+def test_promptfoo_redteam_ignores_inline_connections(monkeypatch, role_entries):
     adapter = PromptfooAdapter(job_spec_path="meta/job.json")
     config = copy.deepcopy(adapter.job_spec)
     config.benchmark_id = "promptfoo-redteam"
-    config.parameters = {"generation_provider_url": "https://external.example/v1"}
-    cli = MagicMock()
-    monkeypatch.setattr("main._run_promptfoo_cli", cli)
-    with pytest.raises(ValueError, match="model.auth.secret_ref"):
-        adapter.run_benchmark_job(config, create_autospec(JobCallbacks))
-    cli.assert_not_called()
+    config.parameters = {
+        "generation_provider": "openai:chat:generation-model",
+        "judge_model": "openai:chat:judge-model",
+        "generation_provider_url": "https://legacy.example/gen/v1",
+        "generation_provider_api_key": "legacy-key",
+        "judge_url": "https://legacy.example/judge/v1", "judge_api_key": "legacy-key",
+        "strategies": [{"id": "basic", "config": {"apiKey": "legacy-key", "apiBaseUrl": "https://legacy.example/v1"}}],
+    }
+    entries = {"api-key": "api-key:ref"}
+    if role_entries:
+        for role in ("judge", "generation_provider"):
+            entries[f"{role}_api-key"] = f"{role}_api-key:ref"
+            entries[f"{role}_url"] = f"http://localhost:8080/{role}/v1"
+    monkeypatch.setattr("main.read_model_auth_key", entries.get)
+    calls = []
+
+    def run(args, cwd, **kwargs):
+        import yaml
+
+        calls.append(kwargs)
+        generated = yaml.safe_load((cwd / "promptfooconfig.yaml").read_text())
+        assert "legacy" not in json.dumps(generated)
+        if args[0] == "eval":
+            Path(args[args.index("-o") + 1]).write_text(json.dumps(_eval_json(1, 0, 0)))
+        return _FakeCompletedProcess(0, "")
+
+    monkeypatch.setattr("main._run_promptfoo_cli", run)
+    result = adapter.run_benchmark_job(config, create_autospec(JobCallbacks))
+    assert result.num_examples_evaluated == 1
+    for call, role in zip(calls, ("generation_provider", "judge"), strict=True):
+        assert call["api_key"] == entries.get(f"{role}_api-key", "api-key:ref")
+        assert call["base_url"].rstrip("/") == entries.get(f"{role}_url", config.model.url).rstrip("/")
