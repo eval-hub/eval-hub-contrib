@@ -61,6 +61,7 @@ def test_build_judge_client_reuses_model_credential_for_default_endpoint(monkeyp
     monkeypatch.delenv("FOLLOWBENCH_JUDGE_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     resolve_model_api_key = MagicMock(return_value="model-secret")
+    monkeypatch.setattr(main_module, "read_model_auth_key", {"api-key": "model-secret"}.get)
     monkeypatch.setattr(main_module, "_resolve_model_api_key", resolve_model_api_key)
     openai_client = MagicMock(name="openai_client")
     openai_constructor = MagicMock(return_value=openai_client)
@@ -71,53 +72,31 @@ def test_build_judge_client_reuses_model_credential_for_default_endpoint(monkeyp
     assert client is openai_client
     assert judge_model == config.model.name
     assert openai_constructor.call_args.kwargs["api_key"] == "model-secret"
-    resolve_model_api_key.assert_called_once_with(config)
-
-
-def test_build_judge_client_prefers_explicit_judge_credential(monkeypatch):
-    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
-    monkeypatch.delenv("FOLLOWBENCH_JUDGE_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    resolve_model_api_key = MagicMock(return_value="model-secret")
-    monkeypatch.setattr(main_module, "_resolve_model_api_key", resolve_model_api_key)
-    openai_constructor = MagicMock()
-    monkeypatch.setattr(main_module.openai, "OpenAI", openai_constructor)
-
-    main_module._build_judge_client(
-        config,
-        {"judge_api_key": "judge-secret"},
-        30,
-    )
-
-    assert openai_constructor.call_args.kwargs["api_key"] == "judge-secret"
     resolve_model_api_key.assert_not_called()
 
 
-def test_build_judge_client_does_not_reuse_model_credential_for_other_endpoint(
-    monkeypatch,
-):
+def test_build_judge_client_ignores_explicit_judge_credential(monkeypatch):
     config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
-    monkeypatch.delenv("FOLLOWBENCH_JUDGE_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    resolve_model_api_key = MagicMock(return_value="model-secret")
-    monkeypatch.setattr(main_module, "_resolve_model_api_key", resolve_model_api_key)
-    openai_constructor = MagicMock()
-    monkeypatch.setattr(main_module.openai, "OpenAI", openai_constructor)
+    constructor = MagicMock()
+    monkeypatch.setattr(main_module.openai, "OpenAI", constructor)
+    monkeypatch.setattr(main_module, "read_model_auth_key", {"api-key": "api-key:ref"}.get)
+    main_module._build_judge_client(config, {"judge_api_key": "legacy-value"}, 30)
+    assert constructor.call_args.kwargs["api_key"] == "api-key:ref"
 
-    main_module._build_judge_client(
-        config,
-        {"judge_url": "https://judge.example/v1"},
-        30,
-    )
 
-    assert openai_constructor.call_args.kwargs["api_key"] == "DUMMY"
-    resolve_model_api_key.assert_not_called()
+def test_build_judge_client_ignores_inline_judge_endpoint(monkeypatch):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+    constructor = MagicMock()
+    monkeypatch.setattr(main_module.openai, "OpenAI", constructor)
+    monkeypatch.setattr(main_module, "read_model_auth_key", {}.get)
+    main_module._build_judge_client(config, {"judge_url": "legacy-value"}, 30)
+    assert constructor.call_args.kwargs["base_url"] == config.model.url
 
 
 def test_collection_without_judge_secret_fields_reuses_target_connection(monkeypatch):
     config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
     monkeypatch.setenv("FOLLOWBENCH_JUDGE_API_KEY", "unrelated-key")
-    monkeypatch.setattr(main_module, "read_model_auth_key", lambda key: None)
+    monkeypatch.setattr(main_module, "read_model_auth_key", {"api-key": "api-key:ref"}.get)
     monkeypatch.setattr(main_module, "_resolve_model_api_key", lambda _: "api-key:ref")
     constructor = MagicMock()
     monkeypatch.setattr(main_module.openai, "OpenAI", constructor)
@@ -167,15 +146,19 @@ def test_collection_judge_url_requires_projected_key(monkeypatch):
 
 
 @pytest.mark.parametrize("legacy_parameter", ["judge_url", "judge_api_key"])
-def test_collection_judge_rejects_legacy_connection_parameters(legacy_parameter):
+def test_collection_judge_ignores_legacy_connection_parameters(monkeypatch, legacy_parameter):
     config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
-
-    with pytest.raises(ValueError, match="judge_model cannot be combined with the legacy"):
-        main_module._build_judge_client(
-            config,
-            {"judge_model": "deployed-judge", legacy_parameter: "legacy-value"},
-            30,
-        )
+    constructor = MagicMock()
+    monkeypatch.setattr(main_module.openai, "OpenAI", constructor)
+    monkeypatch.setattr(main_module, "read_model_auth_key", {"judge_api-key": "judge_api-key:ref"}.get)
+    _, name = main_module._build_judge_client(
+        config,
+        {"judge_model": "deployed-judge", legacy_parameter: "legacy-value"},
+        30,
+    )
+    assert name == "deployed-judge"
+    assert constructor.call_args.kwargs["base_url"] == config.model.url
+    assert constructor.call_args.kwargs["api_key"] == "judge_api-key:ref"
 
 
 def test_malformed_judge_response_is_scored_as_no(monkeypatch):

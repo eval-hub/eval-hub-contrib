@@ -242,8 +242,8 @@ def test_standard_model_roles_injected(job_spec_path, tmp_path, monkeypatch):
     cmd = adapter._build_command(adapter.job_spec, "standard", "inspect_evals/hle", tmp_path, None, env)
     assert "--model-role" in cmd
     roles = _parse_model_roles(cmd)
-    assert roles["grader"] == "openai/gpt-4o-mini"
-    assert roles["judge"] == "openai/gpt-4o"
+    assert roles["grader"]["model"] == "openai/gpt-4o-mini"
+    assert roles["judge"]["model"] == "openai/gpt-4o"
     assert "INSPECT_EVAL_MODEL" in env
 
 
@@ -253,14 +253,20 @@ def test_collection_judge_routes_to_grader(job_spec_path, tmp_path, monkeypatch,
     monkeypatch.setattr(
         _execution, "resolve_model_credentials", lambda: SimpleNamespace(api_key="api-key:ref")
     )
-    projected = {"judge_api-key": "judge_api-key:ref", "judge_url": "http://localhost:8080/judge/v1"} if separate else {}
-    monkeypatch.setattr(_execution, "read_model_auth_key", projected.get)
+    projected = {"api-key": "api-key:ref"}
+    if separate:
+        projected.update({"judge_api-key": "judge_api-key:ref", "judge_url": "http://localhost:8080/judge/v1"})
+    monkeypatch.setattr("_model_auth.read_model_auth_key", projected.get)
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     config = adapter.job_spec
     config.benchmark_id = benchmark_id
     config.model.url = "http://localhost:8080/v1"
     config.parameters = {
         "judge_model": "deployed-judge",
+        "judge_url": "https://legacy.example/v1",
+        "judge_api_key": "legacy-value",
+        "judge_anthropic_api_key": "legacy-value",
+        "grader_base_url": "https://legacy.example/v1",
         "model_args": {"responses_api": False},
         "task_args": (
             {"judge_llm": "null"}
@@ -278,7 +284,9 @@ def test_collection_judge_routes_to_grader(job_spec_path, tmp_path, monkeypatch,
         assert env["OPENAI_JUDGE_API_KEY"] == "judge_api-key:ref"
         assert env["OPENAI_JUDGE_BASE_URL"] == "http://localhost:8080/judge/v1"
     else:
-        assert roles["grader"] == {"model": "openai/deployed-judge", "model_args": {"responses_api": False}}
+        assert roles["grader"] == "openai-api/openai_judge/deployed-judge"
+        assert env["OPENAI_JUDGE_API_KEY"] == "api-key:ref"
+        assert env["OPENAI_JUDGE_BASE_URL"] == config.model.url
         assert env["OPENAI_API_KEY"] == "api-key:ref"
     if benchmark_id.endswith("cyberseceval-2-pi"):
         assert "judge_llm=null" in cmd
@@ -290,7 +298,7 @@ def test_collection_judge_routes_to_grader(job_spec_path, tmp_path, monkeypatch,
 
 def test_collection_judge_key_without_projected_url_uses_target_proxy(job_spec_path, monkeypatch):
     monkeypatch.setattr(
-        _execution, "read_model_auth_key", {"judge_api-key": "judge_api-key:ref"}.get
+        "_model_auth.read_model_auth_key", {"judge_api-key": "judge_api-key:ref"}.get
     )
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     config = adapter.job_spec
@@ -305,7 +313,7 @@ def test_collection_judge_key_without_projected_url_uses_target_proxy(job_spec_p
 
 
 def test_collection_judge_url_requires_projected_key(job_spec_path, monkeypatch):
-    monkeypatch.setattr(_execution, "read_model_auth_key", {"judge_url": "http://localhost:8080/judge/v1"}.get)
+    monkeypatch.setattr("_model_auth.read_model_auth_key", {"judge_url": "http://localhost:8080/judge/v1"}.get)
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     config = adapter.job_spec
     config.benchmark_id = "inspect/hle"
@@ -332,7 +340,6 @@ def test_cyberseceval_without_judge_model_keeps_legacy_task_defaults(job_spec_pa
 
 @pytest.mark.parametrize("parameters, error", [
     ({"judge_model": "  "}, "judge_model"),
-    ({"judge_model": "deployed-judge", "judge_url": "https://external.example/v1"}, "cannot be combined"),
     ({"judge_model": "deployed-judge", "grader_model": "other"}, "parameters.grader_model"),
     ({"judge_model": "deployed-judge", "task_args": {"judge_llm": "openai/other"}}, "task_args.judge_llm"),
 ])
@@ -359,7 +366,7 @@ def test_strong_reject_routes_judge_to_isolated_grader(job_spec_path, tmp_path, 
     adapter.job_spec.model.name = "meta-llama/Llama-3.3-70B-Instruct"
     adapter.job_spec.model.url = "https://maas.example.test/v1"
     adapter.job_spec.parameters["grader_model"] = "gpt-4o-mini"
-    adapter.job_spec.parameters["grader_base_url"] = "https://api.openai.com/v1"
+    monkeypatch.setattr("_model_auth.read_model_auth_key", {"judge_api-key": "judge_api-key:ref", "judge_url": "http://localhost:8080/judge/v1"}.get)
     # A legacy task arg must not keep routing the judge back to the target.
     adapter.job_spec.parameters["task_args"] = {
         "judge_llm": "openai/meta-llama/Llama-3.3-70B-Instruct"
@@ -374,21 +381,22 @@ def test_strong_reject_routes_judge_to_isolated_grader(job_spec_path, tmp_path, 
     assert roles["grader"] == "openai-api/openai_judge/gpt-4o-mini"
     assert env["OPENAI_BASE_URL"] == "https://maas.example.test/v1"
     assert env["OPENAI_API_KEY"] == "target-model-key"
-    assert env["OPENAI_JUDGE_BASE_URL"] == "https://api.openai.com/v1"
-    assert env["OPENAI_JUDGE_API_KEY"] == "judge-secret-key"
+    assert env["OPENAI_JUDGE_BASE_URL"] == "http://localhost:8080/judge/v1"
+    assert env["OPENAI_JUDGE_API_KEY"] == "judge_api-key:ref"
     assert "judge_llm=None" in cmd
     assert "target-model-key" not in cmd
     assert "judge-secret-key" not in cmd
 
 
-def test_strong_reject_external_grader_requires_secret_env(job_spec_path, monkeypatch):
-    monkeypatch.delenv("OPENAI_JUDGE_API_KEY", raising=False)
+def test_strong_reject_ignores_runtime_judge_credential(job_spec_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_JUDGE_API_KEY", "unrelated-runtime-key")
+    monkeypatch.setattr("_model_auth.read_model_auth_key", {"api-key": "api-key:ref"}.get)
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.benchmark_id = "inspect/strong-reject"
-    adapter.job_spec.parameters["grader_model"] = "gpt-4o-mini"
-
-    with pytest.raises(ValueError, match="OPENAI_JUDGE_API_KEY"):
-        adapter._build_env(adapter.job_spec, "standard")
+    adapter.job_spec.parameters["grader_model"] = "judge"
+    env = adapter._build_env(adapter.job_spec, "standard")
+    assert env["OPENAI_JUDGE_API_KEY"] == "api-key:ref"
+    assert env["OPENAI_JUDGE_BASE_URL"] == adapter.job_spec.model.url
 
 
 def test_standard_no_model_roles_when_absent(job_spec_path, tmp_path, monkeypatch):
@@ -679,60 +687,18 @@ def test_target_model_name_preserved_anthropic(job_spec_path):
     assert "claude-opus-4-7" in spec
 
 
-def test_per_role_anthropic_base_url(job_spec_path, tmp_path, monkeypatch):
-    """judge_anthropic_base_url → per-role inline dict; user model names preserved."""
-    import json as _json
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+def test_legacy_anthropic_connection_parameter_ignored(job_spec_path):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.benchmark_id = "inspect/petri-sycophancy"
-    adapter.job_spec.model.name = "ibm-granite/granite-3.3-8b-instruct"
-    adapter.job_spec.model.url = "http://vllm:8080/v1"
-    adapter.job_spec.parameters["auditor_model"] = "claude-sonnet-4-6"
-    adapter.job_spec.parameters["judge_model"] = "claude-opus-4-7"
-    adapter.job_spec.parameters["judge_anthropic_base_url"] = "https://my-anthropic-proxy/v1"
-    adapter.job_spec.parameters["judge_anthropic_api_key"] = "sk-proxy-key"
+    adapter.job_spec.parameters["judge_anthropic_base_url"] = "legacy-value"
     env = adapter._build_env(adapter.job_spec, "petri")
-    cmd = adapter._build_command(adapter.job_spec, "petri", "inspect_petri/audit", tmp_path, None, env)
-    roles = _parse_model_roles(cmd)
-
-    # auditor uses global ANTHROPIC_API_KEY — bare model name preserved
-    assert "claude-sonnet-4-6" in roles["auditor"]
-    # judge: per-role proxy → inline dict with user's model name preserved
-    assert isinstance(roles["judge"], dict)
-    assert "claude-opus-4-7" in roles["judge"]["model"]
-    assert roles["judge"]["base_url"] == "https://my-anthropic-proxy/v1"
-    assert roles["judge"]["api_key"] == "sk-proxy-key"
+    assert "legacy-value" not in env.values()
 
 
-def test_per_role_base_url_creates_inline_dict(job_spec_path, tmp_path, monkeypatch):
-    """Per-role base_url → inline dict preserving user model name; others use global env."""
-    import json as _json
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+def test_legacy_role_base_url_parameter_ignored(job_spec_path):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.benchmark_id = "inspect/petri-sycophancy"
-    adapter.job_spec.model.name = "ibm-granite/granite-3.3-8b-instruct"
-    adapter.job_spec.model.url = "http://vllm-target:8080/v1"
-    adapter.job_spec.parameters["auditor_model"] = "claude-sonnet-4-6"
-    adapter.job_spec.parameters["judge_model"] = "meta-llama/Llama-3.3-70B-Instruct"
-    adapter.job_spec.parameters["judge_base_url"] = "http://vllm-judge:8080/v1"
-    adapter.job_spec.parameters["judge_api_key"] = "EMPTY"
+    adapter.job_spec.parameters["judge_base_url"] = "legacy-value"
     env = adapter._build_env(adapter.job_spec, "petri")
-    cmd = adapter._build_command(adapter.job_spec, "petri", "inspect_petri/audit", tmp_path, None, env)
-    roles = _parse_model_roles(cmd)
-
-    # auditor: global Anthropic key — user's model name preserved
-    assert "claude-sonnet-4-6" in roles["auditor"]
-    # judge: per-role endpoint — user's model name preserved in inline dict
-    assert isinstance(roles["judge"], dict)
-    assert "meta-llama/Llama-3.3-70B-Instruct" in roles["judge"]["model"]
-    assert roles["judge"]["base_url"] == "http://vllm-judge:8080/v1"
-    assert roles["judge"]["api_key"] == "EMPTY"
-    # target: uses OPENAI_BASE_URL (set from model.url in build_env); base_url is not
-    # inlined in the spec — it's carried via the env var, not the role spec.
-    assert isinstance(roles["target"], dict)
-    assert "ibm-granite/granite-3.3-8b-instruct" in roles["target"]["model"]
-    assert "base_url" not in roles["target"]
+    assert "legacy-value" not in env.values()
 
 
 # ---------------------------------------------------------------------------
@@ -762,14 +728,11 @@ def test_env_sets_openai_base_url(job_spec_path):
     assert env.get("OPENAI_BASE_URL") == "http://vllm:8080/v1"
 
 
-def test_env_api_key_param_sets_openai_key(job_spec_path, monkeypatch):
-    """api_key parameter sets OPENAI_API_KEY for OpenAI-compatible endpoints."""
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+def test_literal_api_key_parameter_ignored(job_spec_path):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.model.url = None
-    adapter.job_spec.parameters["api_key"] = "sk-vllm-token"
+    adapter.job_spec.parameters["api_key"] = "legacy-value"
     env = adapter._build_env(adapter.job_spec, "petri")
-    assert env.get("OPENAI_API_KEY") == "sk-vllm-token"
+    assert "legacy-value" not in env.values()
 
 
 def test_env_anthropic_key_set(job_spec_path, monkeypatch):
@@ -780,13 +743,11 @@ def test_env_anthropic_key_set(job_spec_path, monkeypatch):
     assert env.get("ANTHROPIC_API_KEY") == "sk-ant-test"
 
 
-def test_env_anthropic_key_param_overrides_env(job_spec_path, monkeypatch):
-    """anthropic_api_key parameter overrides ANTHROPIC_API_KEY env var."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key")
+def test_anthropic_api_key_parameter_ignored(job_spec_path):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.parameters["anthropic_api_key"] = "param-key"
+    adapter.job_spec.parameters["anthropic_api_key"] = "legacy-value"
     env = adapter._build_env(adapter.job_spec, "petri")
-    assert env.get("ANTHROPIC_API_KEY") == "param-key"
+    assert "legacy-value" not in env.values()
 
 
 def test_env_no_url_when_model_url_absent(job_spec_path, monkeypatch):

@@ -42,7 +42,7 @@ from input_collection import (
     load_collection,
     read_bounded_config,
 )
-from judge_auth import resolve_job_credentials
+from judge_auth import read_job_auth_key, resolve_job_credentials
 from rubric_registry import RubricRegistry, UnknownBenchmarkError
 from scoring_context import (
     DEFAULT_CONTEXT_BYTES,
@@ -1847,22 +1847,22 @@ class ATIFAdapter(FrameworkAdapter):
             job_spec
         )
         headers = {}
-        if credentials.api_key:
-            key = (
-                "api-key:ref"
-                if os.getenv("EVALHUB_MODE") == "k8s"
-                else credentials.api_key
+        role_key = read_job_auth_key(job_spec, "judge_api-key")
+        role_url = read_job_auth_key(job_spec, "judge_url")
+        if role_url and not role_key:
+            raise ValueError(
+                "judge_url in model.auth.secret_ref requires judge_api-key"
             )
+        primary_key = credentials.api_key
+        if primary_key and os.getenv("EVALHUB_MODE") == "k8s":
+            primary_key = "api-key:ref"
+        key = role_key or primary_key
+        if key:
             headers["Authorization"] = f"Bearer {key}"
         model_url = job_spec.model.url.strip().rstrip("/")
         if not model_url:
             raise ValueError("model.url is required for the ATIF judge")
-        # The server rewrites the JobSpec model URL to the runtime sidecar in
-        # Kubernetes mode and preserves the provider path, so the job model URL
-        # is authoritative in every mode. EVALHUB_JUDGE_PROXY_URL remains an
-        # explicit override for deployments that route judge traffic elsewhere.
-        proxy_url = os.getenv("EVALHUB_JUDGE_PROXY_URL", "").strip().rstrip("/")
-        judge_url = proxy_url or model_url
+        judge_url = (role_url or model_url).strip().rstrip("/")
         if judge_url.endswith("/v1"):
             judge_url = f"{judge_url}/chat/completions"
         elif not judge_url.endswith("/v1/chat/completions"):

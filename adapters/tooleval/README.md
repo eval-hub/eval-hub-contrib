@@ -159,3 +159,19 @@ uv venv
 uv pip install -r requirements.txt -r requirements-test.txt
 uv run pytest tests/ -v
 ```
+
+## Model-role authentication
+
+All auxiliary model credentials and endpoints come from `model.auth.secret_ref`.
+Use `<role>_api-key` and optional `<role>_url` entries in that Secret; model IDs
+remain benchmark parameters. When a role has no entries, it reuses `model.url`
+and the primary `api-key` from the same Secret. A role URL requires its matching
+role key, even when the real key equals the primary key. Kubernetes adapters see
+only projected references and localhost URLs; the sidecar selects the upstream
+and injects its credential. Local jobs use the SDK's `file:///` auth directory.
+
+Inline role URLs/keys are ignored. Role credentials and endpoints are not read
+from environment variables. See [model-role authentication](../../docs/model-role-auth.md)
+for the Secret layout, supported roles, migration, and sidecar limitations.
+
+The judge uses `judge_api-key`/`judge_url`, including when it shares the target URL. `TOOLEVAL_JUDGE_API_KEY` and inline `judge_url`/`judge_api_key` are no longer connection inputs.

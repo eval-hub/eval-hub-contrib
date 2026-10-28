@@ -1,6 +1,5 @@
 """Command building, environment setup, and subprocess execution."""
 
-import json
 import logging
 import os
 import re
@@ -12,14 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from evalhub.adapter import JobSpec
-from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
+from evalhub.adapter.auth import resolve_model_credentials
 
-from _benchmarks import PETRI_SEED_MAP, _CLIENT_OPENAI_COMPAT
+from _benchmarks import PETRI_SEED_MAP
 from _hf_auth import apply_hf_hub_auth, refresh_hf_hub_auth
+from _model_auth import role_connection, without_connection_options
 from _hf_offline import (
     TEST_DATA_DIR,
     configure_hf_offline_environment,
-    ensure_test_data_ready_for_offline,
     should_use_hf_offline,
 )
 from _preflight import (
@@ -69,27 +68,15 @@ def _collection_judge_enabled(config: JobSpec) -> bool:
     name = parameters.get("judge_model")
     if not isinstance(name, str) or not name.strip():
         raise ValueError("parameters.judge_model must be a non-empty model name")
-    conflicting_keys = (
-        "judge_url", "judge_api_key", "judge_base_url",
-        "judge_anthropic_base_url", "judge_anthropic_api_key",
-        "grader_model", "grader_base_url",
-    )
-    for key in conflicting_keys:
-        if parameters.get(key):
-            raise ValueError(f"judge_model cannot be combined with parameters.{key}")
+    if parameters.get("grader_model"):
+        raise ValueError("judge_model cannot be combined with parameters.grader_model")
     return True
 
 
 def _collection_grader_spec(config: JobSpec, env: dict[str, str]) -> str:
     """Bind Inspect's grader role without putting credentials in CLI arguments."""
     name = config.parameters["judge_model"].strip()
-    if read_model_auth_key("judge_api-key"):
-        return grader_model_spec(name)
-    client = select_client(env, endpoint_url=config.model.url)
-    model = route_model(name, client)
-    if client == _CLIENT_OPENAI_COMPAT:
-        return json.dumps({"model": model, "model_args": {"responses_api": False}})
-    return model
+    return grader_model_spec(name)
 
 
 def redact_cmd(cmd: list[str]) -> str:
@@ -113,6 +100,10 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
     """
     env = os.environ.copy()
     p = config.parameters
+    env["EVALHUB_MODEL_URL"] = config.model.url or ""
+    # Never inherit an independent grader connection from the runtime.
+    env.pop("OPENAI_JUDGE_API_KEY", None)
+    env.pop("OPENAI_JUDGE_BASE_URL", None)
     collection_judge_enabled = _collection_judge_enabled(config)
 
     if config.model.url:
@@ -121,50 +112,27 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
         else:
             env["OPENAI_BASE_URL"] = config.model.url
 
-    # Resolve API key: sidecar-mounted secret takes precedence, then job spec
-    # parameter, then existing env var, then a dummy fallback for endpoints that
-    # don't require auth (e.g. bare vLLM without a proxy).
+    # Primary target authentication retains its existing environment fallback.
+    # Auxiliary roles resolve independently from the model Secret below.
     creds = resolve_model_credentials()
-    openai_key = creds.api_key or p.get("api_key") or env.get("OPENAI_API_KEY", "")
+    openai_key = creds.api_key or env.get("OPENAI_API_KEY", "")
     if openai_key:
         env["OPENAI_API_KEY"] = openai_key
     elif env.get("OPENAI_BASE_URL") and not env.get("OPENAI_API_KEY"):
         env["OPENAI_API_KEY"] = "local"
 
-    anthropic_key = p.get("anthropic_api_key") or env.get("ANTHROPIC_API_KEY", "")
-    if anthropic_key:
-        env["ANTHROPIC_API_KEY"] = anthropic_key
-
-    # StrongREJECT can use an independent grader endpoint and credential. The
-    # key is supplied by the runtime (e.g. a Secret-backed env var), never by a
-    # job parameter, so it is not persisted in the job spec or CLI arguments.
+    # StrongREJECT shares the judge Secret connection with the other graders.
     if p.get("grader_model") and config.benchmark_id == "inspect/strong-reject":
-        grader_key = env.get("OPENAI_JUDGE_API_KEY", "").strip()
-        if not grader_key:
-            raise ValueError(
-                "parameters.grader_model requires OPENAI_JUDGE_API_KEY in the adapter environment. "
-                "Provide it from a Kubernetes Secret; do not put API keys in the evaluation YAML."
-            )
-        env["OPENAI_JUDGE_API_KEY"] = grader_key
-        env["OPENAI_JUDGE_BASE_URL"] = (
-            p.get("grader_base_url")
-            or env.get("OPENAI_JUDGE_BASE_URL")
-            or "https://api.openai.com/v1"
+        env["OPENAI_JUDGE_BASE_URL"], env["OPENAI_JUDGE_API_KEY"] = role_connection(
+            "judge", config.model.url
         )
 
     if collection_judge_enabled:
         # The adapter receives only synthetic reference values in Kubernetes;
         # the sidecar resolves the real credential and optional upstream URL.
-        judge_key = read_model_auth_key("judge_api-key")
-        projected_url = read_model_auth_key("judge_url")
-        if projected_url and not judge_key:
-            raise ValueError("judge_url in model.auth.secret_ref requires judge_api-key")
-        if judge_key:
-            judge_url = projected_url or config.model.url
-            if not judge_url:
-                raise ValueError("judge_api-key requires judge_url or config.model.url")
-            env["OPENAI_JUDGE_API_KEY"] = judge_key
-            env["OPENAI_JUDGE_BASE_URL"] = judge_url
+        env["OPENAI_JUDGE_BASE_URL"], env["OPENAI_JUDGE_API_KEY"] = role_connection(
+            "judge", config.model.url
+        )
 
     # ANTHROPIC_BASE_URL passes through from host env.
 
@@ -273,7 +241,17 @@ def build_command(
             model_roles = dict(model_roles)
             model_roles["grader"] = _collection_grader_spec(config, env)
         for role, spec in model_roles.items():
-            cmd += ["--model-role", f"{role}={spec}"]
+            # Legacy role dictionaries may contain connection settings. Only
+            # their model selection is used; resolve the connection from Secret.
+            if isinstance(spec, dict):
+                spec = spec.get("model")
+            if not isinstance(spec, str) or not spec.strip():
+                raise ValueError("parameters.model_roles values must select a model name")
+            if _collection_judge_enabled(config) and role == "grader":
+                resolved_spec = spec
+            else:
+                resolved_spec = role_model_spec(spec, role, config.parameters, env)
+            cmd += ["--model-role", f"{role}={resolved_spec}"]
 
         # StrongREJECT's task-specific judge_llm argument otherwise bypasses
         # Inspect's named grader role. Setting it to None activates the task's
@@ -321,7 +299,8 @@ def build_command(
             value = str(value).lower()
         cmd += ["-T", f"{key}={value}"]
 
-    for key, value in config.parameters.get("model_args", {}).items():
+    model_args = without_connection_options(config.parameters.get("model_args", {}))
+    for key, value in model_args.items():
         cmd += ["-M", f"{key}={value}"]
 
     return cmd
