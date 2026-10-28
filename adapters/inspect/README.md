@@ -569,6 +569,9 @@ lands in the image. `instruction_following_eval` and `evals` are not on PyPI
 and cannot be audited by name; their Git URLs are pinned to specific upstream
 commits in `requirements.txt`.
 
-Known advisory: `nltk` 3.10.3 carries GHSA-8mgp-746c-j5xp (CVE-2026-81726) with no
-patched release yet. It affects nltk's parser and perceptron model save/load APIs,
-which nothing in this image calls. Revisit when a fixed nltk is published.
+`nltk` is pinned to 3.10.4, the first release not affected by GHSA-8mgp-746c-j5xp
+(CVE-2026-81726; every version up to 3.10.3 is affected). NLTK 3.10.4 refuses to read
+data from a directory that is group-writable or owned by another account, so the
+bundled tokenizer data lives in `/usr/local/share/nltk_data` (root-owned, 0755/0644),
+not under the writable `/app` tree. Do not bump `nltk` without re-running the
+MakeMeSay initialization check with runtime downloads disabled.
