@@ -569,6 +569,6 @@ lands in the image. `instruction_following_eval` and `evals` are not on PyPI
 and cannot be audited by name; their Git URLs are pinned to specific upstream
 commits in `requirements.txt`.
 
-Known advisory: `nltk` 3.10.3 carries GHSA-8mgp-746c-j5xp (CVE-2026-81726) with no
-patched release yet. It affects nltk's parser and perceptron model save/load APIs,
-which nothing in this image calls. Revisit when a fixed nltk is published.
+This image pins `nltk` 3.10.4 to pick up the fix for GHSA-8mgp-746c-j5xp
+(CVE-2026-81726), reported against 3.10.3. It affects nltk's parser and perceptron
+model save/load APIs, which nothing in this image calls.
