@@ -11,11 +11,17 @@ a figure is one runaway solution, and it depends on what the model wrote, which 
 it looked random.
 
 This wrapper sets ``RLIMIT_AS`` in the grader child to the address space the child
-already inherited plus ``EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB`` (default 2048, ``0``
+already inherited plus ``EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB`` (default 1024, ``0``
 turns the cap off).  The child is forked from a large process, so an absolute limit
 would be either too small for the interpreter itself or too large to matter.  A solution
 that exceeds the allowance fails that problem and the run continues.  Only the address
 space is limited: ``RLIMIT_STACK`` stays as it was.
+
+The default has to leave room in the pod: the LightEval process itself is resident at
+about 2.1 GiB, and the graded child adds up to the allowance on top of that.  With the
+4Gi limit in ``provider.yaml``, an allowance of 2048 MiB left 12 MiB of headroom at a
+2070 MiB baseline and no longer prevented an OOM kill at 2150 MiB, which is why the
+default is 1024.
 
 Applies on Linux under the ``fork`` start method (the default before Python 3.14), the
 only one under which lighteval's grader runs.
@@ -32,7 +38,7 @@ import os
 logger = logging.getLogger(__name__)
 
 _CODE_MEMORY_ENV = "EVALHUB_LIGHTEVAL_CODE_MEMORY_MIB"
-_DEFAULT_CODE_MEMORY_MIB = 2048
+_DEFAULT_CODE_MEMORY_MIB = 1024
 
 
 def _address_space_bytes() -> int | None:

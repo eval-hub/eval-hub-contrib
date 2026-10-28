@@ -78,11 +78,39 @@ def test_cap_can_be_turned_off_and_ignores_bad_values(lcb_grader, monkeypatch):
     assert lcb_grader.reliability_guard is original
 
     monkeypatch.setenv(ENV, "lots")
-    assert mod._code_memory_budget_bytes() == 2048 * 1024 * 1024
+    assert mod._code_memory_budget_bytes() == 1024 * 1024 * 1024
     monkeypatch.delenv(ENV)
-    assert mod._code_memory_budget_bytes() == 2048 * 1024 * 1024
+    assert mod._code_memory_budget_bytes() == 1024 * 1024 * 1024
     monkeypatch.setenv(ENV, "512")
     assert mod._code_memory_budget_bytes() == 512 * 1024 * 1024
+
+
+def test_default_allowance_fits_the_pod_memory_limit(monkeypatch):
+    """The graded child adds up to the allowance on top of the LightEval process, which is
+    resident at about 2.1 GiB (2070 MiB in a 175-problem run, 2121 MiB in a smaller one).  In a
+    4 GiB container a 2048 MiB allowance left 12 MiB of headroom and, at 2150 MiB, the runaway
+    solution was OOM-killed despite the cap, so the default and ``memory_limit`` in
+    ``provider.yaml`` have to be changed together."""
+    import re
+
+    import yaml
+
+    monkeypatch.delenv(ENV, raising=False)
+    allowance_mib = _load_cap_module()._code_memory_budget_bytes() // (1024 * 1024)
+
+    provider_path = Path(__file__).parent.parent / "provider.yaml"
+    provider = yaml.safe_load(provider_path.read_text())
+    limit = str(provider["runtime"]["k8s"]["memory_limit"])
+    parsed = re.fullmatch(r"(\d+)(Mi|Gi)", limit)
+    assert parsed, f"memory_limit {limit!r} is not in Mi or Gi"
+    limit_mib = int(parsed.group(1)) * (1024 if parsed.group(2) == "Gi" else 1)
+
+    lighteval_process_mib = 2250  # measured 2070 to 2121 MiB, with some room
+    margin_mib = 512
+    assert lighteval_process_mib + allowance_mib + margin_mib <= limit_mib, (
+        f"{lighteval_process_mib} MiB process + {allowance_mib} MiB allowance + {margin_mib} MiB margin "
+        f"does not fit {limit}: lower the default allowance or raise memory_limit"
+    )
 
 
 def test_cap_is_installed_once_and_leaves_an_explicit_limit_alone(lcb_grader, monkeypatch):
