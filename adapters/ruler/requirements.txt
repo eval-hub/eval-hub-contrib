@@ -18,7 +18,8 @@ openai>=1.10.0
 
 # Data generation: synthetic dataset tools
 wonderwords>=2.2
-nltk>=3.8
+# 3.10.4 is the first release without GHSA-8mgp-746c-j5xp (CVE-2026-81726)
+nltk>=3.10.4
 numpy>=1.24.0
 scipy>=1.11.0
 
