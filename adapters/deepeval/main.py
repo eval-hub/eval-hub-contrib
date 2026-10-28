@@ -299,11 +299,19 @@ class DeepEvalAdapter(FrameworkAdapter):
             model_url = config.model.url.strip().rstrip("/")
             model_name = config.model.name
             judge_name = config.parameters.get("eval_model_name") or model_name
-            for key in ("eval_model_url", "judge_url", "judge_base_url", "judge_api_key"):
-                if key in config.parameters:
+            # Old requests may still include connection fields. Ignore their
+            # values when the corresponding connection is configured in the
+            # Secret; parameters must never supply the endpoint or credential.
+            for key, secret_key in (
+                ("eval_model_url", "judge_url"),
+                ("judge_url", "judge_url"),
+                ("judge_base_url", "judge_url"),
+                ("judge_api_key", "judge_api-key"),
+            ):
+                if key in config.parameters and not read_model_auth_key(secret_key):
                     raise ValueError(
-                        f"parameters.{key} is no longer supported; "
-                        "use judge_url and judge_api-key in model.auth.secret_ref"
+                        f"parameters.{key} cannot configure the judge connection; "
+                        f"set {secret_key} in model.auth.secret_ref"
                     )
             threshold = float(config.parameters.get("threshold", 0.5))
             dataset_format = config.parameters.get("dataset_format", "csv")

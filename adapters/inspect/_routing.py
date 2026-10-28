@@ -151,6 +151,11 @@ def role_model_spec(
     if model_name.startswith("openai/"):
         model_name = model_name.removeprefix("openai/")
     elif model_name.startswith("ollama/"):
+        # Inspect's Ollama client wraps its OpenAI-compatible transport, adding
+        # Ollama-specific reasoning handling and per-endpoint concurrency limits.
+        # Its /v1 requests still use Bearer auth, so sidecar routing works with
+        # this client too. Use the explicit prefix here: the sidecar URL hides
+        # the upstream's port, so detecting Ollama by port is unreliable.
         client = _CLIENT_OLLAMA
         model_name = model_name.removeprefix("ollama/")
     if model_name.startswith("anthropic/"):

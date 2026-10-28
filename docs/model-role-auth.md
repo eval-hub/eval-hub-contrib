@@ -2,9 +2,11 @@
 
 Additional model connections belong in the job's `model.auth.secret_ref`, alongside
 the primary model credential. Model IDs remain benchmark parameters. Adapters
-reject the former inline role URL/key parameters and do not use auxiliary runtime
-environment variables to select connections. This applies to local and Kubernetes
-jobs. Existing target-only adapter authentication is outside this change.
+do not use former inline role URL/key parameters or auxiliary runtime environment
+variables to select connections. DeepEval ignores legacy connection parameters
+when their corresponding Secret entries are configured and rejects them otherwise;
+the other adapters reject inline connection parameters. This applies to local and
+Kubernetes jobs. Existing target-only adapter authentication is outside this change.
 
 | Adapter | Secret role prefixes | Model selection |
 | --- | --- | --- |
@@ -132,6 +134,10 @@ was checked for role parsing and Ollama's request transport.
 Move inline URLs/keys (including DeepEval's `eval_model_url`, CLEAR's
 `endpoint_url`/`inference_url`, Inspect's role `*_base_url`/`*_api_key`, and
 Promptfoo's generation connection parameters) to the role entries above.
+DeepEval permits old requests to retain `eval_model_url`, `judge_url`,
+`judge_base_url`, and `judge_api_key` once the corresponding `judge_url` and
+`judge_api-key` entries are present in the Secret. It ignores the parameter values
+and never uses them as a fallback for missing Secret entries.
 Remove runtime auxiliary credential/URL variables and keep only model selection
 in benchmark parameters. Inspect model-role dictionaries containing connection
 settings must become model name strings. Update any fixture generator or catalog
