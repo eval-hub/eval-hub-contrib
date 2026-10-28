@@ -132,6 +132,13 @@ for subdir in ('corpora',):
             with zipfile.ZipFile(zp) as zf:
                 zf.extractall(zp.parent)
 
+# copytree/copy2 preserve staged modes. NLTK 3.10.4 rejects group- or
+# world-writable data, so normalize after copying/extraction, before validation.
+NLTK_DIR.chmod(0o755)
+for path in NLTK_DIR.rglob('*'):
+    if not path.is_symlink():
+        path.chmod(0o755 if path.is_dir() else 0o644)
+
 # Verify using NLTK's own finder with the directory resource path —
 # matching exactly what ensure_nltk_resource() checks at runtime.
 for pkg, resource in REQUIRED.items():
@@ -160,9 +167,7 @@ RUN mkdir -p /tmp/.inspect_cache && \
     chmod -R g+rwX /app && \
     chown -R 1001:0 /opt/app-root && \
     chmod -R g+rwX /opt/app-root && \
-    chown -R 0:0 /usr/local/share/nltk_data && \
-    find /usr/local/share/nltk_data -type d -exec chmod 755 {} + && \
-    find /usr/local/share/nltk_data -type f -exec chmod 644 {} +
+    chown -R 0:0 /usr/local/share/nltk_data
 
 # ── Runtime environment ───────────────────────────────────────────────────────
 ENV PYTHONUNBUFFERED=1
