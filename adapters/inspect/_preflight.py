@@ -25,6 +25,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import logging
+import re
 import runpy
 import ssl
 import threading
@@ -47,14 +48,16 @@ MODES = ("fail", "warn", "off")
 DEFAULT_MODE = "fail"
 DEFAULT_TIMEOUT_S = 10.0
 DEFAULT_HF_ENDPOINT = "https://huggingface.co"
+_BFCL_TASK = "inspect_evals/bfcl"
+_BFCL_PREREQS_TASK = "inspect_evals/bfcl_prereqs"
 
 # Task specs that never download a dataset from the Hub or GitHub.
 _NO_PROBE_PREFIXES = ("inspect_petri/", "petri_bloom/")
 # Task specs whose dataset comes from the HuggingFace Hub.
 _HF_TASK_PREFIXES = ("inspect_evals/", "evals/")
-# Task-spec substrings that download from GitHub (not HuggingFace) even when
-# the spec falls under an _HF_TASK_PREFIXES namespace.
-_GITHUB_ONLY_TASKS = frozenset({"bfcl"})
+# Exact task specs that download from GitHub (not HuggingFace) even when the
+# spec falls under an _HF_TASK_PREFIXES namespace.
+_GITHUB_ONLY_TASKS = frozenset({_BFCL_TASK, _BFCL_PREREQS_TASK})
 
 # Source files required by the BFCL categories in the pinned inspect-evals release.
 # Keep these aligned with inspect_evals.bfcl.backends.loader.CLASS_FILE_MAPPING and
@@ -112,6 +115,9 @@ _BFCL_CATEGORY_ALIASES = {
     "memory": ("memory_kv", "memory_vector", "memory_rec_sum"),
     "web_search": ("web_search_base", "web_search_no_snippet"),
 }
+_BFCL_EAGER_LOADER_MODULES = _BFCL_MULTI_TURN_ASSETS["func_source_code"] | frozenset().union(
+    *(assets[0] for assets in _BFCL_AGENTIC_ASSETS.values())
+)
 
 
 class PreflightError(RuntimeError):
@@ -221,10 +227,7 @@ def _bfcl_required_runtime_assets(
     """Return backend modules and function docs used by the selected categories."""
     if selected_categories is None:
         return (
-            frozenset().union(
-                _BFCL_MULTI_TURN_ASSETS["func_source_code"],
-                *(assets[0] for assets in _BFCL_AGENTIC_ASSETS.values()),
-            ),
+            _BFCL_EAGER_LOADER_MODULES,
             frozenset().union(
                 _BFCL_MULTI_TURN_ASSETS["multi_turn_func_doc"],
                 *(assets[1] for assets in _BFCL_AGENTIC_ASSETS.values()),
@@ -233,6 +236,14 @@ def _bfcl_required_runtime_assets(
 
     modules: set[str] = set()
     docs: set[str] = set()
+    # Inspect-Evals 0.26.0 setup_backend_classes iterates every entry in
+    # CLASS_FILE_MAPPING when any V3/V4 category is selected. Missing an
+    # unselected module still raises FileNotFoundError during that eager load.
+    if any(
+        category.startswith("multi_turn_") or category in _BFCL_AGENTIC_ASSETS
+        for category in selected_categories
+    ):
+        modules.update(_BFCL_EAGER_LOADER_MODULES)
     for category in selected_categories:
         if category.startswith("multi_turn_"):
             modules.update(_BFCL_MULTI_TURN_ASSETS["func_source_code"])
@@ -244,8 +255,34 @@ def _bfcl_required_runtime_assets(
     return frozenset(modules), frozenset(docs)
 
 
+def _bfcl_snapshot_present(
+    bfcl_dir: Path, selected_categories: set[str], task_args: dict[str, Any] | None
+) -> bool:
+    """Return whether a requested memory snapshot exists in the cache."""
+    if not any(category.startswith("memory_") for category in selected_categories):
+        return True
+
+    snapshot_id = (task_args or {}).get("snapshot_id")
+    if snapshot_id is None or not str(snapshot_id).strip():
+        return False
+
+    # Match Inspect-Evals' sanitize_snapshot_id while keeping the result a single
+    # safe path component under model_results.
+    sanitized_id = re.sub(r"[^A-Za-z0-9._-]", "_", str(snapshot_id))
+    if sanitized_id in {"", ".", ".."}:
+        return False
+    snapshot_dir = bfcl_dir / "model_results" / sanitized_id
+    try:
+        return snapshot_dir.is_dir() and (snapshot_dir / "agentic").is_dir()
+    except OSError:
+        return False
+
+
 def _bfcl_data_present(
-    env: dict[str, str], task_args: dict[str, Any] | None = None
+    env: dict[str, str],
+    task_args: dict[str, Any] | None = None,
+    *,
+    require_snapshot: bool = False,
 ) -> bool:
     """Return True when the selected BFCL data and runtime assets are staged."""
     cache = env.get(INSPECT_EVALS_CACHE_DIR_ENV)
@@ -253,12 +290,24 @@ def _bfcl_data_present(
         return False
 
     bfcl_dir = Path(cache) / "BFCL"
-    # Mirror Inspect-Evals' own data validation so one sentinel file cannot
-    # make an incomplete staged tree look ready for an offline run.
     categories = _bfcl_category_manifest()
     if not categories:
         return False
-    for category in categories.values():
+
+    selected_categories = _bfcl_selected_categories(task_args, categories)
+    if selected_categories is None:
+        return False
+
+    # Inspect-Evals uses this file as a download canary. It must be present even
+    # when the requested category is a subset, otherwise the task downloads the
+    # full data tree from GitHub.
+    sentinel = categories.get("simple_python")
+    if sentinel is None or not (bfcl_dir / sentinel.filename).is_file():
+        return False
+
+    # Once the canary is present, Inspect-Evals only loads selected categories.
+    for category_name in selected_categories:
+        category = categories[category_name]
         if not (bfcl_dir / category.filename).is_file():
             return False
         if category.has_ground_truth_file and not (
@@ -266,9 +315,13 @@ def _bfcl_data_present(
         ).is_file():
             return False
 
-    selected_categories = _bfcl_selected_categories(task_args, categories)
+    if require_snapshot and not _bfcl_snapshot_present(
+        bfcl_dir, selected_categories, task_args
+    ):
+        return False
+
     required_modules, required_docs = _bfcl_required_runtime_assets(selected_categories)
-    if not required_modules:
+    if not required_modules and not required_docs:
         return True
 
     function_sources = bfcl_dir / "func_source_code"
@@ -284,6 +337,28 @@ def _bfcl_data_present(
         return False
 
 
+def _bfcl_prereqs_requires_github(
+    env: dict[str, str],
+) -> bool:
+    """Return whether bfcl_prereqs will attempt a GitHub download."""
+    cache = env.get(INSPECT_EVALS_CACHE_DIR_ENV)
+    if not cache:
+        return True
+
+    bfcl_dir = Path(cache) / "BFCL"
+    categories = _bfcl_category_manifest()
+    sentinel = categories.get("simple_python") if categories else None
+    if sentinel is None or not (bfcl_dir / sentinel.filename).is_file():
+        # bfcl_prereqs downloads the data directory only when this canary is absent.
+        return True
+
+    # Unlike the conversation data, backend sources are downloaded whenever this
+    # directory is absent. Missing conversation files with an existing canary
+    # cause a local cache error, not another download.
+    function_sources = bfcl_dir / "func_source_code"
+    return not function_sources.exists()
+
+
 def configure_staged_bfcl_cache(
     task_spec: str,
     env: dict[str, str],
@@ -291,12 +366,14 @@ def configure_staged_bfcl_cache(
     task_args: dict[str, Any] | None = None,
 ) -> bool:
     """Point Inspect-Evals at staged BFCL assets when the offline cache is complete."""
-    if "bfcl" not in task_spec.lower() or _bfcl_data_present(env, task_args):
+    if task_spec != _BFCL_TASK or _bfcl_data_present(
+        env, task_args, require_snapshot=True
+    ):
         return False
 
     staged_env = dict(env)
     staged_env[INSPECT_EVALS_CACHE_DIR_ENV] = str(staged_data_dir)
-    if not _bfcl_data_present(staged_env, task_args):
+    if not _bfcl_data_present(staged_env, task_args, require_snapshot=True):
         return False
 
     env[INSPECT_EVALS_CACHE_DIR_ENV] = str(staged_data_dir)
@@ -314,12 +391,16 @@ def required_urls(
     urls: list[str] = []
     if not task_spec.startswith(_NO_PROBE_PREFIXES):
         hub_offline = env.get("HF_HUB_OFFLINE") == "1" or env.get("HF_DATASETS_OFFLINE") == "1"
-        is_hf_task = task_spec.startswith(_HF_TASK_PREFIXES) and not any(
-            t in task_spec for t in _GITHUB_ONLY_TASKS
+        task_key = task_spec.lower()
+        is_hf_task = (
+            task_key.startswith(_HF_TASK_PREFIXES)
+            and task_key not in _GITHUB_ONLY_TASKS
         )
         if is_hf_task and not hub_offline:
             urls.append(env.get("HF_ENDPOINT") or DEFAULT_HF_ENDPOINT)
-        if "bfcl" in task_spec.lower() and not _bfcl_data_present(env, task_args):
+        if task_key == _BFCL_TASK and not _bfcl_data_present(env, task_args):
+            urls.append("https://github.com")
+        elif task_key == _BFCL_PREREQS_TASK and _bfcl_prereqs_requires_github(env):
             urls.append("https://github.com")
     urls += normalize_hosts(env.get(HOSTS_ENV), HOSTS_ENV)
     return list(dict.fromkeys(urls))

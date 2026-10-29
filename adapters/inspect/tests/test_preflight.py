@@ -241,7 +241,13 @@ def test_bfcl_requires_data_docs_and_selected_backend_modules(
     _write_bfcl_assets(tmp_path, bfcl_category_manifest)
     assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
 
-    _write_bfcl_runtime_assets(tmp_path, _TEST_MULTI_TURN_MODULES, _TEST_MULTI_TURN_DOCS)
+    selected_categories = pf._bfcl_selected_categories(
+        None, bfcl_category_manifest
+    )
+    required_modules, required_docs = pf._bfcl_required_runtime_assets(
+        selected_categories
+    )
+    _write_bfcl_runtime_assets(tmp_path, required_modules, required_docs)
     assert pf.required_urls("inspect_evals/bfcl", env) == []
 
     (tmp_path / "BFCL" / "multi_turn_func_doc" / "math_api.json").unlink()
@@ -252,11 +258,18 @@ def test_bfcl_requires_data_docs_and_selected_backend_modules(
     assert pf.required_urls("inspect_evals/bfcl", env) == ["https://github.com"]
 
 
-def test_bfcl_single_turn_selection_does_not_require_multiturn_assets(
+def test_bfcl_single_turn_selection_does_not_require_unselected_assets(
     tmp_path, bfcl_category_manifest
 ):
-    """A V1-only BFCL selection does not need multi-turn backend code or function docs."""
+    """A selected subset needs the canary and selected data, not unrelated categories."""
     _write_bfcl_assets(tmp_path, bfcl_category_manifest)
+    bfcl_dir = tmp_path / "BFCL"
+    for name, category in bfcl_category_manifest.items():
+        if name == "simple_python":
+            continue
+        (bfcl_dir / category.filename).unlink()
+        if category.has_ground_truth_file:
+            (bfcl_dir / category.ground_truth_filename).unlink()
     env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
 
     assert pf.required_urls(
@@ -264,10 +277,10 @@ def test_bfcl_single_turn_selection_does_not_require_multiturn_assets(
     ) == []
 
 
-def test_bfcl_agentic_selection_checks_its_own_runtime_assets(
+def test_bfcl_agentic_selection_checks_all_eagerly_loaded_modules(
     tmp_path, bfcl_category_manifest
 ):
-    """Agentic categories require their own backend module and function-doc file."""
+    """A V4 selection needs every module setup_backend_classes eagerly imports."""
     _write_bfcl_assets(tmp_path, bfcl_category_manifest)
     env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
     selection = {"categories": "memory_kv"}
@@ -278,7 +291,125 @@ def test_bfcl_agentic_selection_checks_its_own_runtime_assets(
         {"memory_kv.py", "memory_api_metaclass.py"},
         {"memory_kv.json"},
     )
+    assert pf.required_urls("inspect_evals/bfcl", env, selection) == ["https://github.com"]
+
+    required_modules, required_docs = pf._bfcl_required_runtime_assets({"memory_kv"})
+    _write_bfcl_runtime_assets(tmp_path, required_modules, required_docs)
     assert pf.required_urls("inspect_evals/bfcl", env, selection) == []
+
+
+def test_bfcl_prereqs_probes_only_when_a_download_will_run(
+    tmp_path, bfcl_category_manifest
+):
+    """Use the task's canary and directory guards to decide whether GitHub is needed."""
+    bfcl_dir = tmp_path / "BFCL"
+    sentinel = bfcl_category_manifest["simple_python"]
+    (bfcl_dir / sentinel.filename).parent.mkdir(parents=True, exist_ok=True)
+    (bfcl_dir / sentinel.filename).write_text("[]")
+    prereq_dir = bfcl_dir / "memory_prereq_conversation"
+    prereq_dir.mkdir()
+    for scenario in ("customer", "finance", "healthcare", "notetaker", "student"):
+        (prereq_dir / f"memory_{scenario}.json").write_text("{}\n")
+    modules, docs = pf._bfcl_required_runtime_assets({"memory_kv"})
+    _write_bfcl_runtime_assets(tmp_path, modules, docs)
+    env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
+    task_args = {"categories": "memory_kv"}
+
+    # Incomplete unrelated BFCL categories do not make this task download GitHub data.
+    assert pf.required_urls("inspect_evals/bfcl_prereqs", env, task_args) == []
+
+    # Missing prereq scenarios fail locally when the canary exists; they do not
+    # trigger a download, so probing GitHub would not help.
+    (prereq_dir / "memory_student.json").unlink()
+    assert pf.required_urls("inspect_evals/bfcl_prereqs", env, task_args) == []
+
+    # The dataset downloader is gated by the simple_python canary.
+    (bfcl_dir / sentinel.filename).unlink()
+    assert pf.required_urls("inspect_evals/bfcl_prereqs", env, task_args) == [
+        "https://github.com"
+    ]
+
+
+def test_bfcl_prereqs_probes_when_backend_source_directory_is_absent(
+    tmp_path, bfcl_category_manifest
+):
+    """bfcl_prereqs downloads backend source when its directory is absent."""
+    bfcl_dir = tmp_path / "BFCL"
+    sentinel = bfcl_category_manifest["simple_python"]
+    (bfcl_dir / sentinel.filename).parent.mkdir(parents=True, exist_ok=True)
+    (bfcl_dir / sentinel.filename).write_text("[]")
+    env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
+
+    assert pf.required_urls(
+        "inspect_evals/bfcl_prereqs", env, {"categories": "memory_kv"}
+    ) == ["https://github.com"]
+
+
+
+def test_configure_staged_bfcl_cache_preserves_cache_without_requested_snapshot(
+    tmp_path, bfcl_category_manifest
+):
+    """Do not redirect memory BFCL to staged data without its requested snapshot."""
+    _write_bfcl_assets(tmp_path, bfcl_category_manifest)
+    modules, docs = pf._bfcl_required_runtime_assets({"memory_kv"})
+    _write_bfcl_runtime_assets(tmp_path, modules, docs)
+    env = {}
+    task_args = {"categories": "memory_kv", "snapshot_id": "model/name"}
+
+    assert not pf.configure_staged_bfcl_cache(
+        "inspect_evals/bfcl", env, tmp_path, task_args
+    )
+    assert pf.INSPECT_EVALS_CACHE_DIR_ENV not in env
+
+    snapshot = tmp_path / "BFCL" / "model_results" / "model_name" / "agentic"
+    snapshot.mkdir(parents=True)
+    assert pf.configure_staged_bfcl_cache(
+        "inspect_evals/bfcl", env, tmp_path, task_args
+    )
+    assert env[pf.INSPECT_EVALS_CACHE_DIR_ENV] == str(tmp_path)
+
+
+def test_configure_staged_bfcl_cache_keeps_original_memory_snapshot(
+    tmp_path, bfcl_category_manifest
+):
+    """An existing requested snapshot remains usable despite unrelated missing data."""
+    original = tmp_path / "original"
+    staged = tmp_path / "staged"
+    _write_bfcl_assets(original, bfcl_category_manifest)
+    _write_bfcl_assets(staged, bfcl_category_manifest)
+
+    # The selected memory category remains complete; unrelated data is not needed
+    # once Inspect-Evals sees the simple_python download canary.
+    unselected = bfcl_category_manifest["irrelevance"]
+    (original / "BFCL" / unselected.filename).unlink()
+    modules, docs = pf._bfcl_required_runtime_assets({"memory_kv"})
+    _write_bfcl_runtime_assets(original, modules, docs)
+    _write_bfcl_runtime_assets(staged, modules, docs)
+
+    snapshot = original / "BFCL" / "model_results" / "model_name" / "agentic"
+    snapshot.mkdir(parents=True)
+    env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(original)}
+    task_args = {"categories": "memory_kv", "snapshot_id": "model/name"}
+
+    assert not pf.configure_staged_bfcl_cache(
+        "inspect_evals/bfcl", env, staged, task_args
+    )
+    assert env[pf.INSPECT_EVALS_CACHE_DIR_ENV] == str(original)
+
+
+def test_configure_staged_bfcl_cache_does_not_redirect_prereq_task(
+    tmp_path, bfcl_category_manifest
+):
+    """The prereq task owns a distinct cache contract and must not use BFCL staging."""
+    _write_bfcl_assets(tmp_path, bfcl_category_manifest)
+    modules, docs = pf._bfcl_required_runtime_assets({"memory_kv"})
+    _write_bfcl_runtime_assets(tmp_path, modules, docs)
+    env = {}
+
+    assert not pf.configure_staged_bfcl_cache(
+        "inspect_evals/bfcl_prereqs", env, tmp_path, {"categories": "memory_kv"}
+    )
+    assert pf.INSPECT_EVALS_CACHE_DIR_ENV not in env
 
 
 def test_configure_staged_bfcl_cache_points_to_test_data(
@@ -286,7 +417,13 @@ def test_configure_staged_bfcl_cache_points_to_test_data(
 ):
     """The adapter maps a complete /test_data BFCL tree to Inspect-Evals' cache root."""
     _write_bfcl_assets(tmp_path, bfcl_category_manifest)
-    _write_bfcl_runtime_assets(tmp_path, _TEST_MULTI_TURN_MODULES, _TEST_MULTI_TURN_DOCS)
+    selected_categories = pf._bfcl_selected_categories(
+        None, bfcl_category_manifest
+    )
+    required_modules, required_docs = pf._bfcl_required_runtime_assets(
+        selected_categories
+    )
+    _write_bfcl_runtime_assets(tmp_path, required_modules, required_docs)
     env = {}
 
     assert pf.configure_staged_bfcl_cache("inspect_evals/bfcl", env, tmp_path)
@@ -299,7 +436,13 @@ def test_configure_staged_bfcl_cache_does_not_use_partial_or_unrelated_data(
 ):
     """Only complete BFCL assets for the BFCL task activate the staged cache."""
     _write_bfcl_assets(tmp_path, bfcl_category_manifest)
-    _write_bfcl_runtime_assets(tmp_path, _TEST_MULTI_TURN_MODULES, _TEST_MULTI_TURN_DOCS)
+    selected_categories = pf._bfcl_selected_categories(
+        None, bfcl_category_manifest
+    )
+    required_modules, required_docs = pf._bfcl_required_runtime_assets(
+        selected_categories
+    )
+    _write_bfcl_runtime_assets(tmp_path, required_modules, required_docs)
     env = {}
 
     assert not pf.configure_staged_bfcl_cache("inspect_evals/mmlu_pro", env, tmp_path)

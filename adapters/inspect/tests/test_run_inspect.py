@@ -21,8 +21,8 @@ def _write_log_script(log_dir) -> str:
     return f"import json,pathlib; pathlib.Path({str(log_dir)!r}, 'run.json').write_text('{{}}')"
 
 
-def test_task_args_from_command_extracts_categories_only():
-    """Pass the BFCL category selection to staged-cache validation and preflight."""
+def test_task_args_from_command_extracts_bfcl_cache_args():
+    """Pass BFCL categories and memory snapshots to staged-cache validation."""
     cmd = [
         "inspect",
         "eval",
@@ -30,10 +30,13 @@ def test_task_args_from_command_extracts_categories_only():
         "-T",
         "categories=['multi_turn_base', 'simple_python']",
         "-T",
+        "snapshot_id=model/name",
+        "-T",
         "max_tasks=2",
     ]
     assert ex._task_args_from_command(cmd) == {
-        "categories": "['multi_turn_base', 'simple_python']"
+        "categories": "['multi_turn_base', 'simple_python']",
+        "snapshot_id": "model/name",
     }
 
 
