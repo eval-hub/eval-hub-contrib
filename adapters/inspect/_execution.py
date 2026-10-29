@@ -456,13 +456,13 @@ def _petri_task_flags(
 
 
 def _task_args_from_command(cmd: list[str]) -> dict[str, str]:
-    """Extract BFCL category task args from Inspect's repeated ``-T key=value`` flags."""
+    """Extract BFCL cache-selection args from Inspect's repeated ``-T key=value`` flags."""
     task_args: dict[str, str] = {}
     for index, arg in enumerate(cmd[:-1]):
         if arg != "-T":
             continue
         key, separator, value = cmd[index + 1].partition("=")
-        if separator and key == "categories":
+        if separator and key in {"categories", "snapshot_id"}:
             task_args[key] = value
     return task_args
 
