@@ -294,8 +294,24 @@ def test_bfcl_agentic_selection_checks_all_eagerly_loaded_modules(
     assert pf.required_urls("inspect_evals/bfcl", env, selection) == ["https://github.com"]
 
     required_modules, required_docs = pf._bfcl_required_runtime_assets({"memory_kv"})
+    assert "memory_api_metaclass.py" in required_modules
     _write_bfcl_runtime_assets(tmp_path, required_modules, required_docs)
     assert pf.required_urls("inspect_evals/bfcl", env, selection) == []
+
+
+def test_bfcl_multiturn_selection_does_not_require_memory_metaclass(
+    tmp_path, bfcl_category_manifest
+):
+    """The optional memory dependency must not block offline multi-turn categories."""
+    _write_bfcl_assets(tmp_path, bfcl_category_manifest)
+    selected_categories = {"multi_turn_base"}
+    required_modules, required_docs = pf._bfcl_required_runtime_assets(selected_categories)
+
+    assert "memory_api_metaclass.py" not in required_modules
+    _write_bfcl_runtime_assets(tmp_path, required_modules, required_docs)
+    env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
+
+    assert pf.required_urls("inspect_evals/bfcl", env, {"categories": "multi_turn_base"}) == []
 
 
 def test_bfcl_prereqs_probes_only_when_a_download_will_run(

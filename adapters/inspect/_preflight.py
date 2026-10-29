@@ -115,9 +115,13 @@ _BFCL_CATEGORY_ALIASES = {
     "memory": ("memory_kv", "memory_vector", "memory_rec_sum"),
     "web_search": ("web_search_base", "web_search_no_snippet"),
 }
-_BFCL_EAGER_LOADER_MODULES = _BFCL_MULTI_TURN_ASSETS["func_source_code"] | frozenset().union(
-    *(assets[0] for assets in _BFCL_AGENTIC_ASSETS.values())
-)
+# The loader tolerates this dependency module being absent. Memory categories list
+# it explicitly above, so only those selections require the staged file.
+_BFCL_OPTIONAL_LOADER_MODULES = frozenset({"memory_api_metaclass.py"})
+_BFCL_EAGER_LOADER_MODULES = (
+    _BFCL_MULTI_TURN_ASSETS["func_source_code"]
+    | frozenset().union(*(assets[0] for assets in _BFCL_AGENTIC_ASSETS.values()))
+) - _BFCL_OPTIONAL_LOADER_MODULES
 
 
 class PreflightError(RuntimeError):
