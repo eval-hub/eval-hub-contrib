@@ -9,3 +9,6 @@ guidellm[recommended]==0.5.3
 # Required dependencies
 requests==2.33.1
 pydantic==2.12.5
+
+certifi>=2026.10.23
+pip>=26.2.2
