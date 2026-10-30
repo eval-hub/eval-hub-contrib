@@ -16,9 +16,12 @@ jobs:
       fail-fast: false
       matrix:
         adapter:
+          - atif
           - clear
+          - databench
           - deepeval
           - evalhub-post-processor
+          - followbench
           - guidellm
           - ifbench
           - inspect
