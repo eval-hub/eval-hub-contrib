@@ -114,3 +114,29 @@ def test_guidellm_primary_score_override(monkeypatch):
     results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
 
     assert results.overall_score == 420.0
+
+
+def test_guidellm_subprocess_diagnostics_are_reported_in_failure_status(monkeypatch):
+    """Propagate bounded subprocess diagnostics through the failed status callback."""
+    adapter = GuideLLMAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+    callbacks.create_oci_artifact.return_value = OCIArtifactResult(
+        digest="sha256:fake", reference="fake:latest",
+    )
+    diagnostic = (
+        "GuideLLM failed with exit code 1\n"
+        "Last subprocess output (stdout/stderr):\nHTTP 429: rate limit exceeded"
+    )
+
+    def fail_with_diagnostics(_cmd):
+        """Simulate a GuideLLM subprocess failure with captured output."""
+        raise RuntimeError(diagnostic)
+
+    monkeypatch.setattr(adapter, "_run_guidellm", fail_with_diagnostics)
+
+    with pytest.raises(RuntimeError, match="GuideLLM failed with exit code 1"):
+        adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    failure = callbacks.report_status.call_args_list[-1].args[0]
+    assert failure.status.value == "failed"
+    assert failure.error_message.message == diagnostic

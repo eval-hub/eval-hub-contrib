@@ -58,7 +58,7 @@ from _benchmarks import (
 from _bloom import bloom_prepare
 from _execution import build_command, build_env, get_inspect_version, redact_cmd, run_inspect
 from _hf_offline import ensure_test_data_ready_for_offline
-from _results import compute_overall_score, extract_results, parse_log
+from _results import compute_overall_score, extract_results, parse_log, resolve_primary_score
 from _routing import (
     build_role_spec,
     role_model_spec,
@@ -129,6 +129,8 @@ class InspectAdapter(FrameworkAdapter):
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         start_time = time.time()
+        # Capture before _validate_config rewrites inspect/custom → task name.
+        catalog_benchmark_id = config.benchmark_id
         mode = self._detect_mode(config.benchmark_id)
         logger.info(f"Starting Inspect job {config.id} | benchmark={config.benchmark_id} | mode={mode}")
 
@@ -186,7 +188,20 @@ class InspectAdapter(FrameworkAdapter):
             )
 
             evaluation_results, _, num_samples = extract_results(eval_log, config.benchmark_id, mode)
-            overall_score = compute_overall_score(evaluation_results, mode, config.benchmark_id)
+            overall_score = compute_overall_score(evaluation_results, mode, catalog_benchmark_id)
+            job_primary = getattr(config, "primary_score", None)
+            resolved_primary_score = resolve_primary_score(
+                evaluation_results,
+                mode=mode,
+                benchmark_id=catalog_benchmark_id,
+                job_primary=job_primary,
+            )
+            if resolved_primary_score is not None:
+                logger.info(
+                    "Resolved primary_score metric=%s (catalog_benchmark_id=%s)",
+                    resolved_primary_score.metric,
+                    catalog_benchmark_id,
+                )
             logger.info(f"Post-processing complete | samples={num_samples} | overall_score={overall_score}")
 
             oci_artifact = None
@@ -226,6 +241,7 @@ class InspectAdapter(FrameworkAdapter):
                 model_name=config.model.name,
                 results=evaluation_results,
                 overall_score=overall_score,
+                primary_score=resolved_primary_score,
                 num_examples_evaluated=num_samples,
                 duration_seconds=time.time() - start_time,
                 completed_at=datetime.now(UTC),
@@ -446,6 +462,9 @@ def main() -> None:
         logger.info(f"Overall score: {results.overall_score}")
         logger.info(f"Samples evaluated: {results.num_examples_evaluated}")
 
+        # JobResults.primary_score (set by the adapter) is preferred by
+        # report_results for the completed event; callbacks keep the job/catalog
+        # primary as fallback for adapters that do not set results.primary_score.
         callbacks.report_results(results)
         sys.exit(0)
 

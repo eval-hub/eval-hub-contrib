@@ -149,6 +149,15 @@ Point `test_data_ref.s3` at `s3://<bucket>/mmlu-pro-hf/`. Any S3-compatible stor
 this flow was verified against RustFS (upload, download into `/test_data`, then a run with
 the internet blackholed).
 
+BFCL downloads its assets from GitHub rather than the HuggingFace Hub. For a disconnected
+run, stage the complete BFCL data tree under `/test_data/BFCL`, including every question
+file and applicable ground-truth file expected by the category manifest in the pinned
+`inspect-evals` release. Categories that use multi-turn or agentic backends also require
+all corresponding files under `func_source_code/` and `multi_turn_func_doc/`; the adapter
+checks the selected `categories` task argument (or Inspect-Evals' default categories)
+before setting `INSPECT_EVALS_CACHE_DIR=/test_data` and skipping GitHub preflight. A partial
+cache continues to require GitHub and fails fast offline with the default `preflight` mode.
+
 When online, the adapter reads an
 `hf-token` secret mounted at `/var/run/secrets/model/hf-token` and injects it as
 `HF_TOKEN` and `HUGGING_FACE_HUB_TOKEN`. Sidecar `:ref` placeholders are ignored.
@@ -174,7 +183,7 @@ Hosts probed (a ranged `GET`, `Range: bytes=0-0`, body not read; any HTTP answer
 | Task | Host |
 |---|---|
 | `inspect_evals/*`, `evals/*` | `$HF_ENDPOINT`, default `https://huggingface.co` (skipped when `HF_HUB_OFFLINE=1`) |
-| `inspect_evals/bfcl*` | `https://github.com` (skipped once BFCL data is in `$INSPECT_EVALS_CACHE_DIR/BFCL`) |
+| `inspect_evals/bfcl*` | `https://github.com` (skipped when pinned BFCL data files and the selected categories' backend modules/function docs are present in `$INSPECT_EVALS_CACHE_DIR/BFCL`) |
 | any, optional | URLs you list in `preflight_hosts` |
 
 Petri, Bloom and custom task files are not probed unless you list hosts.
@@ -540,10 +549,13 @@ make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
 
 Direct dependencies are pinned in `requirements.txt` (`inspect-ai`,
 `inspect-evals`, `inspect-petri`, `petri-bloom`, `openai`, `nltk`; `eval-hub-sdk[adapter]`
-is a compatible-release pin). The two dependencies not published on PyPI
-(`evals`, `instruction_following_eval`) are pinned to upstream Git commits there.
+is a compatible-release pin). The one dependency not published on PyPI
+(`evals`) is pinned to an upstream Git commit there.
 `constraints.txt` pins the full transitive tree, and the Containerfile installs
 with both, so an image rebuild reproduces the same dependency set.
+
+The `ifeval` task from `inspect-evals` is not available in this image: it needs
+`instruction_following_eval`, which is not on PyPI and is no longer installed.
 
 ### Updating dependencies
 
@@ -565,10 +577,9 @@ pip-audit -r /tmp/inspect-pins.txt --no-deps --disable-pip
 
 The repository's Trivy filesystem scan only sees versions that are pinned, which
 is why the pins matter: with open-ended `>=` ranges it cannot see what actually
-lands in the image. `instruction_following_eval` and `evals` are not on PyPI
-and cannot be audited by name; their Git URLs are pinned to specific upstream
-commits in `requirements.txt`.
+lands in the image. `evals` is not on PyPI and cannot be audited by name; its
+Git URL is pinned to a specific upstream commit in `requirements.txt`.
 
-Known advisory: `nltk` 3.10.3 carries GHSA-8mgp-746c-j5xp (CVE-2026-81726) with no
-patched release yet. It affects nltk's parser and perceptron model save/load APIs,
-which nothing in this image calls. Revisit when a fixed nltk is published.
+This image pins `nltk` 3.10.4 to pick up the fix for GHSA-8mgp-746c-j5xp
+(CVE-2026-81726), reported against 3.10.3. It affects nltk's parser and perceptron
+model save/load APIs, which nothing in this image calls.

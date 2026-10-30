@@ -336,7 +336,7 @@ test-lighteval:
 	@echo "Running LightEval adapter tests..."
 	cd adapters/lighteval && \
 	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
-	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt --override requirements-overrides.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ LightEval tests passed"
 
@@ -430,7 +430,8 @@ test-ruler:
 	cd adapters/ruler && \
 	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
-	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	.venv/bin/python -c 'from pathlib import Path; import nltk; [nltk.download(resource, download_dir=".venv/nltk_data", raise_on_error=True) for resource in ("punkt", "punkt_tab") if not (Path(".venv/nltk_data/tokenizers") / resource).is_dir()]' && \
+	NLTK_DATA="$$(pwd)/.venv/nltk_data" PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ RULER tests passed"
 
 .PHONY: image-nemo-guardrails

@@ -1,9 +1,8 @@
 name: Verify adapter requirements
 
 # Verifies that every pinned distribution in the affected adapter's
-# requirements file exists on the Red Hat package index. The index URL is a
-# repository secret so the same workflow can target another channel without a
-# code change.
+# requirements file exists on the Red Hat package index. The index is public and
+# read-only, so its URL is hardcoded below rather than supplied as a secret.
 
 on:
   push:
@@ -39,7 +38,7 @@ jobs:
             python-version: '3.12'
           - adapter: lighteval
             file: adapters/lighteval/requirements.txt
-            python-version: '3.11'
+            python-version: '3.12'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -73,22 +72,12 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Require PYTHON_INDEX
-        if: steps.changed.outputs.changed == 'true'
-        env:
-          PYTHON_INDEX: ${{ secrets.PYTHON_INDEX }}
-        run: |
-          if [ -z "$PYTHON_INDEX" ]; then
-            echo "::error::PYTHON_INDEX is not set; refusing to fall back to PyPI."
-            exit 1
-          fi
-
       - name: Verify ${{ matrix.file }}
         if: steps.changed.outputs.changed == 'true'
         uses: ruivieira/basic-ops-tasks@5b0fe5ca94646478a36d10e248ff08a1db67ed02 # basic-ops-tasks main, python-index mode
         with:
           mode: python-index
           requirements-file: ${{ matrix.file }}
-          index-url: ${{ secrets.PYTHON_INDEX }}
+          index-url: https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
           python-version: ${{ matrix.python-version }}
           timeout-seconds: '60'

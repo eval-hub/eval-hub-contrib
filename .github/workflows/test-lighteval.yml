@@ -17,12 +17,12 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Install runtime and test dependencies
         working-directory: adapters/lighteval
-        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt --override requirements-overrides.txt
       - name: Run tests
         working-directory: adapters/lighteval
         run: pytest tests/ -v -m "not local"
@@ -36,12 +36,12 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Install all dependencies
         working-directory: adapters/lighteval
-        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt --override requirements-overrides.txt
       - name: Install Ollama
         run: curl -fsSL https://ollama.com/install.sh | sh
       - name: Cache Ollama model
@@ -68,12 +68,12 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Install all dependencies
         working-directory: adapters/lighteval
-        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt --override requirements-overrides.txt
       - name: Cache HuggingFace models
         uses: actions/cache@v6
         with:
