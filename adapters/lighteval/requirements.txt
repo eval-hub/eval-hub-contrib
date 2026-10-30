@@ -29,3 +29,7 @@ xxhash<4
 
 # EvalHub SDK (framework adapter with adapter extra only)
 eval-hub-sdk[adapter]~=1.0.6
+
+# CA bundle floor, matching the inspect adapter. requests/httpx trust certifi's
+# cacert.pem rather than the system store; the downstream lock pins it exactly.
+certifi>=2026.10.23
