@@ -16,3 +16,8 @@ evals @ git+https://github.com/gsma-labs/evals.git@708f1c5498793536824eae9919ae0
 # no network access required at runtime.
 # Use the security update available in the AIPCC index.
 nltk==3.10.4
+# CA bundle and installer floors. requests/httpx trust certifi's cacert.pem rather than
+# the system store, and pip verifies through truststore on 3.12; both are pinned in
+# constraints.txt for the image and floated here for upstream consumers.
+certifi>=2026.10.23
+pip>=26.2.2
