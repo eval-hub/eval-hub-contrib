@@ -54,7 +54,7 @@ _BFCL_PREREQS_TASK = "inspect_evals/bfcl_prereqs"
 # Task specs that never download a dataset from the Hub or GitHub.
 _NO_PROBE_PREFIXES = ("inspect_petri/", "petri_bloom/")
 # Task specs whose dataset comes from the HuggingFace Hub.
-_HF_TASK_PREFIXES = ("inspect_evals/", "evals/")
+_HF_TASK_PREFIXES = ("inspect_evals/",)
 # Exact task specs that download from GitHub (not HuggingFace) even when the
 # spec falls under an _HF_TASK_PREFIXES namespace.
 _GITHUB_ONLY_TASKS = frozenset({_BFCL_TASK, _BFCL_PREREQS_TASK})
