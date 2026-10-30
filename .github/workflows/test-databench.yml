@@ -15,7 +15,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - uses: actions/setup-python@v7.1.0
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Install dependencies
         working-directory: adapters/databench
         run: uv pip install --system -r requirements.txt -r requirements-test.txt
