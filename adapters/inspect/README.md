@@ -15,11 +15,10 @@ The auditing tools and scaffold integration include:
 
 ## Benchmarks
 
-The contrib `provider.yaml` registers **79 benchmark IDs**: 36 Petri alignment
-audits, 2 Bloom suites, 36 inspect-evals tasks, 4 Open-Telco tasks (TeleMath,
-TeleQnA, TeleLogs, 3GPP-TSG), and 1 custom task.
+The contrib `provider.yaml` registers **76 benchmark IDs**: 36 Petri alignment
+audits, 2 Bloom suites, 37 inspect-evals tasks, and 1 custom task.
 
-The adapter's task maps support **83 IDs**, including four additional IDs absent
+The adapter's task maps support **79 IDs**, including four additional IDs absent
 from this provider file: `inspect/hle`, `inspect/bfcl`, `inspect/docvqa`, and
 `inspect/cyberseceval-2-pi`. To expose these through EvalHub, the deployed provider
 configuration must register them.
@@ -83,15 +82,6 @@ All 38 Petri judge dimensions are captured as individual metrics.
 
 `inspect/gsm8k` · `inspect/math` · `inspect/aime2024` · `inspect/aime2025`
 
-### Telecom (GSMA Open-Telco)
-
-| Benchmark ID | Description |
-|---|---|
-| `telemath` | Telecom numerical math reasoning. Set `full=true` for `GSMA/ot-full` (500 Q&A); cap with `num_examples`. |
-| `teleqna` | Telecom multiple-choice domain knowledge. Set `full=true`; optional `subject` (default `full`). |
-| `telelogs` | 5G root-cause analysis. Set `full=true`; `eval_type` soft (default) or hard. |
-| `3gpp-tsg` | 3GPP working-group classification. Set `full=true`; cap with `num_examples`. |
-
 ### Knowledge & Reasoning
 
 `inspect/mmlu` · `inspect/mmlu-pro` · `inspect/gpqa` · `inspect/bbh` · `inspect/arc` · `inspect/hellaswag` · `inspect/winogrande` · `inspect/truthfulqa` · `inspect/simpleqa`
@@ -123,8 +113,8 @@ Petri and Bloom modes do not use a sandbox.
 
 ### HuggingFace datasets
 
-Some inspect-evals benchmarks (e.g. `humaneval`, `mmlu`) and Open-Telco tasks
-(`telemath`) load datasets from the HuggingFace Hub unless offline data is staged.
+Some inspect-evals benchmarks (e.g. `humaneval`, `mmlu`) load datasets from the
+HuggingFace Hub unless offline data is staged.
 
 On disconnected clusters, configure **`test_data_ref.s3`** (or PVC/git) on the
 benchmark so Eval Hub syncs a Hugging Face cache layout into **`/test_data`**.
@@ -238,11 +228,6 @@ expensive; set `num_examples` to raise or lower the cap.
 warning; `num_examples` wins if both are set. Note that Inspect's own
 `--max-samples` flag controls how many samples run *in parallel*, not how many
 are evaluated, which is why the name is being retired here.
-
-Open-Telco dataset size is controlled via `parameters.full`
-(`true` → `GSMA/ot-full`, `false` → `GSMA/ot-lite`). TeleQnA also accepts
-`parameters.subject` (default in the task is `full` = all subjects). TeleLogs
-accepts `parameters.eval_type` (`soft` or `hard`).
 
 ---
 
@@ -481,7 +466,7 @@ Environment: `ANTHROPIC_API_KEY=sk-ant-...` (for auditor), `OPENAI_BASE_URL` set
 | `num_examples` | `5` (Petri/Bloom) | Cap scenarios/samples via EvalHub `benchmarks[].parameters.num_examples` (JobSpec `num_examples` → Inspect `--limit`; Petri/Bloom default to 5 when unset, standard benchmarks are unbounded) |
 | `seed_instructions` | *(from benchmark_id)* | Override seed selection (`tags:deception`, `id:seed_name`, inline text) |
 | `judge_dimensions` | *(all 38)* | Filter judge dimensions (`tags:safety` or custom directory) |
-| `task_args` | `{}` | Escape hatch for non–first-class Inspect `-T` flags (e.g. Dish `dish_scaffold`). Not for Open-Telco `full`. |
+| `task_args` | `{}` | Escape hatch for Inspect `-T` flags that are not first-class parameters (e.g. Dish `dish_scaffold`). |
 
 ## Bloom-specific parameters
 

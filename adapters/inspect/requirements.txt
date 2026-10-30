@@ -8,9 +8,6 @@ openai==3.24.0
 inspect-evals[math,bfcl]==0.26.0
 inspect-petri==3.1.1
 petri-bloom==0.2.6
-# GSMA Open-Telco Inspect tasks (TeleMath, TeleQnA, …) — registers as evals/*
-# Not on PyPI; pin the v1.1.0 upstream source commit.
-evals @ git+https://github.com/gsma-labs/evals.git@708f1c5498793536824eae9919ae003f13c910ea
 # Required by inspect_evals/makemesay for word tokenization and lemmatization.
 # Data (punkt, punkt_tab, wordnet) is pre-seeded in the image at build time —
 # no network access required at runtime.
