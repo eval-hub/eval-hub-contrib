@@ -549,10 +549,13 @@ make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
 
 Direct dependencies are pinned in `requirements.txt` (`inspect-ai`,
 `inspect-evals`, `inspect-petri`, `petri-bloom`, `openai`, `nltk`; `eval-hub-sdk[adapter]`
-is a compatible-release pin). The two dependencies not published on PyPI
-(`evals`, `instruction_following_eval`) are pinned to upstream Git commits there.
+is a compatible-release pin). The one dependency not published on PyPI
+(`evals`) is pinned to an upstream Git commit there.
 `constraints.txt` pins the full transitive tree, and the Containerfile installs
 with both, so an image rebuild reproduces the same dependency set.
+
+The `ifeval` task from `inspect-evals` is not available in this image: it needs
+`instruction_following_eval`, which is not on PyPI and is no longer installed.
 
 ### Updating dependencies
 
@@ -574,9 +577,8 @@ pip-audit -r /tmp/inspect-pins.txt --no-deps --disable-pip
 
 The repository's Trivy filesystem scan only sees versions that are pinned, which
 is why the pins matter: with open-ended `>=` ranges it cannot see what actually
-lands in the image. `instruction_following_eval` and `evals` are not on PyPI
-and cannot be audited by name; their Git URLs are pinned to specific upstream
-commits in `requirements.txt`.
+lands in the image. `evals` is not on PyPI and cannot be audited by name; its
+Git URL is pinned to a specific upstream commit in `requirements.txt`.
 
 This image pins `nltk` 3.10.4 to pick up the fix for GHSA-8mgp-746c-j5xp
 (CVE-2026-81726), reported against 3.10.3. It affects nltk's parser and perceptron
