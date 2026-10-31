@@ -1,0 +1,5 @@
+# NVIDIA SkillEvaluator v0.6.0 (Apache-2.0, Experimental). Not published on PyPI, so it is
+# installed from the release commit; bump together with tests/fixtures/ (see README, "Upgrading").
+# Installed into its own venv in the Containerfile and driven through its CLI only, so its
+# dependency stack never constrains the adapter's.
+skillevaluator @ git+https://github.com/NVIDIA/SkillEvaluator.git@5320d9329c36ecc72bc94c4f58cc813d6b54224b

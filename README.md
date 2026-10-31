@@ -22,6 +22,7 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [RULER](https://github.com/NVIDIA/RULER) | `quay.io/evalhub/community-ruler:latest` | ✓ | NVIDIA RULER long-context benchmark — 13 synthetic tasks across needle-in-a-haystack, variable tracking, aggregation, and QA at configurable context lengths |
 | [WildGuard](https://arxiv.org/abs/2406.18495) | `quay.io/evalhub/community-wildguard:latest` | ✓ | AllenAI safety classification benchmark — evaluates a model's ability to classify prompt+response pairs as safe or unsafe, reporting accuracy and per-class recall |
 | [IFBench](https://arxiv.org/abs/2507.02833) | `quay.io/evalhub/community-ifbench:latest` | ✓ | AllenAI precise instruction-following benchmark — 58 OOD verifiable constraints with programmatic scoring (prompt-level loose accuracy) |
+| [SkillEvaluator](https://github.com/NVIDIA/SkillEvaluator) | `quay.io/evalhub/community-skillevaluator:latest` | ✓ | NVIDIA agent-skill evaluation (Tier 1 static checks): skill quality score, SkillSpector static security scan, PII and secret scan. Skill staged via `test_data_ref`; no model call |
 | [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) | `quay.io/eval-hub/community-nemo-guardrails:latest` | ✓ | Safety rail evaluation — prompt injection and toxicity detection benchmarks |
 | [ToolEval](https://github.com/OpenBMB/ToolBench) | `quay.io/evalhub/community-tooleval:latest` | ✓ | Tool-use sequencing / multi-step planning (tool server image separate) |
 | [FollowBench](https://github.com/YJiangcm/FollowBench) | `quay.io/evalhub/community-followbench:latest` | ✓ | Multi-level instruction-following benchmark with HSR, SSR, and CSL metrics |
@@ -47,6 +48,7 @@ MLflow `Yes` means both metrics and artifacts; `Yes (metrics only)` indicates pa
 | [promptfoo](adapters/promptfoo/main.py) | Yes | Yes |
 | [ragas](adapters/ragas/main.py) | Yes | Yes |
 | [ruler](adapters/ruler/main.py) | Yes | Yes |
+| [skillevaluator](adapters/skillevaluator/main.py) | Yes | Yes |
 | [swebench](adapters/swebench/main.py) | Yes | Yes |
 | [tooleval](adapters/tooleval/main.py) | Yes | Yes |
 | [wildguard](adapters/wildguard/main.py) | No | No |
@@ -145,6 +147,18 @@ Score guide: 0.5 or below is near random chance; 0.85 or above is strong perform
 | `request_timeout` | `120` | Per-request timeout in seconds |
 
 See [adapters/wildguard/README.md](adapters/wildguard/README.md) for full documentation and example job specs.
+
+### SkillEvaluator
+
+The SkillEvaluator adapter integrates [NVIDIA SkillEvaluator](https://github.com/NVIDIA/SkillEvaluator) (Apache-2.0, Experimental) to evaluate **agent skills** (a directory with `SKILL.md`). It runs the Tier 1 static checks through the pinned CLI and maps the JSON report to EvalHub metrics. The skill is staged through `test_data_ref`; no model is called and no skill content is executed.
+
+- **`skill-quality`**: composite 0-100 quality score with A-F grade and four weighted dimensions.
+- **`skill-security`**: SkillSpector static security analysis (not a complete malicious-skill detector).
+- **`skill-pii`**: personal data, credential and network-identifier scan.
+
+An incomplete scan never becomes a score of `0.0`: by default the job fails with `scan_incomplete`.
+
+See [adapters/skillevaluator/README.md](adapters/skillevaluator/README.md) for parameters, the security model and the roadmap (LLM stages, Tier 3 live evaluation).
 
 ## IFBench Adapter
 

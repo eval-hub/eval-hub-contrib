@@ -1,0 +1,4 @@
+# NVIDIA SkillSpector v2.12.0 (Apache-2.0): the static scanner behind `skillevaluator security-scan`.
+# This is the version SkillEvaluator v0.6.0 documents and prompts for (v2.13.0 exists but is untested here).
+# Not published on PyPI; pinned to the release commit and installed into its own venv.
+skillspector @ git+https://github.com/NVIDIA/SkillSpector.git@c7958a3268d9498644b22edb75d0f051bbc8cbfc
