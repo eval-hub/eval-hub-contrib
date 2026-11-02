@@ -58,11 +58,12 @@ class Sources:
         return {p.name: p.read_text().strip() for p in directory.iterdir() if p.is_file()}
 
     def download(self, ref: dict, destination: Path, *, staged_name: str | None = None) -> Path:
-        """Materialize one validated reference into an isolated directory."""
+        """Return a runtime-staged input or materialize a source through its permitted downloader."""
         kind = source_type(ref)
         if kind == "eval_job":
             raise ValueError("eval_job must first be resolved into individual benchmark artifacts")
         if kind in {"s3", "git", "hf", "pvc"}:
+            # Role names identify final paths; Kubernetes has already applied PVC subpaths.
             staged = os.getenv("EVALHUB_POST_PROCESSOR_DATA_PATHS")
             if staged is not None:
                 try:
@@ -77,6 +78,7 @@ class Sources:
                 if not isinstance(raw_path, str) or not raw_path:
                     raise ValueError(f"Invalid staged path for {staged_name}")
                 path = Path(raw_path)
+                # Treat invalid runtime mappings as errors rather than falling back to a network download.
                 if not path.is_absolute() or path.is_symlink() or not path.exists():
                     raise ValueError(f"Staged data for {staged_name} is missing or invalid")
                 return path
