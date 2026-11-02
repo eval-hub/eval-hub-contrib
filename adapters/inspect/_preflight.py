@@ -38,8 +38,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from platformdirs import user_cache_dir
-
 logger = logging.getLogger(__name__)
 
 MODE_ENV = "INSPECT_PREFLIGHT"
@@ -406,11 +404,15 @@ def _cyberseceval_prompt_injection_cache_file(cache_dir: str | Path) -> Path:
 
 
 def _inspect_evals_cache_dir(env: dict[str, str]) -> Path:
-    """Resolve Inspect-Evals' configured cache or its platform default."""
+    """Resolve Inspect-Evals' configured cache or its Linux platform default."""
     configured = env.get(INSPECT_EVALS_CACHE_DIR_ENV)
     if configured:
         return Path(configured).expanduser()
-    return Path(user_cache_dir("inspect_evals"))
+    cache_home = env.get("XDG_CACHE_HOME")
+    if cache_home:
+        return Path(cache_home) / "inspect_evals"
+    home = Path(env.get("HOME") or Path.home()).expanduser()
+    return home / ".cache" / "inspect_evals"
 
 
 def _cyberseceval_prompt_injection_data_present(env: dict[str, str]) -> bool:

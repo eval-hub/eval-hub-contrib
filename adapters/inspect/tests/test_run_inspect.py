@@ -240,7 +240,11 @@ def test_run_inspect_uses_staged_cyberseceval_cache_before_preflight(
     log_dir.mkdir()
     (log_dir / "run.json").write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(ex, "TEST_DATA_DIR", str(tmp_path))
-    env = {"HF_HUB_OFFLINE": "1", "INSPECT_PREFLIGHT": "fail"}
+    env = {
+        "HF_HUB_OFFLINE": "1",
+        "INSPECT_PREFLIGHT": "fail",
+        "XDG_CACHE_HOME": str(tmp_path / "default-cache"),
+    }
 
     result = ex.run_inspect(
         ["/bin/true", "eval", "inspect_evals/cyse2_prompt_injection"],
@@ -266,7 +270,11 @@ def test_run_inspect_fails_before_launch_when_offline_cyberseceval_data_is_missi
     with pytest.raises(RuntimeError, match="Offline CyberSecEval 2.*test_data_ref"):
         ex.run_inspect(
             ["inspect", "eval", "inspect_evals/cyse2_prompt_injection"],
-            {"HF_HUB_OFFLINE": "1", "INSPECT_PREFLIGHT": "off"},
+            {
+                "HF_HUB_OFFLINE": "1",
+                "INSPECT_PREFLIGHT": "off",
+                "XDG_CACHE_HOME": str(tmp_path / "default-cache"),
+            },
             tmp_path,
         )
 

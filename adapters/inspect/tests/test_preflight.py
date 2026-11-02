@@ -234,18 +234,18 @@ def test_bfcl_needs_github_not_huggingface():
     assert pf.required_urls("inspect_evals/bfcl", {}) == ["https://github.com"]
 
 
-def test_cyberseceval_prompt_injection_probes_raw_github_when_not_cached():
+def test_cyberseceval_prompt_injection_probes_raw_github_when_not_cached(tmp_path):
     """CyberSecEval 2 loads its dataset from a pinned raw GitHub URL, not the Hub."""
-    assert pf.required_urls("inspect_evals/cyse2_prompt_injection", {}) == [
+    env = {"XDG_CACHE_HOME": str(tmp_path)}
+    assert pf.required_urls("inspect_evals/cyse2_prompt_injection", env) == [
         "https://raw.githubusercontent.com"
     ]
 
 
 def test_configure_staged_cyberseceval_cache_uses_exact_pinned_file(
-    tmp_path, monkeypatch
+    tmp_path,
 ):
     """A staged cache uses the exact inspect-evals URL-hash filename and avoids GitHub probes."""
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "default-cache"))
     cache_file = pf._cyberseceval_prompt_injection_cache_file(tmp_path)
     expected_hash = hashlib.sha256(
         pf._CYBERSECEVAL_PROMPT_INJECTION_URL.encode("utf-8")
@@ -255,7 +255,10 @@ def test_configure_staged_cyberseceval_cache_uses_exact_pinned_file(
     )
     cache_file.parent.mkdir(parents=True)
     cache_file.write_text("[]\n", encoding="utf-8")
-    env = {"HF_HUB_OFFLINE": "1"}
+    env = {
+        "HF_HUB_OFFLINE": "1",
+        "XDG_CACHE_HOME": str(tmp_path / "default-cache"),
+    }
 
     assert pf.configure_staged_cyberseceval_cache(
         "inspect_evals/cyse2_prompt_injection", env, tmp_path
@@ -265,17 +268,25 @@ def test_configure_staged_cyberseceval_cache_uses_exact_pinned_file(
 
 
 def test_cyberseceval_uses_inspect_evals_default_cache_when_env_is_unset(
-    tmp_path, monkeypatch
+    tmp_path,
 ):
     """The preflight honors the same platform default cache as Inspect-Evals."""
     cache_root = tmp_path / "xdg-cache" / "inspect_evals"
     cache_file = pf._cyberseceval_prompt_injection_cache_file(cache_root)
     cache_file.parent.mkdir(parents=True)
     cache_file.write_text("[]\n", encoding="utf-8")
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
+    env = {"XDG_CACHE_HOME": str(tmp_path / "xdg-cache")}
 
-    assert pf._inspect_evals_cache_dir({}) == cache_root
-    assert pf.required_urls("inspect_evals/cyse2_prompt_injection", {}) == []
+    assert pf._inspect_evals_cache_dir(env) == cache_root
+    assert pf.required_urls("inspect_evals/cyse2_prompt_injection", env) == []
+
+
+def test_cyberseceval_uses_configured_cache_directory(tmp_path):
+    """INSPECT_EVALS_CACHE_DIR takes precedence over the platform default."""
+    configured_cache = tmp_path / "configured"
+    assert pf._inspect_evals_cache_dir(
+        {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(configured_cache)}
+    ) == configured_cache
 
 
 def test_cyberseceval_empty_cache_file_is_not_ready(tmp_path):
@@ -298,14 +309,16 @@ def test_cyberseceval_empty_cache_file_is_not_ready(tmp_path):
 
 
 def test_configure_staged_cyberseceval_cache_fails_early_when_offline_file_is_missing(
-    tmp_path, monkeypatch,
+    tmp_path,
 ):
     """Offline runs fail clearly instead of letting Inspect-Evals retry a remote download."""
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "default-cache"))
     with pytest.raises(RuntimeError, match="Offline CyberSecEval 2.*test_data_ref"):
         pf.configure_staged_cyberseceval_cache(
             "inspect_evals/cyse2_prompt_injection",
-            {"HF_DATASETS_OFFLINE": "1"},
+            {
+                "HF_DATASETS_OFFLINE": "1",
+                "XDG_CACHE_HOME": str(tmp_path / "default-cache"),
+            },
             tmp_path,
         )
 
