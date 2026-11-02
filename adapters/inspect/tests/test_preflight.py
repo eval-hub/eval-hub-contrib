@@ -1,5 +1,6 @@
 """Tests for the fail-fast network pre-flight (_preflight.py)."""
 
+import hashlib
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -231,6 +232,54 @@ def _write_bfcl_runtime_assets(root, modules, docs):
 def test_bfcl_needs_github_not_huggingface():
     """BFCL downloads from GitHub, not HuggingFace; HF must never be probed for it."""
     assert pf.required_urls("inspect_evals/bfcl", {}) == ["https://github.com"]
+
+
+def test_cyberseceval_prompt_injection_probes_raw_github_when_not_cached():
+    """CyberSecEval 2 loads its dataset from a pinned raw GitHub URL, not the Hub."""
+    assert pf.required_urls("inspect_evals/cyse2_prompt_injection", {}) == [
+        "https://raw.githubusercontent.com"
+    ]
+
+
+def test_configure_staged_cyberseceval_cache_uses_exact_pinned_file(tmp_path):
+    """A staged cache uses the exact inspect-evals URL-hash filename and avoids GitHub probes."""
+    cache_file = pf._cyberseceval_prompt_injection_cache_file(tmp_path)
+    expected_hash = hashlib.sha256(
+        pf._CYBERSECEVAL_PROMPT_INJECTION_URL.encode("utf-8")
+    ).hexdigest()[:32]
+    assert cache_file == (
+        tmp_path / "cyberseceval_2" / f"prompt_injection_{expected_hash}.json"
+    )
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text("[]\n", encoding="utf-8")
+    env = {"HF_HUB_OFFLINE": "1"}
+
+    assert pf.configure_staged_cyberseceval_cache(
+        "inspect_evals/cyse2_prompt_injection", env, tmp_path
+    )
+    assert env[pf.INSPECT_EVALS_CACHE_DIR_ENV] == str(tmp_path)
+    assert pf.required_urls("inspect_evals/cyse2_prompt_injection", env) == []
+
+
+def test_configure_staged_cyberseceval_cache_fails_early_when_offline_file_is_missing(
+    tmp_path,
+):
+    """Offline runs fail clearly instead of letting Inspect-Evals retry a remote download."""
+    with pytest.raises(RuntimeError, match="Offline CyberSecEval 2.*test_data_ref"):
+        pf.configure_staged_cyberseceval_cache(
+            "inspect_evals/cyse2_prompt_injection",
+            {"HF_DATASETS_OFFLINE": "1"},
+            tmp_path,
+        )
+
+
+def test_configure_staged_cyberseceval_cache_does_not_change_other_tasks(tmp_path):
+    """CyberSecEval cache setup is limited to the prompt-injection task."""
+    env = {}
+    assert not pf.configure_staged_cyberseceval_cache(
+        "inspect_evals/mmlu_pro", env, tmp_path
+    )
+    assert pf.INSPECT_EVALS_CACHE_DIR_ENV not in env
 
 
 def test_bfcl_requires_data_docs_and_selected_backend_modules(

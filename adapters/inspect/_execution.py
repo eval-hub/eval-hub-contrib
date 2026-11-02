@@ -24,6 +24,7 @@ from _preflight import (
     MODE_ENV,
     TIMEOUT_ENV,
     configure_staged_bfcl_cache,
+    configure_staged_cyberseceval_cache,
     normalize_hosts,
     normalize_mode,
     normalize_timeout,
@@ -477,6 +478,7 @@ def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
     """
     task_spec = cmd[2] if len(cmd) > 2 else ""
     task_args = _task_args_from_command(cmd)
+    configure_staged_cyberseceval_cache(task_spec, env, TEST_DATA_DIR)
     configure_staged_bfcl_cache(task_spec, env, TEST_DATA_DIR, task_args)
     refresh_hf_hub_auth(env)
     run_preflight(task_spec, env, task_args)

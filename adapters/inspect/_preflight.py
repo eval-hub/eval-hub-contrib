@@ -23,6 +23,7 @@ talk to model endpoints.
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import logging
 import re
@@ -50,6 +51,12 @@ DEFAULT_TIMEOUT_S = 10.0
 DEFAULT_HF_ENDPOINT = "https://huggingface.co"
 _BFCL_TASK = "inspect_evals/bfcl"
 _BFCL_PREREQS_TASK = "inspect_evals/bfcl_prereqs"
+_CYBERSECEVAL_PROMPT_INJECTION_TASK = "inspect_evals/cyse2_prompt_injection"
+_CYBERSECEVAL_PROMPT_INJECTION_URL = (
+    "https://raw.githubusercontent.com/meta-llama/PurpleLlama/"
+    "70e7a376f2a310fb89f7ad207685baa69f78107f/"
+    "CybersecurityBenchmarks/datasets/prompt_injection/prompt_injection.json"
+)
 
 # Task specs that never download a dataset from the Hub or GitHub.
 _NO_PROBE_PREFIXES = ("inspect_petri/", "petri_bloom/")
@@ -57,7 +64,9 @@ _NO_PROBE_PREFIXES = ("inspect_petri/", "petri_bloom/")
 _HF_TASK_PREFIXES = ("inspect_evals/",)
 # Exact task specs that download from GitHub (not HuggingFace) even when the
 # spec falls under an _HF_TASK_PREFIXES namespace.
-_GITHUB_ONLY_TASKS = frozenset({_BFCL_TASK, _BFCL_PREREQS_TASK})
+_GITHUB_ONLY_TASKS = frozenset(
+    {_BFCL_TASK, _BFCL_PREREQS_TASK, _CYBERSECEVAL_PROMPT_INJECTION_TASK}
+)
 
 # Source files required by the BFCL categories in the pinned inspect-evals release.
 # Keep these aligned with inspect_evals.bfcl.backends.loader.CLASS_FILE_MAPPING and
@@ -388,6 +397,62 @@ def configure_staged_bfcl_cache(
     return True
 
 
+def _cyberseceval_prompt_injection_cache_file(cache_dir: str | Path) -> Path:
+    """Return the inspect-evals cache path for its pinned CyberSecEval 2 dataset URL."""
+    url_hash = hashlib.sha256(_CYBERSECEVAL_PROMPT_INJECTION_URL.encode("utf-8")).hexdigest()[:32]
+    return Path(cache_dir) / "cyberseceval_2" / f"prompt_injection_{url_hash}.json"
+
+
+def _cyberseceval_prompt_injection_data_present(env: dict[str, str]) -> bool:
+    """Whether the exact pinned CyberSecEval 2 dataset file exists in the configured cache."""
+    cache_dir = env.get(INSPECT_EVALS_CACHE_DIR_ENV)
+    if not cache_dir:
+        return False
+    try:
+        return _cyberseceval_prompt_injection_cache_file(cache_dir).is_file()
+    except (OSError, ValueError):
+        return False
+
+
+def configure_staged_cyberseceval_cache(
+    task_spec: str,
+    env: dict[str, str],
+    staged_data_dir: str | Path = "/test_data",
+) -> bool:
+    """Use the staged Inspect-Evals cache for CyberSecEval 2 when its exact file is present."""
+    if task_spec != _CYBERSECEVAL_PROMPT_INJECTION_TASK:
+        return False
+
+    if _cyberseceval_prompt_injection_data_present(env):
+        return False
+
+    staged_cache_file = _cyberseceval_prompt_injection_cache_file(staged_data_dir)
+    staged_env = dict(env)
+    staged_env[INSPECT_EVALS_CACHE_DIR_ENV] = str(staged_data_dir)
+    if _cyberseceval_prompt_injection_data_present(staged_env):
+        env[INSPECT_EVALS_CACHE_DIR_ENV] = str(staged_data_dir)
+        logger.info(
+            "Using staged Inspect-Evals CyberSecEval 2 prompt-injection data from %s",
+            staged_cache_file,
+        )
+        return True
+
+    if env.get("HF_HUB_OFFLINE") == "1" or env.get("HF_DATASETS_OFFLINE") == "1":
+        configured_cache = env.get(INSPECT_EVALS_CACHE_DIR_ENV)
+        configured_location = (
+            f"; configured {INSPECT_EVALS_CACHE_DIR_ENV}={configured_cache!r} also lacks it"
+            if configured_cache
+            else ""
+        )
+        raise RuntimeError(
+            "Offline CyberSecEval 2 prompt-injection requires the exact pinned Inspect-Evals "
+            f"dataset cache file at {staged_cache_file}{configured_location}. Stage that file "
+            "through test_data_ref so the adapter can run without GitHub access."
+        )
+
+    return False
+
+
 def required_urls(
     task_spec: str, env: dict[str, str], task_args: dict[str, Any] | None = None
 ) -> list[str]:
@@ -406,6 +471,11 @@ def required_urls(
             urls.append("https://github.com")
         elif task_key == _BFCL_PREREQS_TASK and _bfcl_prereqs_requires_github(env):
             urls.append("https://github.com")
+        elif (
+            task_key == _CYBERSECEVAL_PROMPT_INJECTION_TASK
+            and not _cyberseceval_prompt_injection_data_present(env)
+        ):
+            urls.append("https://raw.githubusercontent.com")
     urls += normalize_hosts(env.get(HOSTS_ENV), HOSTS_ENV)
     return list(dict.fromkeys(urls))
 
