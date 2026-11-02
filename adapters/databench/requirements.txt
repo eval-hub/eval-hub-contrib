@@ -3,3 +3,5 @@ databench-eval==4.0.1
 openai>=1.0.0
 huggingface-hub
 pyarrow
+certifi>=2026.10.23
+pip>=26.2.2

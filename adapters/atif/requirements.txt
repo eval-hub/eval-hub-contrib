@@ -4,3 +4,6 @@ eval-hub-sdk[adapter] @ git+https://github.com/eval-hub/eval-hub-sdk.git@8c4d51a
 opentelemetry-api==1.44.0
 httpx==0.28.1
 PyYAML==6.0.3
+
+certifi>=2026.10.23
+pip>=26.2.2

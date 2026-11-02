@@ -25,6 +25,7 @@ from _preflight import (
     HOSTS_ENV,
     MODE_ENV,
     TIMEOUT_ENV,
+    configure_staged_bfcl_cache,
     normalize_hosts,
     normalize_mode,
     normalize_timeout,
@@ -434,6 +435,18 @@ def _petri_task_flags(
     return flags
 
 
+def _task_args_from_command(cmd: list[str]) -> dict[str, str]:
+    """Extract BFCL cache-selection args from Inspect's repeated ``-T key=value`` flags."""
+    task_args: dict[str, str] = {}
+    for index, arg in enumerate(cmd[:-1]):
+        if arg != "-T":
+            continue
+        key, separator, value = cmd[index + 1].partition("=")
+        if separator and key in {"categories", "snapshot_id"}:
+            task_args[key] = value
+    return task_args
+
+
 def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
     """Run ``inspect eval``, streaming its output to the adapter log as it arrives.
 
@@ -442,8 +455,11 @@ def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
     live (prefixed ``inspect |``), a network pre-flight fails fast when a required host is
     unreachable, and the run is bounded by ``timeout_s`` when one is configured.
     """
+    task_spec = cmd[2] if len(cmd) > 2 else ""
+    task_args = _task_args_from_command(cmd)
+    configure_staged_bfcl_cache(task_spec, env, TEST_DATA_DIR, task_args)
     refresh_hf_hub_auth(env)
-    run_preflight(cmd[2] if len(cmd) > 2 else "", env)
+    run_preflight(task_spec, env, task_args)
     timeout = _resolve_job_timeout(env)
     stream = (env.get(_STREAM_LOGS_ENV) or "1").strip().lower() not in ("0", "false", "no", "off")
 

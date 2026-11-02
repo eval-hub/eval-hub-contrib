@@ -17,3 +17,5 @@ numpy>=1.24.0
 
 # Note: For GPU support, install PyTorch separately:
 # pip install torch>=2.0.0 --index-url https://download.pytorch.org/whl/cu118
+certifi>=2026.10.23
+pip>=26.2.2

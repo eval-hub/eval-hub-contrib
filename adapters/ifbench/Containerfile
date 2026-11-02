@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/python-311:latest
+FROM registry.access.redhat.com/ubi9/python-312:latest
 
 # ifbench is installed from git in requirements.txt; pip clone needs git in the image.
 USER 0

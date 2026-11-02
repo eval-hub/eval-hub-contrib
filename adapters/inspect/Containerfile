@@ -19,9 +19,9 @@ RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt
 #
 # Setting XDG_CACHE_HOME=/app/.cache makes the resolved path
 #   /app/.cache/inspect_evals/make_me_say/nltk_data
-# a fixed location inside the image layer. The RUN step below downloads all
-# three packages there at build time, so ensure_nltk_resource() finds the
-# data immediately and makes zero network calls at runtime.
+# a symlink to /usr/local/share/nltk_data. The RUN step below downloads all
+# three packages into that shared directory at build time, so
+# ensure_nltk_resource() finds the data without runtime downloads.
 #
 # Airgapped deployments (no internet access during build):
 #
@@ -48,8 +48,11 @@ ENV XDG_CACHE_HOME=/app/.cache
 # Pin the inspect_evals cache root explicitly so the NLTK data path is
 # predictable regardless of the XDG_CACHE_HOME default and immune to
 # INSPECT_EVALS_CACHE_DIR overrides at runtime. The value here must match the
-# NLTK_DIR computed inside the RUN step below.
+# cache symlink created inside the RUN step below.
 ENV INSPECT_EVALS_CACHE_DIR=/app/.cache/inspect_evals
+# NLTK 3.10.4 requires data owned by root or the runtime user without group write.
+# Keep bundled data outside /app, whose permissions support arbitrary UIDs.
+ENV NLTK_DATA=/usr/local/share/nltk_data
 # NLTK_AIRGAP=true  → skip network download; COPY nltk-data-airgap/ from build context instead.
 # NLTK_AIRGAP=false → download punkt, punkt_tab, wordnet from the internet (default).
 ARG NLTK_AIRGAP=false
@@ -66,10 +69,9 @@ COPY nltk-data-airgap/ /tmp/nltk-data-airgap/
 RUN python3 - <<'PYEOF'
 import nltk, pathlib, sys, os, shutil
 
-# Derive the NLTK data path from INSPECT_EVALS_CACHE_DIR (set by the ENV
-# instruction above) so the build path always matches the runtime path that
-# ensure_nltk_resource() in makemesay/game.py resolves via user_cache_dir().
-NLTK_DIR = pathlib.Path(os.environ['INSPECT_EVALS_CACHE_DIR']) / 'make_me_say' / 'nltk_data'
+# Derive the shared NLTK data path from NLTK_DATA (set by the ENV
+# instruction above); the cache symlink below preserves the MakeMeSay path.
+NLTK_DIR = pathlib.Path(os.environ['NLTK_DATA'])
 NLTK_DIR.mkdir(parents=True, exist_ok=True)
 
 # Packages and their nltk.data.find() resource paths — exactly what
@@ -130,6 +132,13 @@ for subdir in ('corpora',):
             with zipfile.ZipFile(zp) as zf:
                 zf.extractall(zp.parent)
 
+# copytree/copy2 preserve staged modes. NLTK 3.10.4 rejects group- or
+# world-writable data, so normalize after copying/extraction, before validation.
+NLTK_DIR.chmod(0o755)
+for path in NLTK_DIR.rglob('*'):
+    if not path.is_symlink():
+        path.chmod(0o755 if path.is_dir() else 0o644)
+
 # Verify using NLTK's own finder with the directory resource path —
 # matching exactly what ensure_nltk_resource() checks at runtime.
 for pkg, resource in REQUIRED.items():
@@ -140,6 +149,11 @@ for pkg, resource in REQUIRED.items():
         print(f'FATAL: {pkg} not findable at {resource} in {NLTK_DIR}', file=sys.stderr)
         sys.exit(1)
 
+# MakeMeSay resolves this cache path before registering it with NLTK.
+# Point it at the shared, read-only data rather than the writable cache tree.
+cache_link = pathlib.Path(os.environ['INSPECT_EVALS_CACHE_DIR']) / 'make_me_say' / 'nltk_data'
+cache_link.parent.mkdir(parents=True, exist_ok=True)
+cache_link.symlink_to(NLTK_DIR, target_is_directory=True)
 print(f'\nNLTK data bundled at {NLTK_DIR}')
 PYEOF
 
@@ -152,7 +166,8 @@ RUN mkdir -p /tmp/.inspect_cache && \
     chown -R 1001:0 /app && \
     chmod -R g+rwX /app && \
     chown -R 1001:0 /opt/app-root && \
-    chmod -R g+rwX /opt/app-root
+    chmod -R g+rwX /opt/app-root && \
+    chown -R 0:0 /usr/local/share/nltk_data
 
 # ── Runtime environment ───────────────────────────────────────────────────────
 ENV PYTHONUNBUFFERED=1
