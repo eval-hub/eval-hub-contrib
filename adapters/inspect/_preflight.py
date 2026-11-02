@@ -38,6 +38,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from platformdirs import user_cache_dir
+
 logger = logging.getLogger(__name__)
 
 MODE_ENV = "INSPECT_PREFLIGHT"
@@ -403,13 +405,21 @@ def _cyberseceval_prompt_injection_cache_file(cache_dir: str | Path) -> Path:
     return Path(cache_dir) / "cyberseceval_2" / f"prompt_injection_{url_hash}.json"
 
 
+def _inspect_evals_cache_dir(env: dict[str, str]) -> Path:
+    """Resolve Inspect-Evals' configured cache or its platform default."""
+    configured = env.get(INSPECT_EVALS_CACHE_DIR_ENV)
+    if configured:
+        return Path(configured).expanduser()
+    return Path(user_cache_dir("inspect_evals"))
+
+
 def _cyberseceval_prompt_injection_data_present(env: dict[str, str]) -> bool:
-    """Whether the exact pinned CyberSecEval 2 dataset file exists in the configured cache."""
-    cache_dir = env.get(INSPECT_EVALS_CACHE_DIR_ENV)
-    if not cache_dir:
-        return False
+    """Whether the exact pinned CyberSecEval 2 dataset file is cached and non-empty."""
     try:
-        return _cyberseceval_prompt_injection_cache_file(cache_dir).is_file()
+        cache_file = _cyberseceval_prompt_injection_cache_file(
+            _inspect_evals_cache_dir(env)
+        )
+        return cache_file.is_file() and cache_file.stat().st_size > 0
     except (OSError, ValueError):
         return False
 
