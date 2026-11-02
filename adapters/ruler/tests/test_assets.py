@@ -240,8 +240,9 @@ def test_job_prepares_required_assets_before_first_dataset(monkeypatch, tmp_path
     monkeypatch.setattr(main.tempfile, "mkdtemp", lambda **kwargs: str(tmp_path / "work"))
     monkeypatch.setattr(adapter, "_verify_tokenizer", lambda *args: True)
     operations = []
-    def prepare(configs, cache_dir, scripts_dir, timeout):
+    def prepare(configs, cache_dir, scripts_dir, timeout, staged_data_dir=None):
         assert cache_dir == tmp_path / "work" / "data" / "assets"
+        assert staged_data_dir is None
         expected = {"english_words.json"}
         if with_essay:
             expected.add(ESSAY_FILE)

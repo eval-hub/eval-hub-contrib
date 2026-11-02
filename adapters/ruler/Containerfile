@@ -33,7 +33,7 @@ RUN python -c "import nltk; [nltk.download(resource, download_dir='/usr/local/sh
 
 # Copy application files
 COPY scripts ./scripts
-COPY prepare_assets.py DATA_LICENSES.md ./
+COPY prepare_assets.py staged_assets.py DATA_LICENSES.md ./
 COPY main.py .
 COPY provider.yaml .
 COPY .dockerignore .
