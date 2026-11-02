@@ -12,3 +12,6 @@ pydantic==2.12.5
 
 # EvalHub SDK (framework adapter with adapter extra only)
 eval-hub-sdk[adapter]==0.1.5
+
+certifi>=2026.10.23
+pip>=26.2.2

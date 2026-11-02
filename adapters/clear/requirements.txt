@@ -9,3 +9,6 @@ pydantic>=2.0.0
 
 # Optional (local MLflow): if artifact upload needs the upstream Python client, set
 # EVALHUB_MLFLOW_BACKEND=upstream and: pip install mlflow-skinny
+
+certifi>=2026.10.23
+pip>=26.2.2

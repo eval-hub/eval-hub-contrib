@@ -1,5 +1,5 @@
 # LightEval adapter container for eval-hub
-FROM registry.access.redhat.com/ubi9/python-311:latest
+FROM registry.access.redhat.com/ubi9/python-312:latest
 
 # Switch to root to set up directories
 USER 0
