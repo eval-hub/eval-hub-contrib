@@ -238,6 +238,10 @@ def test_job_prepares_required_assets_before_first_dataset(monkeypatch, tmp_path
     )
     callbacks = SimpleNamespace(report_status=lambda _: None)
     monkeypatch.setattr(main.tempfile, "mkdtemp", lambda **kwargs: str(tmp_path / "work"))
+    isolated_test_data = tmp_path / "test_data"
+    isolated_test_data.mkdir()
+    monkeypatch.setenv("RULER_TEST_DATA_DIR", str(isolated_test_data))
+    monkeypatch.setenv("EVALHUB_JOB_SPEC_PATH", str(tmp_path / "missing-job.json"))
     monkeypatch.setattr(adapter, "_verify_tokenizer", lambda *args: True)
     operations = []
     def prepare(configs, cache_dir, scripts_dir, timeout, staged_data_dir=None):
