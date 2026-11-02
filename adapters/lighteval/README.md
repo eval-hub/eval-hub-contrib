@@ -421,8 +421,14 @@ This will run all tasks in the "commonsense_reasoning" category.
 For a benchmark that reads its dataset from the Hugging Face Hub, stage the complete Hugging
 Face cache tree in the connected environment, then reference that staged tree with the
 benchmark's `test_data_ref`. The adapter mounts it at `/test_data`, sets `HF_HOME` to that
-directory, and points `HF_HUB_CACHE` and `HF_DATASETS_CACHE` at its `hub/` and `datasets/`
-subdirectories. It then enables Hugging Face offline mode before loading LightEval tasks.
+directory, and points `HF_HUB_CACHE` at its `hub/` subdirectory. The mounted test data is
+read-only, while Hugging Face Datasets creates lock files even when reusing prepared data. The
+adapter therefore creates a writable per-job cache directory and mirrors the staged `datasets/`
+directory structure there with symlinks to staged files. `HF_DATASETS_CACHE` points to this
+writable cache; the dataset bytes remain in the staged mount. The adapter enables Hugging Face
+offline mode before loading LightEval tasks. If a prepared datasets cache is staged, its files
+are exposed through the writable cache overlay; otherwise the cache starts empty and the offline
+framework load still requires the needed dataset assets to be available locally.
 Jobs without `test_data_ref` keep the existing online behavior.
 
 The staged directory should have the cache layout produced by Hugging Face tooling, for example:

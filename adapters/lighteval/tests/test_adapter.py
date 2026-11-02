@@ -134,7 +134,13 @@ def test_staged_hf_cache_enables_offline_mode(
 
     test_data_root = tmp_path / "test_data"
     (test_data_root / "hub").mkdir(parents=True)
-    (test_data_root / "datasets").mkdir()
+    staged_dataset = (
+        test_data_root / "datasets" / "fixture" / "default" / "1.0.0" / "abc123"
+    )
+    staged_dataset.mkdir(parents=True)
+    (staged_dataset / "dataset_info.json").write_text("{}")
+    (staged_dataset / "train.arrow").write_bytes(b"prepared dataset")
+    writable_cache = tmp_path / "writable-datasets"
     registry_asset = test_data_root / "lighteval" / "tinyBenchmarks.pkl"
     registry_asset.parent.mkdir()
     registry_asset.write_bytes(b"staged task-registry asset")
@@ -142,6 +148,16 @@ def test_staged_hf_cache_enables_offline_mode(
     registry_dir.mkdir(parents=True)
     monkeypatch.setattr(offline_assets, "LIGHTEVAL_TASK_REGISTRY_DIR", registry_dir)
     monkeypatch.setattr(adapter_main, "TEST_DATA_DIR", test_data_root)
+    build_offline_environment = adapter_main.build_hf_offline_environment
+    monkeypatch.setattr(
+        adapter_main,
+        "build_hf_offline_environment",
+        lambda job_spec_path, root: build_offline_environment(
+            job_spec_path,
+            root,
+            writable_datasets_cache_dir=writable_cache,
+        ),
+    )
     for variable in (
         "HF_HOME",
         "HF_HUB_CACHE",
@@ -177,7 +193,7 @@ def test_staged_hf_cache_enables_offline_mode(
     expected_env = {
         "HF_HOME": str(test_data_root),
         "HF_HUB_CACHE": str(test_data_root / "hub"),
-        "HF_DATASETS_CACHE": str(test_data_root / "datasets"),
+        "HF_DATASETS_CACHE": str(writable_cache),
         "HF_HUB_OFFLINE": "1",
         "HF_DATASETS_OFFLINE": "1",
         "HF_EVALUATE_OFFLINE": "1",
@@ -194,6 +210,16 @@ def test_staged_hf_cache_enables_offline_mode(
         )
     }
     assert {key: os.environ.get(key) for key in expected_env} == expected_env
+    cached_dataset = (
+        writable_cache
+        / "fixture"
+        / "default"
+        / "1.0.0"
+        / "abc123"
+        / "train.arrow"
+    )
+    assert cached_dataset.is_symlink()
+    assert cached_dataset.read_bytes() == b"prepared dataset"
     assert (registry_dir / "tinyBenchmarks.pkl").read_bytes() == b"staged task-registry asset"
 
 

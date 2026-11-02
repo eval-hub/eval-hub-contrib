@@ -44,7 +44,6 @@ from evalhub.models import MetricSchema, ResultType
 from _hf_offline import (
     TEST_DATA_DIR,
     build_hf_offline_environment,
-    configure_hf_offline_environment,
     ensure_lighteval_registry_assets,
 )
 
@@ -129,10 +128,12 @@ class LightEvalAdapter(FrameworkAdapter):
                 ensure_lighteval_registry_assets(TEST_DATA_DIR)
                 # LightEval's task registry is also loaded in this process and
                 # can fetch task metadata before the evaluation subprocess starts.
-                configure_hf_offline_environment(TEST_DATA_DIR)
+                os.environ.update(subprocess_env)
                 logger.info(
-                    "Using staged Hugging Face assets from %s; Hub downloads are disabled",
+                    "Using staged Hugging Face assets from %s; Hub downloads are disabled "
+                    "and the writable datasets cache is %s",
                     TEST_DATA_DIR,
+                    subprocess_env["HF_DATASETS_CACHE"],
                 )
 
             self._validate_config(config)

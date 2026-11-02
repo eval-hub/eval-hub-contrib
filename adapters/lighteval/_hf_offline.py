@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import shutil
+import tempfile
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 
@@ -54,25 +55,103 @@ def is_test_data_mount_usable(test_data_root: str | Path = TEST_DATA_DIR) -> boo
 def configure_hf_offline_environment(
     test_data_root: str | Path,
     env: MutableMapping[str, str] | None = None,
-) -> None:
+    writable_datasets_cache_dir: str | Path | None = None,
+) -> Path:
     """Use the staged HF cache tree and disable Hub downloads.
 
     When ``env`` is omitted, configure the current process so framework imports
-    and the LightEval subprocess use the same cache and offline settings.
+    and the LightEval subprocess use the same cache and offline settings. The
+    datasets cache is mirrored into a writable directory with symlinked data
+    files so Hugging Face can create lock files without copying staged assets.
     """
     root = Path(test_data_root)
     target_env = os.environ if env is None else env
+    datasets_cache = _prepare_writable_datasets_cache(
+        root,
+        writable_datasets_cache_dir,
+    )
     target_env.update(
         {
             "HF_HOME": str(root),
             "HF_HUB_CACHE": str(root / "hub"),
-            "HF_DATASETS_CACHE": str(root / "datasets"),
+            "HF_DATASETS_CACHE": str(datasets_cache),
             "HF_HUB_OFFLINE": "1",
             "HF_DATASETS_OFFLINE": "1",
             "HF_EVALUATE_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",
         }
     )
+    return datasets_cache
+
+
+def _prepare_writable_datasets_cache(
+    test_data_root: Path,
+    writable_datasets_cache_dir: str | Path | None,
+) -> Path:
+    """Mirror dataset-cache directories while symlinking staged files in place."""
+    staged_root = test_data_root.resolve()
+    staged_cache = test_data_root / "datasets"
+    cache_dir = (
+        Path(writable_datasets_cache_dir)
+        if writable_datasets_cache_dir is not None
+        else Path(tempfile.mkdtemp(prefix="lighteval-datasets-cache-"))
+    )
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        if cache_dir.resolve().is_relative_to(staged_root):
+            raise RuntimeError(
+                f"Writable datasets cache {cache_dir} must be outside staged "
+                f"test-data directory {test_data_root}."
+            )
+        if any(cache_dir.iterdir()):
+            raise RuntimeError(
+                f"Writable datasets cache directory {cache_dir} must be empty."
+            )
+    except OSError as exc:
+        raise RuntimeError(
+            f"Cannot create writable Hugging Face datasets cache at {cache_dir}: {exc}"
+        ) from exc
+
+    def mirror(source: Path, destination: Path, active_directories: set[Path]) -> None:
+        if source.name.endswith(".lock"):
+            return
+        try:
+            resolved_source = source.resolve(strict=True)
+            resolved_source.relative_to(staged_root)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                f"Staged datasets cache entry {source} is missing or points outside "
+                f"{test_data_root}."
+            ) from exc
+
+        if resolved_source.is_dir():
+            if resolved_source in active_directories:
+                raise RuntimeError(
+                    f"Staged datasets cache contains a directory cycle at {source}."
+                )
+            destination.mkdir(parents=True, exist_ok=True)
+            next_active = {*active_directories, resolved_source}
+            for child in resolved_source.iterdir():
+                mirror(child, destination / child.name, next_active)
+            return
+
+        if not resolved_source.is_file():
+            raise RuntimeError(f"Unsupported entry in staged datasets cache: {source}.")
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.symlink_to(resolved_source)
+
+    if staged_cache.is_dir():
+        try:
+            for entry in staged_cache.iterdir():
+                mirror(entry, cache_dir / entry.name, set())
+        except (OSError, RuntimeError) as exc:
+            raise RuntimeError(
+                "Cannot prepare writable Hugging Face datasets cache "
+                f"at {cache_dir}: {exc}"
+            ) from exc
+
+    return cache_dir
 
 
 def ensure_lighteval_registry_assets(
@@ -126,6 +205,7 @@ def build_hf_offline_environment(
     job_spec_path: str | Path,
     test_data_root: str | Path = TEST_DATA_DIR,
     base_env: Mapping[str, str] | None = None,
+    writable_datasets_cache_dir: str | Path | None = None,
 ) -> dict[str, str] | None:
     """Build an offline environment for an explicit staged-data job.
 
@@ -143,5 +223,5 @@ def build_hf_offline_environment(
         )
 
     env = dict(os.environ if base_env is None else base_env)
-    configure_hf_offline_environment(test_data_root, env)
+    configure_hf_offline_environment(test_data_root, env, writable_datasets_cache_dir)
     return env

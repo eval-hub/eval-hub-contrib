@@ -60,15 +60,38 @@ def test_is_test_data_mount_usable_requires_visible_content(tmp_path):
     assert is_test_data_mount_usable(root)
 
 
-def test_configure_hf_offline_environment_points_to_staged_cache(tmp_path):
+def test_configure_hf_offline_environment_uses_writable_cache_overlay(tmp_path):
+    root = tmp_path / "test_data"
+    dataset_dir = root / "datasets" / "fixture" / "default" / "1.0.0" / "abc123"
+    dataset_dir.mkdir(parents=True)
+    staged_file = dataset_dir / "train.arrow"
+    staged_file.write_bytes(b"prepared dataset")
+    staged_lock = root / "datasets" / "fixture.lock"
+    staged_lock.write_text("staged lock")
+    writable_cache = tmp_path / "writable-datasets"
     env = {"HF_TOKEN": "retained"}
 
-    configure_hf_offline_environment(tmp_path, env)
+    configured_cache = configure_hf_offline_environment(root, env, writable_cache)
 
+    cached_file = (
+        writable_cache
+        / "fixture"
+        / "default"
+        / "1.0.0"
+        / "abc123"
+        / "train.arrow"
+    )
+    assert configured_cache == writable_cache
     assert env["HF_TOKEN"] == "retained"
-    assert env["HF_HOME"] == str(tmp_path)
-    assert env["HF_HUB_CACHE"] == str(tmp_path / "hub")
-    assert env["HF_DATASETS_CACHE"] == str(tmp_path / "datasets")
+    assert env["HF_HOME"] == str(root)
+    assert env["HF_HUB_CACHE"] == str(root / "hub")
+    assert env["HF_DATASETS_CACHE"] == str(writable_cache)
+    assert cached_file.is_symlink()
+    assert cached_file.read_bytes() == b"prepared dataset"
+    assert not (writable_cache / "fixture.lock").exists()
+    (writable_cache / "fixture.lock").write_text("writable lock")
+    assert (writable_cache / "fixture.lock").read_text() == "writable lock"
+    assert staged_lock.read_text() == "staged lock"
     assert env["HF_HUB_OFFLINE"] == "1"
     assert env["HF_DATASETS_OFFLINE"] == "1"
     assert env["HF_EVALUATE_OFFLINE"] == "1"
@@ -94,14 +117,20 @@ def test_build_hf_offline_environment_configures_staged_mount(tmp_path):
     (root / "datasets").mkdir()
     env = {"HF_TOKEN": "retained"}
 
-    configured_env = build_hf_offline_environment(job_spec, root, env)
+    writable_cache = tmp_path / "writable-datasets"
+    configured_env = build_hf_offline_environment(
+        job_spec,
+        root,
+        env,
+        writable_cache,
+    )
     assert configured_env is not None
     assert env == {"HF_TOKEN": "retained"}
     env = configured_env
     assert env["HF_TOKEN"] == "retained"
     assert env["HF_HOME"] == str(root)
     assert env["HF_HUB_CACHE"] == str(root / "hub")
-    assert env["HF_DATASETS_CACHE"] == str(root / "datasets")
+    assert env["HF_DATASETS_CACHE"] == str(writable_cache)
     assert env["HF_HUB_OFFLINE"] == "1"
     assert env["HF_DATASETS_OFFLINE"] == "1"
 
@@ -112,6 +141,19 @@ def test_build_hf_offline_environment_fails_for_missing_staged_mount(tmp_path):
 
     with pytest.raises(RuntimeError, match="test_data_ref.*missing or empty"):
         build_hf_offline_environment(job_spec, tmp_path / "missing")
+
+
+def test_configure_hf_offline_environment_allows_no_prepared_dataset_cache(tmp_path):
+    root = tmp_path / "test_data"
+    root.mkdir()
+    writable_cache = tmp_path / "writable-datasets"
+    env = {}
+
+    configure_hf_offline_environment(root, env, writable_cache)
+
+    assert env["HF_DATASETS_CACHE"] == str(writable_cache)
+    assert writable_cache.is_dir()
+    assert list(writable_cache.iterdir()) == []
 
 
 def test_ensure_lighteval_registry_assets_copies_staged_tinybenchmarks(tmp_path):
