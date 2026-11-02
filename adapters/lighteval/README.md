@@ -431,6 +431,8 @@ The staged directory should have the cache layout produced by Hugging Face tooli
 /test_data/
 ├── datasets/    # processed dataset fingerprints and Arrow files
 ├── hub/         # dataset repository snapshots and blobs
+├── lighteval/
+│   └── tinyBenchmarks.pkl  # registry asset required by LightEval 0.13.0
 └── xet/         # include when the staged repositories use Xet storage
 ```
 
@@ -439,6 +441,14 @@ in an environment that can reach the Hub. Preserve the full cache structure, inc
 links, and stage all data required by the selected tasks. If a dataset is gated, Hub credentials
 are needed during staging; the disconnected evaluation job uses the local cache. A cache created
 for only one task or dataset revision may not satisfy another task or revision.
+
+Also stage `lighteval/tinyBenchmarks.pkl` in this tree. LightEval 0.13.0 imports every task
+definition while building its registry, and the [TinyBenchmarks task module](https://github.com/huggingface/lighteval/blob/v0.13.0/src/lighteval/tasks/tasks/tiny_benchmarks.py)
+downloads the [TinyBenchmarks pickle](https://raw.githubusercontent.com/felipemaiapolo/tinyBenchmarks/main/tinyBenchmarks/tinyBenchmarks.pkl)
+directly from GitHub during import even when the selected task does not use TinyBenchmarks. The
+adapter copies the staged file into LightEval's task package before loading the registry and fails
+early with an actionable error if it is missing. Include this file in the same `test_data_ref` as
+the Hugging Face cache.
 
 Attach `test_data_ref` to each benchmark entry that needs the staged data; uploading a cache to
 object storage alone does not make a job offline. For example:

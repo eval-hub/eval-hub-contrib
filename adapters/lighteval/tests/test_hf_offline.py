@@ -7,6 +7,7 @@ import pytest
 from _hf_offline import (
     build_hf_offline_environment,
     configure_hf_offline_environment,
+    ensure_lighteval_registry_assets,
     is_test_data_mount_usable,
     job_spec_requests_test_data,
 )
@@ -111,3 +112,39 @@ def test_build_hf_offline_environment_fails_for_missing_staged_mount(tmp_path):
 
     with pytest.raises(RuntimeError, match="test_data_ref.*missing or empty"):
         build_hf_offline_environment(job_spec, tmp_path / "missing")
+
+
+def test_ensure_lighteval_registry_assets_copies_staged_tinybenchmarks(tmp_path):
+    root = tmp_path / "test_data"
+    staged_asset = root / "lighteval" / "tinyBenchmarks.pkl"
+    staged_asset.parent.mkdir(parents=True)
+    staged_asset.write_bytes(b"staged registry data")
+    registry_dir = tmp_path / "site-packages" / "lighteval" / "tasks" / "tasks"
+    registry_dir.mkdir(parents=True)
+
+    ensure_lighteval_registry_assets(root, registry_dir)
+
+    assert (registry_dir / "tinyBenchmarks.pkl").read_bytes() == b"staged registry data"
+
+
+def test_ensure_lighteval_registry_assets_requires_staged_or_cached_file(tmp_path):
+    root = tmp_path / "test_data"
+    root.mkdir()
+    registry_dir = tmp_path / "site-packages" / "lighteval" / "tasks" / "tasks"
+    registry_dir.mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="tinyBenchmarks.pkl.*Stage this file"):
+        ensure_lighteval_registry_assets(root, registry_dir)
+
+
+def test_ensure_lighteval_registry_assets_keeps_existing_cached_file(tmp_path):
+    root = tmp_path / "test_data"
+    root.mkdir()
+    registry_dir = tmp_path / "site-packages" / "lighteval" / "tasks" / "tasks"
+    registry_dir.mkdir(parents=True)
+    cached_asset = registry_dir / "tinyBenchmarks.pkl"
+    cached_asset.write_bytes(b"already bundled")
+
+    ensure_lighteval_registry_assets(root, registry_dir)
+
+    assert cached_asset.read_bytes() == b"already bundled"

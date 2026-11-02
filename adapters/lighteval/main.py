@@ -45,6 +45,7 @@ from _hf_offline import (
     TEST_DATA_DIR,
     build_hf_offline_environment,
     configure_hf_offline_environment,
+    ensure_lighteval_registry_assets,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,7 @@ class LightEvalAdapter(FrameworkAdapter):
                 TEST_DATA_DIR,
             )
             if subprocess_env is not None:
+                ensure_lighteval_registry_assets(TEST_DATA_DIR)
                 # LightEval's task registry is also loaded in this process and
                 # can fetch task metadata before the evaluation subprocess starts.
                 configure_hf_offline_environment(TEST_DATA_DIR)

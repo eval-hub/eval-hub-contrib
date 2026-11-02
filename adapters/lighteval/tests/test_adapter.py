@@ -18,8 +18,10 @@ import pytest
 
 from evalhub.adapter import JobCallbacks, JobPhase, JobResults, OCIArtifactResult
 from evalhub.models import ResultType
-from main import LightEvalAdapter
+
+import _hf_offline as offline_assets
 import main as adapter_main
+from main import LightEvalAdapter
 
 # Canned output matching LightEval's results JSON structure.
 # Based losely on https://github.com/huggingface/lighteval/blob/main/docs/source/saving-and-reading-results.mdx#general-configuration
@@ -133,6 +135,12 @@ def test_staged_hf_cache_enables_offline_mode(
     test_data_root = tmp_path / "test_data"
     (test_data_root / "hub").mkdir(parents=True)
     (test_data_root / "datasets").mkdir()
+    registry_asset = test_data_root / "lighteval" / "tinyBenchmarks.pkl"
+    registry_asset.parent.mkdir()
+    registry_asset.write_bytes(b"staged task-registry asset")
+    registry_dir = tmp_path / "site-packages" / "lighteval" / "tasks" / "tasks"
+    registry_dir.mkdir(parents=True)
+    monkeypatch.setattr(offline_assets, "LIGHTEVAL_TASK_REGISTRY_DIR", registry_dir)
     monkeypatch.setattr(adapter_main, "TEST_DATA_DIR", test_data_root)
     for variable in (
         "HF_HOME",
@@ -186,6 +194,7 @@ def test_staged_hf_cache_enables_offline_mode(
         )
     }
     assert {key: os.environ.get(key) for key in expected_env} == expected_env
+    assert (registry_dir / "tinyBenchmarks.pkl").read_bytes() == b"staged task-registry asset"
 
 
 @pytest.mark.integration

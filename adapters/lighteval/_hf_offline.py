@@ -8,13 +8,16 @@ to the Hub must be disabled for the duration of the job.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import shutil
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 
 TEST_DATA_DIR = Path("/test_data")
 _TEST_DATA_SOURCES = ("s3", "pvc", "git", "hf")
+LIGHTEVAL_TASK_REGISTRY_DIR: Path | None = None
 
 
 def job_spec_requests_test_data(job_spec_path: str | Path) -> bool:
@@ -70,6 +73,53 @@ def configure_hf_offline_environment(
             "TRANSFORMERS_OFFLINE": "1",
         }
     )
+
+
+def ensure_lighteval_registry_assets(
+    test_data_root: str | Path,
+    task_registry_dir: str | Path | None = None,
+) -> None:
+    """Seed LightEval's eagerly imported TinyBenchmarks registry asset offline.
+
+    LightEval 0.13.0 downloads this auxiliary file with ``requests`` while
+    importing every task config. That request bypasses the HF offline flags,
+    even when the selected task does not use TinyBenchmarks.
+    """
+    root = Path(test_data_root)
+    destination_dir = (
+        Path(task_registry_dir)
+        if task_registry_dir is not None
+        else LIGHTEVAL_TASK_REGISTRY_DIR or _default_lighteval_task_registry_dir()
+    )
+    destination = destination_dir / "tinyBenchmarks.pkl"
+    staged_asset = root / "lighteval" / "tinyBenchmarks.pkl"
+
+    if staged_asset.is_file() and staged_asset.stat().st_size > 0:
+        if not destination_dir.is_dir():
+            raise RuntimeError(
+                f"LightEval task registry directory {destination_dir} does not exist."
+            )
+        shutil.copyfile(staged_asset, destination)
+        return
+
+    if destination.is_file() and destination.stat().st_size > 0:
+        return
+
+    raise RuntimeError(
+        "LightEval's task registry requires tinyBenchmarks.pkl even when the selected "
+        "benchmark does not use TinyBenchmarks. Stage this file at "
+        f"{root / 'lighteval' / 'tinyBenchmarks.pkl'} to prevent a runtime GitHub download."
+    )
+
+
+def _default_lighteval_task_registry_dir() -> Path:
+    """Return the installed LightEval task-module directory without importing its registry."""
+    spec = importlib.util.find_spec("lighteval")
+    if spec is None or spec.origin is None:
+        raise RuntimeError(
+            "LightEval is not installed; cannot locate its task registry assets."
+        )
+    return Path(spec.origin).parent / "tasks" / "tasks"
 
 
 def build_hf_offline_environment(
