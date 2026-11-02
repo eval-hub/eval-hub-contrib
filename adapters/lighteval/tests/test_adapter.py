@@ -6,6 +6,7 @@ returns parsed results inline, so no filesystem setup is needed.
 
 import copy
 import json
+import os
 import shutil
 import sys
 from datetime import UTC, datetime
@@ -115,6 +116,76 @@ def test_lighteval_happy_path(adapter, mock_callbacks, monkeypatch, mock_hf_api)
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
     # PERSISTING_ARTIFACTS only emitted when OCI exports are configured
+
+
+@pytest.mark.integration
+def test_staged_hf_cache_enables_offline_mode(
+    tmp_path, mock_callbacks, monkeypatch, mock_hf_api
+):
+    """A job with test_data_ref points LightEval at the staged HF cache."""
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    job = json.loads(Path("meta/job.json").read_text())
+    job["test_data_ref"] = {"pvc": {"claim_name": "lighteval-cache"}}
+    job_path = meta_dir / "job.json"
+    job_path.write_text(json.dumps(job))
+
+    test_data_root = tmp_path / "test_data"
+    (test_data_root / "hub").mkdir(parents=True)
+    (test_data_root / "datasets").mkdir()
+    monkeypatch.setattr(adapter_main, "TEST_DATA_DIR", test_data_root)
+    for variable in (
+        "HF_HOME",
+        "HF_HUB_CACHE",
+        "HF_DATASETS_CACHE",
+        "HF_HUB_OFFLINE",
+        "HF_DATASETS_OFFLINE",
+        "HF_EVALUATE_OFFLINE",
+        "TRANSFORMERS_OFFLINE",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+
+    adapter = LightEvalAdapter(job_spec_path=str(job_path))
+    observed_env = {}
+
+    def run_lighteval(**kwargs):
+        observed_env.update(
+            {
+                key: kwargs["subprocess_env"].get(key)
+                for key in (
+                    "HF_HOME",
+                    "HF_HUB_CACHE",
+                    "HF_DATASETS_CACHE",
+                    "HF_HUB_OFFLINE",
+                    "HF_DATASETS_OFFLINE",
+                )
+            }
+        )
+        return CANNED_RESULTS
+
+    monkeypatch.setattr(adapter, "_run_lighteval", run_lighteval)
+    adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+
+    expected_env = {
+        "HF_HOME": str(test_data_root),
+        "HF_HUB_CACHE": str(test_data_root / "hub"),
+        "HF_DATASETS_CACHE": str(test_data_root / "datasets"),
+        "HF_HUB_OFFLINE": "1",
+        "HF_DATASETS_OFFLINE": "1",
+        "HF_EVALUATE_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+    }
+    assert observed_env == {
+        key: expected_env[key]
+        for key in (
+            "HF_HOME",
+            "HF_HUB_CACHE",
+            "HF_DATASETS_CACHE",
+            "HF_HUB_OFFLINE",
+            "HF_DATASETS_OFFLINE",
+        )
+    }
+    assert {key: os.environ.get(key) for key in expected_env} == expected_env
 
 
 @pytest.mark.integration
@@ -769,6 +840,53 @@ def test_run_lighteval_cmd_formats_generation_parameters(adapter, tmp_path, monk
     # Scalar parameters pass through directly
     assert ",concurrent_requests=7" in model_args
     assert ",system_prompt=You are a helpful math tutor." in model_args
+
+
+@pytest.mark.integration
+def test_run_lighteval_passes_staged_hf_environment_to_subprocess(
+    adapter, tmp_path, monkeypatch
+):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        results_dir = tmp_path / "output" / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "results_test.json").write_text(json.dumps(CANNED_RESULTS))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "main.resolve_model_credentials",
+        lambda: SimpleNamespace(api_key="test-key"),
+    )
+    monkeypatch.setattr(
+        adapter, "_with_sampling_temperature", lambda tasks, params: None
+    )
+    monkeypatch.setenv("HF_TOKEN", "fake")
+    staged_env = {
+        "HF_HOME": str(tmp_path / "test_data"),
+        "HF_HUB_CACHE": str(tmp_path / "test_data" / "hub"),
+        "HF_DATASETS_CACHE": str(tmp_path / "test_data" / "datasets"),
+        "HF_HUB_OFFLINE": "1",
+        "HF_DATASETS_OFFLINE": "1",
+        "HF_EVALUATE_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_TOKEN": "fake",
+    }
+
+    adapter._run_lighteval(
+        model_config=adapter.job_spec.model,
+        tasks=["boolq"],
+        output_dir=tmp_path / "output",
+        num_fewshot=0,
+        limit=1,
+        batch_size=1,
+        benchmark_config=adapter.job_spec.parameters,
+        subprocess_env=staged_env,
+    )
+
+    assert captured["env"] == staged_env
 
 
 # ── L1 fix: max_samples parameter forwarding ──────────────────────────────────

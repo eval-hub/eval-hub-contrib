@@ -416,6 +416,54 @@ docker run \
 
 This will run all tasks in the "commonsense_reasoning" category.
 
+## Disconnected clusters
+
+For a benchmark that reads its dataset from the Hugging Face Hub, stage the complete Hugging
+Face cache tree in the connected environment, then reference that staged tree with the
+benchmark's `test_data_ref`. The adapter mounts it at `/test_data`, sets `HF_HOME` to that
+directory, and points `HF_HUB_CACHE` and `HF_DATASETS_CACHE` at its `hub/` and `datasets/`
+subdirectories. It then enables Hugging Face offline mode before loading LightEval tasks.
+Jobs without `test_data_ref` keep the existing online behavior.
+
+The staged directory should have the cache layout produced by Hugging Face tooling, for example:
+
+```text
+/test_data/
+├── datasets/    # processed dataset fingerprints and Arrow files
+├── hub/         # dataset repository snapshots and blobs
+└── xet/         # include when the staged repositories use Xet storage
+```
+
+Warm this cache by running every selected LightEval task with the same adapter/framework version
+in an environment that can reach the Hub. Preserve the full cache structure, including snapshot
+links, and stage all data required by the selected tasks. If a dataset is gated, Hub credentials
+are needed during staging; the disconnected evaluation job uses the local cache. A cache created
+for only one task or dataset revision may not satisfy another task or revision.
+
+Attach `test_data_ref` to each benchmark entry that needs the staged data; uploading a cache to
+object storage alone does not make a job offline. For example:
+
+```json
+{
+  "id": "gpqa:diamond",
+  "provider_id": "lighteval",
+  "test_data_ref": {
+    "pvc": {
+      "claim_name": "lighteval-hf-cache",
+      "sub_path": "knowledge-reasoning"
+    }
+  },
+  "parameters": {
+    "provider": "endpoint",
+    "num_few_shot": 0
+  }
+}
+```
+
+The model endpoint must still be reachable from the cluster. This mechanism configures the
+Hugging Face dataset/model cache used by LightEval; a task that fetches assets from another
+external service needs its own staging support.
+
 ## Memory use
 
 Most benchmarks stay near the baseline of the LightEval process, about 2 GiB.
