@@ -8,6 +8,88 @@ from post_processor.data import Table, ppi_arrays, read_table, within
 from post_processor.operations import interval
 
 
+@pytest.mark.parametrize("fmt", ["json", "auto"])
+def test_nested_results_join_flat_calibration(tmp_path, fmt):
+    records = [{"request_id": str(i), "latency": float(i)} for i in range(8)]
+    (tmp_path / "results.json").write_text(
+        json.dumps({"benchmarks": [{"requests": {"successful": records}}]})
+    )
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"primary_score": {"metric": "latency"}, "estimand": "mean"})
+    )
+    table = read_table(
+        tmp_path,
+        {
+            "format": fmt,
+            "records_path": "$.benchmarks[0].requests.successful",
+            "columns": {"sample_id": "request_id", "prediction": "latency"},
+        },
+    )
+    assert table.rows == records
+    assert table.primary_score == "latency"
+    calibration = tmp_path / "calibration.jsonl"
+    calibration.write_text('{"sample_id":"0","label":1}\n{"sample_id":"4","label":3}\n')
+    cal = read_table(calibration, calibration=True)
+    y, yhat, unlabeled = ppi_arrays(table, [cal], {"metric": "latency"}, shared=False)
+    np.testing.assert_array_equal(y, [1, 3])
+    np.testing.assert_array_equal(yhat, [0, 4])
+    np.testing.assert_array_equal(unlabeled, [1, 2, 3, 5, 6, 7])
+
+
+@pytest.mark.parametrize(
+    "jsonpath,document",
+    [
+        ("$", [{"sample_id": "a", "prediction": 1}]),
+        ("$['a/b']['~']['']", {"a/b": {"~": {"": [{"sample_id": "a", "prediction": 1}]}}}),
+    ],
+)
+def test_records_jsonpath_root_and_escaped_keys(tmp_path, jsonpath, document):
+    path = tmp_path / "data.json"
+    path.write_text(json.dumps(document))
+    assert read_table(path, {"records_path": jsonpath}).rows == [
+        {"sample_id": "a", "prediction": 1}
+    ]
+
+
+@pytest.mark.parametrize(
+    "jsonpath,document,error",
+    [
+        ("records", {}, "JSONPath"),
+        ("/records", {}, "JSONPath"),
+        ("$.records[", {}, "JSONPath"),
+        ("", {}, "JSONPath"),
+        (None, {}, "JSONPath"),
+        ("$.missing", {}, "exactly one"),
+        ("$.records", {"records": 3}, "record array"),
+        ("$.records", {"records": {}}, "record array"),
+        ("$.records", {"records": [1]}, "record objects"),
+        ("$[9]", [[]], "exactly one"),
+        ("$[*]", [[], []], "exactly one"),
+        ("$.records[*]", {"records": [{"sample_id": "a"}]}, "record array"),
+    ],
+)
+def test_invalid_records_jsonpath(tmp_path, jsonpath, document, error):
+    path = tmp_path / "data.json"
+    path.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match=error):
+        read_table(path, {"records_path": jsonpath})
+
+
+@pytest.mark.parametrize("fmt", ["jsonl", "csv", "parquet"])
+def test_records_jsonpath_requires_json(tmp_path, fmt):
+    with pytest.raises(ValueError, match="requires JSON"):
+        read_table(tmp_path, {"format": fmt, "records_path": "$"})
+
+
+def test_records_jsonpath_rejects_non_json_file_and_calibration(tmp_path):
+    path = tmp_path / "data.jsonl"
+    path.write_text('{"sample_id":"a"}\n')
+    with pytest.raises(ValueError, match="requires JSON"):
+        read_table(path, {"records_path": "$"})
+    with pytest.raises(ValueError, match="only for results"):
+        read_table(path, {"records_path": "$"}, calibration=True)
+
+
 def test_real_ppi_matches_analytical_original_mean_interval():
     result = Table(
         [{"sample_id": str(i), "prediction": p} for i, p in enumerate([0.2, 0.4, 0.8, 0.9])]

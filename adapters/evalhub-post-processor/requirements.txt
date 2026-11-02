@@ -6,3 +6,4 @@ httpx>=0.27,<1
 boto3>=1.35,<2
 huggingface-hub>=0.27,<2
 pyarrow>=18,<24
+jsonpath-ng>=1.7,<2

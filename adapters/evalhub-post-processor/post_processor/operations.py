@@ -234,7 +234,11 @@ def confidence_interval(context: Context, raw: dict) -> dict:
     calibration = []
     for index, ref in enumerate(config["calibration_data_ref"]):
         source_ref = {key: value for key, value in ref.items() if key != "data_config"}
-        directory = context.sources.download(source_ref, context.directory / f"calibration-{index}")
+        directory = context.sources.download(
+            source_ref,
+            context.directory / f"calibration-{index}",
+            staged_name=f"calibration-{index}",
+        )
         calibration.append(
             read_table(
                 directory,
@@ -245,7 +249,9 @@ def confidence_interval(context: Context, raw: dict) -> dict:
         )
     alpha = config["significance_level"]
     if job is None:
-        directory = context.sources.download(reference, context.directory / "results")
+        directory = context.sources.download(
+            reference, context.directory / "results", staged_name="results"
+        )
         data = read_table(directory, result_config(config, {}), dataset="results_data_ref")
         metric = text_value(data.primary_score, "external result manifest primary_score.metric")
         context.phase(JobPhase.RUNNING_EVALUATION)

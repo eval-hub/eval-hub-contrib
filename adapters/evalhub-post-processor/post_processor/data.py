@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from jsonpath_ng import JSONPath, parse
+from jsonpath_ng.exceptions import JSONPathError
 
 FORMATS = {
     ".json": "json",
@@ -29,6 +31,22 @@ ROLES = {
     "benchmark_id",
     "provider_id",
 }
+
+
+def result_records(document: Any, selector: JSONPath) -> list:
+    """Select exactly one record array using JSONPath."""
+    try:
+        matches = selector.find(document)
+    except (IndexError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError("records_path does not resolve in the JSON document") from exc
+    if len(matches) != 1:
+        raise ValueError("records_path must select exactly one record array")
+    value = matches[0].value
+    if not isinstance(value, list):
+        raise ValueError("records_path must select a record array")
+    if any(not isinstance(row, dict) for row in value):
+        raise ValueError("records_path must select an array of record objects")
+    return value
 
 
 def within(root: Path, name: str) -> Path:
@@ -111,6 +129,19 @@ def read_table(
     fmt = config.get("format", "auto")
     if fmt not in {"auto", *FORMATS.values()}:
         raise ValueError(f"Unsupported data format {fmt!r}")
+    records_path = config.get("records_path")
+    records_selector = None
+    if "records_path" in config:
+        if calibration:
+            raise ValueError("records_path is supported only for results data")
+        if not isinstance(records_path, str) or not records_path.startswith("$"):
+            raise ValueError("records_path must be a JSONPath starting with '$'")
+        try:
+            records_selector = parse(records_path)
+        except (JSONPathError, ValueError) as exc:
+            raise ValueError("records_path must be a valid JSONPath") from exc
+        if fmt not in {"auto", "json"}:
+            raise ValueError("records_path requires JSON results data")
     columns = config.get("columns", {})
     if not isinstance(columns, dict) or set(columns) - ROLES:
         raise ValueError(f"columns must map these roles to field names: {sorted(ROLES)}")
@@ -152,6 +183,10 @@ def read_table(
         kind = FORMATS.get(path.suffix.lower())
         if kind is None or (fmt != "auto" and fmt != kind and path.name != "manifest.json"):
             continue
+        if records_path is not None and kind != "json":
+            if root.is_file():
+                raise ValueError("records_path requires JSON results data")
+            continue
         records: Any
         if kind == "json":
             obj = json.loads(path.read_text(encoding="utf-8"))
@@ -164,6 +199,17 @@ def read_table(
                 records = obj.get("samples", obj.get("records", [obj]))
             else:
                 records = obj
+            if records_path is not None:
+                if (
+                    path.name == "manifest.json"
+                    and isinstance(obj, dict)
+                    and "samples" not in obj
+                    and "records" not in obj
+                    and not any(key in obj for key in ("sample_id", "doc_id"))
+                    and set(obj) <= {"primary_score", "estimand"}
+                ):
+                    continue
+                records = result_records(obj, records_selector)
         elif kind == "jsonl":
             records = [
                 json.loads(line)
