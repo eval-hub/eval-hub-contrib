@@ -122,6 +122,8 @@ def test_offline_tokenizer_precheck_fails_instead_of_falling_back(monkeypatch):
 def test_offline_data_generation_disables_hub_and_does_not_pass_token(monkeypatch, tmp_path):
     adapter = main.RulerAdapter.__new__(main.RulerAdapter)
     monkeypatch.setattr(adapter, "_hf_token", lambda: pytest.fail("offline mode must not read Hub credentials"))
+    monkeypatch.setenv("HF_TOKEN", "parent-hf-token")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "parent-legacy-hf-token")
     calls = []
 
     def run(cmd, **kwargs):

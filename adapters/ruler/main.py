@@ -669,6 +669,8 @@ class RulerAdapter(FrameworkAdapter):
             "RULER_DATA_DIR": str(data_dir / "assets"),
         }
         if offline:
+            env.pop("HF_TOKEN", None)
+            env.pop("HUGGING_FACE_HUB_TOKEN", None)
             env.update({
                 "RULER_OFFLINE": "1",
                 "HF_HUB_OFFLINE": "1",
