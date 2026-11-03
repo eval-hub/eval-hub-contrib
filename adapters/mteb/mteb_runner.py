@@ -9,9 +9,6 @@ from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 from typing import Any
 
-import mteb
-from datasets import Dataset, DatasetDict
-
 logger = logging.getLogger("mteb_sample_runner")
 
 
@@ -21,6 +18,15 @@ def _as_list(value: Any) -> list[Any] | None:
     if isinstance(value, str):
         return [value]
     return list(value)
+
+
+def _is_dataset(value: Any) -> bool:
+    """Recognize Hugging Face Dataset-like values without importing datasets."""
+    return (
+        not isinstance(value, Mapping)
+        and callable(getattr(value, "select", None))
+        and hasattr(value, "column_names")
+    )
 
 
 def _limit_retrieval_split(
@@ -95,19 +101,7 @@ def _limit_eval_data(
     split_value: bool = False,
 ) -> tuple[int, bool]:
     """Limit supported MTEB dataset structures and report (count, found)."""
-    if isinstance(data, DatasetDict):
-        count = 0
-        found = False
-        for split_name in eval_splits:
-            if split_name not in data:
-                continue
-            dataset = data[split_name]
-            data[split_name] = dataset.select(range(min(limit, len(dataset))))
-            count += len(data[split_name])
-            found = True
-        return count, found
-
-    if isinstance(data, Dataset):
+    if _is_dataset(data):
         if not split_value:
             return 0, False
         selected = data.select(range(min(limit, len(data))))
@@ -132,7 +126,12 @@ def _limit_eval_data(
                     count += _limit_retrieval_split(
                         split_data, limit, task_name, split_name
                     )
-                elif isinstance(split_data, (Dataset, DatasetDict)):
+                elif _is_dataset(split_data):
+                    data[split_name] = split_data.select(
+                        range(min(limit, len(split_data)))
+                    )
+                    count += len(data[split_name])
+                elif isinstance(split_data, Mapping):
                     split_count, found = _limit_eval_data(
                         split_data,
                         eval_splits,
@@ -158,7 +157,7 @@ def _limit_eval_data(
         count = 0
         found = False
         for value in data.values():
-            if isinstance(value, (Dataset, DatasetDict, Mapping)):
+            if isinstance(value, Mapping) or _is_dataset(value):
                 nested_count, nested_found = _limit_eval_data(
                     value, eval_splits, limit, task_name
                 )
@@ -204,6 +203,10 @@ def _limit_task(task: Any, limit: int) -> int:
 
 
 def run(config_path: Path) -> None:
+    # Keep importing the adapter and its sampling helpers lightweight; MTEB is
+    # available in the runtime image, but not required by the unit-test job.
+    import mteb
+
     with config_path.open(encoding="utf-8") as f:
         config = json.load(f)
 

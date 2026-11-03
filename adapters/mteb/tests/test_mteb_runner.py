@@ -1,13 +1,46 @@
 """Tests for sample limiting and batch-size forwarding in the MTEB runner."""
 
 import json
+import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from datasets import Dataset, DatasetDict
 
 import mteb_runner
+
+
+class Dataset:
+    """Small stand-in for a Hugging Face Dataset used by unit tests."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.column_names = list(rows[0]) if rows else []
+
+    @classmethod
+    def from_dict(cls, columns):
+        row_count = len(next(iter(columns.values()), []))
+        return cls(
+            [
+                {column: values[index] for column, values in columns.items()}
+                for index in range(row_count)
+            ]
+        )
+
+    def select(self, indices):
+        return Dataset([self.rows[index] for index in indices])
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self.rows[key]
+        return [row[key] for row in self.rows]
+
+    def __len__(self):
+        return len(self.rows)
+
+
+class DatasetDict(dict):
+    """Mapping stand-in for the Hugging Face DatasetDict."""
 
 
 class FakeTask:
@@ -105,10 +138,13 @@ def test_run_forwards_batch_size_and_writes_effective_sampling_metadata(
         )
     )
     evaluate = Mock()
-    monkeypatch.setattr(mteb_runner.mteb, "get_tasks", lambda **kwargs: [task])
-    monkeypatch.setattr(mteb_runner.mteb, "get_model", lambda *args, **kwargs: object())
-    monkeypatch.setattr(mteb_runner.mteb, "ResultCache", lambda **kwargs: object())
-    monkeypatch.setattr(mteb_runner.mteb, "evaluate", evaluate)
+    fake_mteb = SimpleNamespace(
+        get_tasks=lambda **kwargs: [task],
+        get_model=lambda *args, **kwargs: object(),
+        ResultCache=lambda **kwargs: object(),
+        evaluate=evaluate,
+    )
+    monkeypatch.setitem(sys.modules, "mteb", fake_mteb)
 
     output_dir = tmp_path / "results"
     output_dir.mkdir()
