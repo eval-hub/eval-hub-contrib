@@ -75,15 +75,20 @@ def test_build_env_sets_hf_offline(monkeypatch, fake_test_data: Path, job_spec_p
     adapter.job_spec.parameters["tokenizer"] = str((fake_test_data / "tokenizer").resolve())
     env = build_env(adapter.job_spec, "standard")
     assert env.get("HF_HUB_OFFLINE") == "1"
-    assert env.get("HF_HOME") == str(fake_test_data)
+    assert env.get("HF_HOME") == "/data/huggingface"
+    assert env.get("HF_HUB_CACHE") == str(fake_test_data / "hub")
+    assert env.get("HF_DATASETS_CACHE") == "/data/huggingface/datasets"
 
 
 def test_configure_hf_offline_environment_updates_os_environ(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / "cache"
     root.mkdir()
     env: dict[str, str] = {}
-    configure_hf_offline_environment(str(root), env)
-    assert env["HF_HOME"] == str(root)
+    writable = tmp_path / "writable-cache"
+    configure_hf_offline_environment(str(root), env, writable_cache_home=str(writable))
+    assert env["HF_HOME"] == str(writable)
     assert env["HF_HUB_CACHE"] == str(root / "hub")
-    assert env["HF_DATASETS_CACHE"] == str(root / "datasets")
+    assert env["HF_DATASETS_CACHE"] == str(writable / "datasets")
+    assert env["HF_XET_CACHE"] == str(writable / "xet")
+    assert env["HF_ASSETS_CACHE"] == str(writable / "assets")
     assert env["HF_HUB_OFFLINE"] == "1"

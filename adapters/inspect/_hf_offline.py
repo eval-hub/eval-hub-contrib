@@ -21,6 +21,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 TEST_DATA_DIR = "/test_data"
+WRITABLE_HF_CACHE_DIR = "/data/huggingface"
 _JOB_SPEC_ALLOWED_ROOT = Path("/meta")
 
 
@@ -160,13 +161,21 @@ def job_spec_requests_test_data(path: str | None = None) -> bool:
 def configure_hf_offline_environment(
     hf_home: str,
     env: dict[str, str] | None = None,
+    *,
+    writable_cache_home: str = WRITABLE_HF_CACHE_DIR,
 ) -> None:
-    """Use local Hugging Face caches only (disconnected / no huggingface.co)."""
-    root = Path(hf_home)
+    """Use staged Hub files read-only and place generated caches on writable job storage."""
+    staged_root = Path(hf_home)
+    writable_root = Path(writable_cache_home)
     values = {
-        "HF_HOME": str(root),
-        "HF_HUB_CACHE": str(root / "hub"),
-        "HF_DATASETS_CACHE": str(root / "datasets"),
+        # EvalHub mounts /test_data read-only. The Hub snapshot is input data,
+        # while datasets creates lock files and processed Arrow caches at run
+        # time, so those generated files belong on the writable /data volume.
+        "HF_HOME": str(writable_root),
+        "HF_HUB_CACHE": str(staged_root / "hub"),
+        "HF_DATASETS_CACHE": str(writable_root / "datasets"),
+        "HF_XET_CACHE": str(writable_root / "xet"),
+        "HF_ASSETS_CACHE": str(writable_root / "assets"),
         "HF_HUB_OFFLINE": "1",
         "HF_DATASETS_OFFLINE": "1",
         "HF_EVALUATE_OFFLINE": "1",
@@ -212,8 +221,9 @@ def seed_hf_offline_from_job_spec_file() -> None:
     if should_use_hf_offline(parameters, job_spec_path=path):
         configure_hf_offline_environment(TEST_DATA_DIR)
         logger.info(
-            "HF offline mode (import-time seed): HF_HOME=%s, Hub downloads disabled",
+            "HF offline mode (import-time seed): Hub cache=%s/hub, writable cache=%s, Hub downloads disabled",
             TEST_DATA_DIR,
+            WRITABLE_HF_CACHE_DIR,
         )
 
 
