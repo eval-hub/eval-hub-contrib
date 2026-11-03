@@ -10,7 +10,7 @@ clustering, reranking, and more.
 Architecture:
     1. JobSpec loaded from mounted ConfigMap (k8s mode) or local file
     2. Configuration validated and tasks resolved from benchmark_id or explicit list
-    3. MTEB CLI executed via subprocess with proper arguments
+    3. MTEB CLI executed via subprocess, or the Python API when sampling is requested
     4. Results parsed from MTEB output JSON files
     5. Metrics extracted and normalized to EvaluationResult format
     6. Artifacts persisted as OCI images via sidecar callbacks
@@ -59,16 +59,22 @@ from evalhub.adapter.mlflow import MlflowFileArtifact
 logger = logging.getLogger(__name__)
 
 
+def _positive_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
 class MTEBAdapter(FrameworkAdapter):
     """MTEB (Massive Text Embedding Benchmark) adapter.
 
-    Evaluates embedding models using the MTEB CLI and integrates with
-    eval-hub via the callback-based architecture. Supports all MTEB task
-    types including STS, Retrieval, Classification, Clustering, and more.
+    Evaluates embedding models using the MTEB CLI by default and the MTEB
+    Python API when a sample limit is requested. Integrates with eval-hub via
+    the callback-based architecture.
 
     The adapter:
     - Validates job configuration and resolves tasks from benchmark presets
-    - Builds and executes MTEB CLI commands via subprocess
+    - Builds and executes MTEB CLI or sample-limited Python API runs
     - Parses JSON results from MTEB output directory
     - Extracts metrics and computes overall scores
     - Persists detailed results as OCI artifacts
@@ -184,6 +190,13 @@ class MTEBAdapter(FrameworkAdapter):
 
             self._validate_config(config)
             tasks = self._resolve_tasks(config.benchmark_id, config.parameters)
+            benchmark_config = config.parameters or {}
+            num_examples = benchmark_config.get("num_examples")
+            if num_examples is None:
+                num_examples = getattr(config, "num_examples", None)
+            batch_size = _positive_int(
+                benchmark_config.get("batch_size", 32), "batch_size"
+            )
             output_dir = Path(tempfile.mkdtemp(prefix="mteb_output_"))
 
             logger.info(
@@ -200,15 +213,46 @@ class MTEBAdapter(FrameworkAdapter):
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
             )
 
-            cmd = self._build_mteb_command(
-                model_name=config.model.name,
-                tasks=tasks,
-                output_dir=output_dir,
-                benchmark_config=config.parameters,
-            )
+            if num_examples is None:
+                cmd = self._build_mteb_command(
+                    model_name=config.model.name,
+                    tasks=tasks,
+                    output_dir=output_dir,
+                    benchmark_config=benchmark_config,
+                )
+            else:
+                runner_config = {
+                    "model_name": config.model.name,
+                    "tasks": tasks,
+                    "task_types": benchmark_config.get("task_types"),
+                    "task_categories": benchmark_config.get("task_categories"),
+                    "languages": benchmark_config.get("languages", ["eng"]),
+                    "batch_size": batch_size,
+                    "num_examples": num_examples,
+                    "device": benchmark_config.get("device"),
+                    "verbosity": benchmark_config.get("verbosity", 2),
+                    "co2_tracker": benchmark_config.get("co2_tracker", False),
+                    "overwrite_results": benchmark_config.get(
+                        "overwrite_results", True
+                    ),
+                    "output_dir": str(output_dir),
+                }
+                runner_config_path = output_dir / "mteb_runner_config.json"
+                runner_config_path.write_text(json.dumps(runner_config))
+                cmd = self._build_mteb_runner_command(runner_config_path)
 
             timeout = getattr(config, "timeout_seconds", None) or 7200  # Default 2 hours
             self._run_mteb_subprocess(cmd, timeout)
+
+            sampling_info: dict[str, Any] = {}
+            sampling_info_path = output_dir / "evalhub_sampling_info.json"
+            if num_examples is not None:
+                if not sampling_info_path.is_file():
+                    raise RuntimeError(
+                        "MTEB sample-limited runner did not produce sampling metadata"
+                    )
+                with sampling_info_path.open(encoding="utf-8") as f:
+                    sampling_info = json.load(f)
 
             # Phase 4: Post-processing - parse and extract results
             callbacks.report_status(
@@ -275,9 +319,16 @@ class MTEBAdapter(FrameworkAdapter):
                 model_name=config.model.name,
                 results=evaluation_results,
                 overall_score=overall_score,
-                num_examples_evaluated=len(tasks),  # MTEB doesn't expose sample counts
+                num_examples_evaluated=sampling_info.get(
+                    "num_examples_evaluated", len(tasks)
+                ),
                 duration_seconds=duration,
                 completed_at=datetime.now(UTC),
+                additional_info={
+                    "num_examples": num_examples,
+                    "batch_size": batch_size,
+                    **sampling_info,
+                },
                 evaluation_metadata={
                     "framework": "mteb",
                     "framework_version": self._get_mteb_version(),
@@ -339,6 +390,14 @@ class MTEBAdapter(FrameworkAdapter):
 
         # Validate task_types if provided
         benchmark_config = config.parameters or {}
+        num_examples = benchmark_config.get("num_examples")
+        if num_examples is None:
+            num_examples = getattr(config, "num_examples", None)
+        if num_examples is not None:
+            _positive_int(num_examples, "num_examples")
+
+        _positive_int(benchmark_config.get("batch_size", 32), "batch_size")
+
         task_types = benchmark_config.get("task_types")
         if task_types:
             for task_type in task_types:
@@ -513,32 +572,37 @@ class MTEBAdapter(FrameworkAdapter):
         logger.info(f"Built MTEB command: {' '.join(cmd)}")
         return cmd
 
+    def _build_mteb_runner_command(self, config_path: Path) -> list[str]:
+        """Build the Python API runner command used for sample-limited jobs."""
+        runner_path = Path(__file__).with_name("mteb_runner.py")
+        return [sys.executable, str(runner_path), str(config_path)]
+
     def _run_mteb_subprocess(
         self,
         cmd: list[str],
         timeout: int,
     ) -> subprocess.CompletedProcess[str]:
-        """Execute MTEB CLI subprocess with output streaming and timeout.
+        """Execute an MTEB subprocess with output streaming and timeout.
 
         Runs the MTEB command, captures output for logging, and handles
         errors and timeouts appropriately.
 
         Args:
-            cmd: Command arguments list (from _build_mteb_command)
+            cmd: Command arguments from the CLI or sample-limited runner builder
             timeout: Maximum execution time in seconds
 
         Returns:
             CompletedProcess object with return code and output
 
         Raises:
-            RuntimeError: If MTEB CLI exits with non-zero code or times out.
+            RuntimeError: If MTEB exits with non-zero code or times out.
                 The error message includes stdout/stderr for debugging.
 
         Example:
             >>> result = adapter._run_mteb_subprocess(cmd, timeout=3600)
             >>> print(f"MTEB completed with code {result.returncode}")
         """
-        logger.info(f"Executing MTEB CLI with timeout={timeout}s: {' '.join(cmd)}")
+        logger.info(f"Executing MTEB runner with timeout={timeout}s: {' '.join(cmd)}")
 
         try:
             # Run MTEB with combined stdout/stderr for logging
@@ -563,13 +627,13 @@ class MTEBAdapter(FrameworkAdapter):
             # Check for errors
             if result.returncode != 0:
                 raise RuntimeError(
-                    f"MTEB CLI failed with exit code {result.returncode}\n"
+                    f"MTEB runner failed with exit code {result.returncode}\n"
                     f"Command: {' '.join(cmd)}\n"
                     f"Stdout: {result.stdout}\n"
                     f"Stderr: {result.stderr}"
                 )
 
-            logger.info("MTEB CLI completed successfully")
+            logger.info("MTEB runner completed successfully")
             return result
 
         except subprocess.TimeoutExpired as e:
