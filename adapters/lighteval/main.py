@@ -121,7 +121,6 @@ class LightEvalAdapter(FrameworkAdapter):
             )
 
             subprocess_env = build_hf_offline_environment(
-                self.settings.resolved_job_spec_path,
                 TEST_DATA_DIR,
             )
             if subprocess_env is not None:

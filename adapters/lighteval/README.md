@@ -431,6 +431,12 @@ are exposed through the writable cache overlay; otherwise the cache starts empty
 framework load still requires the needed dataset assets to be available locally.
 Jobs without `test_data_ref` keep the existing online behavior.
 
+The adapter detects staged data from the `/test_data` volume mount because EvalHub consumes
+`test_data_ref` before writing the adapter JobSpec; the reference itself is not present in that
+file. LightEval requires a prepared Hub cache (`hub/` and/or `datasets/`) at the mount root. The
+`hf` source stages raw repository files, not this cache layout, and is therefore not supported
+for this LightEval workflow. Use S3, PVC, or Git to stage the prepared cache tree.
+
 The staged directory should have the cache layout produced by Hugging Face tooling, for example:
 
 ```text
@@ -455,6 +461,10 @@ directly from GitHub during import even when the selected task does not use Tiny
 adapter copies the staged file into LightEval's task package before loading the registry and fails
 early with an actionable error if it is missing. Include this file in the same `test_data_ref` as
 the Hugging Face cache.
+
+The adapter image also includes NLTK's `punkt` and `punkt_tab` resources. LightEval imports
+IFEval while building its task registry, and IFEval requests these resources if they are absent;
+bundling them prevents that import from attempting an NLTK download in a disconnected job.
 
 Attach `test_data_ref` to each benchmark entry that needs the staged data; uploading a cache to
 object storage alone does not make a job offline. For example:

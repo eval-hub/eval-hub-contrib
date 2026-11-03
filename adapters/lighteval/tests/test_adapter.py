@@ -124,11 +124,11 @@ def test_lighteval_happy_path(adapter, mock_callbacks, monkeypatch, mock_hf_api)
 def test_staged_hf_cache_enables_offline_mode(
     tmp_path, mock_callbacks, monkeypatch, mock_hf_api
 ):
-    """A job with test_data_ref points LightEval at the staged HF cache."""
+    """A test-data mount enables offline mode without a serialized test_data_ref."""
     meta_dir = tmp_path / "meta"
     meta_dir.mkdir()
     job = json.loads(Path("meta/job.json").read_text())
-    job["test_data_ref"] = {"pvc": {"claim_name": "lighteval-cache"}}
+    assert "test_data_ref" not in job
     job_path = meta_dir / "job.json"
     job_path.write_text(json.dumps(job))
 
@@ -152,8 +152,7 @@ def test_staged_hf_cache_enables_offline_mode(
     monkeypatch.setattr(
         adapter_main,
         "build_hf_offline_environment",
-        lambda job_spec_path, root: build_offline_environment(
-            job_spec_path,
+        lambda root: build_offline_environment(
             root,
             writable_datasets_cache_dir=writable_cache,
         ),
