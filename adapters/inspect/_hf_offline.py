@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -158,6 +159,55 @@ def job_spec_requests_test_data(path: str | None = None) -> bool:
     return _has_test_data_ref(_read_job_spec_dict_from_path(job_path))
 
 
+def _link_staged_datasets_cache(staged_root: Path, writable_root: Path) -> int:
+    """Expose prepared datasets from read-only test data through the writable cache path.
+
+    ``datasets`` falls back to a prepared local dataset cache when Hub access is
+    disabled. Runtime cache files and builder locks must still be created on
+    writable storage, so mirror the cache directory structure and symlink its
+    prepared files instead of copying potentially large Arrow shards.
+    """
+    source = staged_root / "datasets"
+    destination = writable_root / "datasets"
+    if not source.is_dir():
+        return 0
+
+    allowed_root = staged_root.resolve()
+    linked_files = 0
+
+    def link_file(source_file: str, destination_file: str) -> str:
+        nonlocal linked_files
+        # Repeated setup (the import-time seed and normal adapter setup) is
+        # expected. Preserve any writable cache content already produced.
+        if os.path.lexists(destination_file):
+            return destination_file
+        resolved_source = Path(source_file).resolve(strict=True)
+        if not resolved_source.is_relative_to(allowed_root):
+            raise ValueError(
+                f"staged Hugging Face dataset cache file resolves outside {allowed_root}: "
+                f"{source_file}"
+            )
+        os.symlink(resolved_source, destination_file)
+        linked_files += 1
+        return destination_file
+
+    def ignore_transient_cache_files(_directory: str, names: list[str]) -> set[str]:
+        return {
+            name
+            for name in names
+            if name.endswith(".lock") or ".incomplete" in name
+        }
+
+    shutil.copytree(
+        source,
+        destination,
+        dirs_exist_ok=True,
+        copy_function=link_file,
+        ignore=ignore_transient_cache_files,
+    )
+    return linked_files
+
+
 def configure_hf_offline_environment(
     hf_home: str,
     env: dict[str, str] | None = None,
@@ -167,6 +217,13 @@ def configure_hf_offline_environment(
     """Use staged Hub files read-only and place generated caches on writable job storage."""
     staged_root = Path(hf_home)
     writable_root = Path(writable_cache_home)
+    linked_datasets = _link_staged_datasets_cache(staged_root, writable_root)
+    if linked_datasets:
+        logger.info(
+            "Exposed %d staged Hugging Face dataset cache files through writable cache %s/datasets",
+            linked_datasets,
+            writable_root,
+        )
     values = {
         # EvalHub mounts /test_data read-only. The Hub snapshot is input data,
         # while datasets creates lock files and processed Arrow caches at run
