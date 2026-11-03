@@ -715,6 +715,13 @@ class LightEvalAdapter(FrameworkAdapter):
         # Normalise LightEval metric names to match collection primary_score.metric.
         # pass@k:k=1&n=3 → pass@1  (query-string: extract k value)
         # codegen_pass@1:16 → codegen_pass@1  (plain numeric suffix)
+        # maj@n:n=4&...normalize_pred=<function ... at 0x...> → maj@4
+        # Keep the majority-vote sample count in the public metric name, just
+        # as pass@k keeps k, rather than exposing process-specific function reprs.
+        if metric_name.startswith("maj@n:"):
+            match = re.search(r"(?:^|&)n=([1-9]\d*)(?:&|$)", metric_name.partition(":")[2])
+            if match:
+                return f"maj@{match.group(1)}"
         if ":" not in metric_name:
             return metric_name
         base, _, suffix = metric_name.rpartition(":")

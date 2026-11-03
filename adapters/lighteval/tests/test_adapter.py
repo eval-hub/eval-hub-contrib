@@ -1579,6 +1579,54 @@ def test_loglikelihood_patch_output_tokens_feed_token_normalisation(monkeypatch)
     assert LoglikelihoodAcc(logprob_normalization=LogProbTokenNorm()).compute(doc, resp) == 1
 
 
+@pytest.mark.parametrize("count", [4, 8])
+@pytest.mark.parametrize("address", ["0x7f1b775f2e80", "0x7f8b077f6e80"])
+def test_math_majority_metrics_have_stable_names(adapter, count, address):
+    """Real math result keys must not depend on the Python process address."""
+    raw_name = (
+        f"maj@n:n={count}&strip_strings=True&"
+        f"normalize_pred=<function math_normalizer at {address}>&"
+        f"normalize_gold=<function math_normalizer at {address}>"
+    )
+    raw = {
+        "results": {
+            "math:algebra|0": {raw_name: 0.5, f"{raw_name}_stderr": 0.1},
+            "math:counting_and_probability|0": {raw_name: 0.0},
+            "math:_average|0": {raw_name: 0.25},
+            "all": {raw_name: 0.25},
+        }
+    }
+    results, schema = adapter._extract_evaluation_results(raw, "math")
+    expected = [
+        f"math:algebra.maj@{count}",
+        f"math:counting_and_probability.maj@{count}",
+        f"math:_average.maj@{count}",
+        f"all.maj@{count}",
+    ]
+    assert [r.metric_name for r in results] == expected
+    assert [s.name for s in schema] == expected
+    assert [r.metric_value for r in results] == [0.5, 0.0, 0.25, 0.25]
+    assert results[0].confidence_interval == pytest.approx((0.304, 0.696))
+    assert results[0].metadata["metric"] == f"maj@{count}"
+
+
+@pytest.mark.parametrize(
+    ("raw_name", "expected"),
+    [
+        ("em", "em"),
+        ("extractive_match", "extractive_match"),
+        ("pass@k:k=1&n=3", "pass@1"),
+        ("codegen_pass@1:16", "codegen_pass@1"),
+        ("maj@n:strip_strings=True&n=4", "maj@4"),
+        ("maj@n:strip_strings=True", "maj@n:strip_strings=True"),
+        ("maj@n:n=0", "maj@n:n=0"),
+        ("maj@n:n=4oops", "maj@n:n=4oops"),
+    ],
+)
+def test_normalise_metric_name_preserves_other_formats(raw_name, expected):
+    assert LightEvalAdapter._normalise_metric_name(raw_name) == expected
+
+
 # ── provider.yaml primary metrics must equal the keys the adapter emits ──────
 #
 # EvalHub resolves ``primary_score.metric`` with an exact lookup against the
@@ -1589,9 +1637,9 @@ def test_loglikelihood_patch_output_tokens_feed_token_normalisation(monkeypatch)
 # breaking the primary score.
 
 # Benchmarks whose primary metric cannot be asserted from the registry alone.
-# math:* emit a name that embeds a function repr, truthfulqa:mc emits one
-# metric object that fans out to several keys, and the group ids expand to
-# many tasks. They still declare bare metric names and need a live run to fix.
+# math:* provider declarations still need to select the normalized maj@N keys;
+# truthfulqa:mc emits one metric object that fans out to several keys, and the
+# group ids expand to many tasks. They need a provider-config follow-up.
 _PRIMARY_METRIC_KNOWN_GAPS = {
     "math",
     "math:algebra",
