@@ -11,15 +11,17 @@ import mteb_runner
 
 
 class FakeTask:
-    def __init__(self, dataset, name="FakeTask", eval_splits=None):
+    def __init__(self, dataset, name="FakeTask", eval_splits=None, task_type=None):
         self.dataset = dataset
         self.metadata = SimpleNamespace(
             name=name,
             eval_splits=eval_splits or ["test"],
+            type=task_type,
         )
+        self.loaded = False
 
     def load_data(self):
-        pass
+        self.loaded = True
 
 
 def test_limit_task_caps_evaluation_split_and_preserves_training_data():
@@ -74,6 +76,22 @@ def test_limit_task_reports_unsupported_data_structure():
 
     with pytest.raises(ValueError, match="UnsupportedTask.*unsupported data structure"):
         mteb_runner._limit_task(task, 1)
+
+
+def test_sts_task_rejects_one_example_with_actionable_error():
+    task = FakeTask(
+        DatasetDict({"test": Dataset.from_dict({"text": ["one", "two"]})}),
+        name="STSBenchmark",
+        task_type="STS",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="STSBenchmark.*requires num_examples >= 2.*correlation metrics",
+    ):
+        mteb_runner._limit_task(task, 1)
+
+    assert not task.loaded
 
 
 def test_run_forwards_batch_size_and_writes_effective_sampling_metadata(

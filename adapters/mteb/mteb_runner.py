@@ -178,6 +178,14 @@ def _limit_task(task: Any, limit: int) -> int:
             "evaluation splits"
         )
 
+    task_type = getattr(task.metadata, "type", None)
+    task_type = getattr(task_type, "value", task_type)
+    if str(task_type).upper() == "STS" and limit < 2:
+        raise ValueError(
+            f"MTEB STS task '{task_name}' requires num_examples >= 2 because "
+            "its correlation metrics need at least two evaluation examples"
+        )
+
     task.load_data()
     count, found = _limit_eval_data(
         task.dataset, eval_splits, limit, task_name
