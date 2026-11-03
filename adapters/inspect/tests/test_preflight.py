@@ -300,27 +300,48 @@ def test_cyberseceval_empty_cache_file_is_not_ready(tmp_path):
         "https://raw.githubusercontent.com"
     ]
 
-    with pytest.raises(RuntimeError, match="Offline CyberSecEval 2.*test_data_ref"):
-        pf.configure_staged_cyberseceval_cache(
-            "inspect_evals/cyse2_prompt_injection",
-            {**env, "HF_HUB_OFFLINE": "1"},
-            tmp_path / "staged",
-        )
+    assert not pf.configure_staged_cyberseceval_cache(
+        "inspect_evals/cyse2_prompt_injection",
+        {**env, "HF_HUB_OFFLINE": "1"},
+        tmp_path / "staged",
+    )
 
 
-def test_configure_staged_cyberseceval_cache_fails_early_when_offline_file_is_missing(
-    tmp_path,
+@pytest.mark.parametrize(
+    "mode,should_probe,should_raise",
+    [("fail", True, True), ("warn", True, False), ("off", False, False)],
+)
+def test_missing_cyberseceval_cache_respects_preflight_mode(
+    tmp_path, monkeypatch, caplog, mode, should_probe, should_raise
 ):
-    """Offline runs fail clearly instead of letting Inspect-Evals retry a remote download."""
-    with pytest.raises(RuntimeError, match="Offline CyberSecEval 2.*test_data_ref"):
-        pf.configure_staged_cyberseceval_cache(
-            "inspect_evals/cyse2_prompt_injection",
-            {
-                "HF_DATASETS_OFFLINE": "1",
-                "XDG_CACHE_HOME": str(tmp_path / "default-cache"),
-            },
-            tmp_path,
-        )
+    """Missing staged data follows network reachability and the selected preflight mode."""
+    env = {
+        "HF_HUB_OFFLINE": "1",
+        pf.MODE_ENV: mode,
+        "XDG_CACHE_HOME": str(tmp_path / "default-cache"),
+    }
+    task = "inspect_evals/cyse2_prompt_injection"
+    probed_urls = []
+
+    def unreachable_probe(url, _timeout_s, _env):
+        probed_urls.append(url)
+        return False, "unreachable", 0.0
+
+    monkeypatch.setattr(pf, "probe", unreachable_probe)
+    assert not pf.configure_staged_cyberseceval_cache(task, env, tmp_path / "staged")
+
+    if should_raise:
+        with pytest.raises(pf.PreflightError, match="raw.githubusercontent.com"):
+            pf.run_preflight(task, env)
+    else:
+        with caplog.at_level("WARNING"):
+            pf.run_preflight(task, env)
+
+    assert probed_urls == (
+        ["https://raw.githubusercontent.com"] if should_probe else []
+    )
+    if mode == "warn":
+        assert "continuing because" in caplog.text
 
 
 def test_configure_staged_cyberseceval_cache_does_not_change_other_tasks(tmp_path):

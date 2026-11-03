@@ -16,8 +16,9 @@ parameters key              environment variable          meaning
 ``preflight_hosts``         ``INSPECT_PREFLIGHT_HOSTS``   extra URLs to probe (list / comma-separated)
 ==========================  ============================  ==============================
 
-The probe is skipped in offline mode (``HF_HUB_OFFLINE=1``) and for Petri/Bloom, which only
-talk to model endpoints.
+The Hugging Face Hub probe is skipped when ``HF_HUB_OFFLINE=1``. Probes for task-specific
+GitHub downloads still run, since Hugging Face offline mode does not disable those requests.
+Petri/Bloom do not need dataset-host probes and only talk to model endpoints.
 """
 
 from __future__ import annotations
@@ -431,7 +432,12 @@ def configure_staged_cyberseceval_cache(
     env: dict[str, str],
     staged_data_dir: str | Path = "/test_data",
 ) -> bool:
-    """Use the staged Inspect-Evals cache for CyberSecEval 2 when its exact file is present."""
+    """Select the staged CyberSecEval cache when its exact file is present.
+
+    If the file is absent, leave network handling to ``run_preflight`` and
+    Inspect-Evals. This preserves the configured ``fail``, ``warn``, and ``off``
+    behavior; Hugging Face offline flags do not imply that GitHub is unreachable.
+    """
     if task_spec != _CYBERSECEVAL_PROMPT_INJECTION_TASK:
         return False
 
@@ -448,19 +454,6 @@ def configure_staged_cyberseceval_cache(
             staged_cache_file,
         )
         return True
-
-    if env.get("HF_HUB_OFFLINE") == "1" or env.get("HF_DATASETS_OFFLINE") == "1":
-        configured_cache = env.get(INSPECT_EVALS_CACHE_DIR_ENV)
-        configured_location = (
-            f"; configured {INSPECT_EVALS_CACHE_DIR_ENV}={configured_cache!r} also lacks it"
-            if configured_cache
-            else ""
-        )
-        raise RuntimeError(
-            "Offline CyberSecEval 2 prompt-injection requires the exact pinned Inspect-Evals "
-            f"dataset cache file at {staged_cache_file}{configured_location}. Stage that file "
-            "through test_data_ref so the adapter can run without GitHub access."
-        )
 
     return False
 
