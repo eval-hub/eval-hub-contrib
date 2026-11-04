@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir --no-deps -r requirements.lock
 
 # Copy adapter implementation and loglikelihood patch
 COPY main.py .
+COPY _hf_offline.py ./
 COPY lighteval_logprob_patch.py .
 COPY lighteval_memory_cap.py .
 COPY sample_results.py ./

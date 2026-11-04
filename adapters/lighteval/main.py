@@ -38,8 +38,15 @@ from evalhub.adapter import (
     read_model_auth_key,
     resolve_model_credentials,
 )
-from evalhub.models import MetricSchema, ResultType
 from evalhub.adapter.mlflow import MlflowFileArtifact
+from evalhub.models import MetricSchema, ResultType
+
+from _hf_offline import (
+    TEST_DATA_DIR,
+    build_hf_offline_environment,
+    ensure_lighteval_registry_assets,
+    ensure_nltk_offline_resources,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +121,24 @@ class LightEvalAdapter(FrameworkAdapter):
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
             )
 
+            subprocess_env = build_hf_offline_environment(
+                TEST_DATA_DIR,
+            )
+            if subprocess_env is not None:
+                # LightEval's task registry is also loaded in this process and
+                # imports IFEval, which attempts NLTK downloads if these
+                # resources are missing. Set the staged path and validate it
+                # before any registry import, in both this process and the CLI.
+                os.environ.update(subprocess_env)
+                ensure_nltk_offline_resources(TEST_DATA_DIR)
+                ensure_lighteval_registry_assets(TEST_DATA_DIR)
+                logger.info(
+                    "Using staged Hugging Face assets from %s; Hub downloads are disabled "
+                    "and the writable datasets cache is %s",
+                    TEST_DATA_DIR,
+                    subprocess_env["HF_DATASETS_CACHE"],
+                )
+
             self._validate_config(config)
             tasks = self._parse_benchmark_tasks(config.benchmark_id, config.parameters)
             self._validate_provider_supports_tasks(
@@ -140,6 +165,7 @@ class LightEvalAdapter(FrameworkAdapter):
                 limit=config.num_examples or config.parameters.get("max_samples"),
                 batch_size=config.parameters.get("batch_size", 1),
                 benchmark_config=config.parameters,
+                subprocess_env=subprocess_env,
             )
 
             # Phase 4: Post-processing
@@ -435,6 +461,7 @@ class LightEvalAdapter(FrameworkAdapter):
         limit: int | None,
         batch_size: int,
         benchmark_config: dict[str, Any],
+        subprocess_env: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Execute LightEval CLI and return parsed results.
 
@@ -553,11 +580,12 @@ class LightEvalAdapter(FrameworkAdapter):
         safe_cmd = [re.sub(r"(,api_key=)[^,]*", r"\1***", arg) for arg in cmd]
         logger.info(f"Executing LightEval CLI: {' '.join(safe_cmd)}")
 
-        env = None
-        if "HF_TOKEN" not in os.environ:
+        env = dict(subprocess_env) if subprocess_env is not None else None
+        effective_env = env if env is not None else os.environ
+        if "HF_TOKEN" not in effective_env:
             hf_token = read_model_auth_key("hf-token")
             if hf_token:
-                env = {**os.environ, "HF_TOKEN": hf_token}
+                env = {**effective_env, "HF_TOKEN": hf_token}
                 logger.info("Injected HF_TOKEN from model secret")
 
         try:
@@ -994,6 +1022,7 @@ def main() -> None:
     Note: The service URL for callbacks comes from job_spec.callback_url (mounted via ConfigMap)
     """
     import sys
+
     from evalhub.adapter import DefaultCallbacks, configure_telemetry
 
     # Configure logging

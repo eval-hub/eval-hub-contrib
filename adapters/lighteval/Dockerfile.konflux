@@ -32,6 +32,7 @@ RUN /opt/app-root/bin/python -m pip uninstall -y uv && \
 
 # Copy adapter implementation
 COPY main.py .
+COPY _hf_offline.py ./
 COPY lighteval_logprob_patch.py .
 COPY lighteval_memory_cap.py .
 COPY sample_results.py .

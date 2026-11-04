@@ -41,6 +41,11 @@ from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 from evalhub.adapter.mlflow import MlflowFileArtifact
 
 from prepare_assets import prepare_assets
+from staged_assets import (
+    get_test_data_root,
+    resolve_staged_tokenizer_path,
+    staged_data_requested,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +154,25 @@ class RulerAdapter(FrameworkAdapter):
             context_lengths: list[int] = params.get("context_lengths", [4096, 8192, 16384])
             tokenizer_path: str = params.get("tokenizer_path") or config.model.name
             tokenizer_type: str = params.get("tokenizer_type", "hf")
+            staged_root = get_test_data_root()
+            try:
+                job_spec_path = self.settings.resolved_job_spec_path
+            except (AttributeError, RuntimeError):
+                job_spec_path = os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")
+            offline = staged_data_requested(job_spec_path, staged_root)
+            if offline:
+                tokenizer_path = str(
+                    resolve_staged_tokenizer_path(
+                        params.get("tokenizer_path"),
+                        config.model.name,
+                        tokenizer_type,
+                        staged_root,
+                    )
+                )
+                logger.info(
+                    "Using disconnected RULER inputs from %s and tokenizer %s",
+                    staged_root, tokenizer_path,
+                )
             model_template: str = params.get("model_template", "base")
             tokens_to_generate: int | None = params.get("tokens_to_generate")
             batch_size: int = max(1, params.get("batch_size", 1))
@@ -163,7 +187,7 @@ class RulerAdapter(FrameworkAdapter):
             pred_dir.mkdir(parents=True)
 
             # Verify tokenizer availability without downloading the full model weights.
-            self._verify_tokenizer(tokenizer_path, tokenizer_type)
+            self._verify_tokenizer(tokenizer_path, tokenizer_type, offline)
 
             total_pairs = len(tasks) * len(context_lengths)
             completed_pairs = 0
@@ -187,7 +211,12 @@ class RulerAdapter(FrameworkAdapter):
                 )
             )
 
-            self._prepare_task_assets(tasks, data_dir, timeout=data_gen_timeout)
+            self._prepare_task_assets(
+                tasks,
+                data_dir,
+                timeout=data_gen_timeout,
+                staged_data_dir=staged_root if offline else None,
+            )
 
             for task_id in tasks:
                 for ctx_len in context_lengths:
@@ -201,6 +230,7 @@ class RulerAdapter(FrameworkAdapter):
                         num_samples=num_samples,
                         random_seed=random_seed,
                         timeout=data_gen_timeout,
+                        offline=offline,
                     )
                     completed_pairs += 1
                     callbacks.report_status(
@@ -475,8 +505,10 @@ class RulerAdapter(FrameworkAdapter):
             return tasks
         return BENCHMARK_TO_TASKS[benchmark_id]
 
-    def _verify_tokenizer(self, tokenizer_path: str, tokenizer_type: str) -> bool:
-        """Return True if the tokenizer is accessible; warn and return False otherwise.
+    def _verify_tokenizer(
+        self, tokenizer_path: str, tokenizer_type: str, offline: bool = False,
+    ) -> bool:
+        """Check tokenizer availability; disconnected jobs fail without a local copy.
 
         Uses fast tokenizer-only loads (no model weights) to avoid downloading
         multi-gigabyte checkpoints during the INITIALIZING phase.
@@ -490,11 +522,16 @@ class RulerAdapter(FrameworkAdapter):
                     tokenizer_path,
                     trust_remote_code=False,
                     use_fast=True,
-                    # Request tokenizer files only — skip model weights
-                    local_files_only=False,
-                    token=self._hf_token(),
+                    # In disconnected mode this must only load the staged files.
+                    local_files_only=offline,
+                    token=None if offline else self._hf_token(),
                 )
                 return True
+            if offline:
+                raise ValueError(
+                    f"Tokenizer type '{tokenizer_type}' is not supported for disconnected "
+                    "RULER jobs; use a staged Hugging Face tokenizer."
+                )
             if tokenizer_type == "openai":
                 # tokenizer_path is a tiktoken encoding name (e.g. cl100k_base),
                 # not a model name — use get_encoding(), not encoding_for_model().
@@ -502,6 +539,12 @@ class RulerAdapter(FrameworkAdapter):
                 tiktoken.get_encoding(tokenizer_path)
                 return True
         except Exception as exc:
+            if offline:
+                raise ValueError(
+                    f"Could not load staged RULER tokenizer '{tokenizer_path}' using local "
+                    f"files only: {exc}. Stage the complete tokenizer under /test_data/tokenizer "
+                    "or set parameters.tokenizer_path to a local tokenizer directory."
+                ) from exc
             logger.warning(
                 f"Tokenizer '{tokenizer_path}' ({tokenizer_type}) not immediately "
                 f"accessible: {exc}. Data generation may fail."
@@ -598,6 +641,7 @@ class RulerAdapter(FrameworkAdapter):
         num_samples: int,
         random_seed: int,
         timeout: int = 600,
+        offline: bool = False,
     ) -> Path:
         """Generate the JSONL dataset for one (task, context_length) pair.
 
@@ -624,6 +668,14 @@ class RulerAdapter(FrameworkAdapter):
             "PYTHONPATH": pythonpath,
             "RULER_DATA_DIR": str(data_dir / "assets"),
         }
+        if offline:
+            env.pop("HF_TOKEN", None)
+            env.pop("HUGGING_FACE_HUB_TOKEN", None)
+            env.update({
+                "RULER_OFFLINE": "1",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+            })
 
         cmd = [
             sys.executable,
@@ -639,7 +691,7 @@ class RulerAdapter(FrameworkAdapter):
             "--model_template_type", model_template,
         ]
 
-        hf_token = self._hf_token()
+        hf_token = None if offline else self._hf_token()
         if hf_token:
             env["HF_TOKEN"] = hf_token
             env["HUGGING_FACE_HUB_TOKEN"] = hf_token
@@ -656,11 +708,20 @@ class RulerAdapter(FrameworkAdapter):
         logger.debug(f"Data generation stdout: {result.stdout}")
         return output_file
 
-    def _prepare_task_assets(self, tasks: list[str], data_dir: Path, timeout: int) -> None:
+    def _prepare_task_assets(
+        self,
+        tasks: list[str],
+        data_dir: Path,
+        timeout: int,
+        staged_data_dir: Path | None = None,
+    ) -> None:
         """Prepare this job's required inputs in one shared writable cache."""
         prepare_assets(
             [self._load_task_config(task) for task in tasks],
-            data_dir / "assets", self.SCRIPTS_DIR, timeout,
+            data_dir / "assets",
+            self.SCRIPTS_DIR,
+            timeout=timeout,
+            staged_data_dir=staged_data_dir,
         )
 
     def _run_api_inference(

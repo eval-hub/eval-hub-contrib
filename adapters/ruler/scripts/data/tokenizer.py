@@ -21,9 +21,16 @@ from tenacity import (
     wait_fixed,
     wait_random,
 ) 
+from offline import is_offline
 
 
 def select_tokenizer(tokenizer_type, tokenizer_path):
+    if is_offline() and tokenizer_type in ("openai", "gemini"):
+        raise ValueError(
+            f"Tokenizer type '{tokenizer_type}' may contact an external service or download "
+            "its encoding at runtime and is not supported for disconnected RULER jobs. "
+            "Use tokenizer_type='hf' with a staged local Hugging Face tokenizer."
+        )
     if tokenizer_type == 'nemo':
         return NeMoSentencePieceTokenizer(model_path=tokenizer_path)
     elif tokenizer_type == 'nemo_tiktoken':
@@ -77,7 +84,12 @@ class HFTokenizer:
     """
     def __init__(self, model_path) -> None:
         from transformers import AutoTokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        offline = is_offline()
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            trust_remote_code=not offline,
+            local_files_only=offline,
+        )
     
     def text_to_tokens(self, text: str) -> List[str]:
         tokens = self.tokenizer.tokenize(text)

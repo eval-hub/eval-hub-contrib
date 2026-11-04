@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 TEST_DATA_DIR = "/test_data"
+WRITABLE_HF_CACHE_DIR = "/data/huggingface"
 _JOB_SPEC_ALLOWED_ROOT = Path("/meta")
 
 
@@ -157,16 +160,97 @@ def job_spec_requests_test_data(path: str | None = None) -> bool:
     return _has_test_data_ref(_read_job_spec_dict_from_path(job_path))
 
 
+def _link_staged_datasets_cache(staged_root: Path, writable_root: Path) -> int:
+    """Expose prepared datasets from read-only test data through the writable cache path.
+
+    ``datasets`` falls back to a prepared local dataset cache when Hub access is
+    disabled. Runtime cache files and builder locks must still be created on
+    writable storage, so mirror the cache directory structure and symlink its
+    prepared files instead of copying potentially large Arrow shards.
+    """
+    source = staged_root / "datasets"
+    destination = writable_root / "datasets"
+    if not source.is_dir():
+        return 0
+
+    allowed_root = staged_root.resolve()
+    linked_files = 0
+
+    def link_file(source_file: str, destination_file: str) -> str:
+        nonlocal linked_files
+        # Repeated setup (the import-time seed and normal adapter setup) is
+        # expected. Preserve any writable cache content already produced.
+        if os.path.lexists(destination_file):
+            return destination_file
+        resolved_source = Path(source_file).resolve(strict=True)
+        if not resolved_source.is_relative_to(allowed_root):
+            raise ValueError(
+                f"staged Hugging Face dataset cache file resolves outside {allowed_root}: "
+                f"{source_file}"
+            )
+        os.symlink(resolved_source, destination_file)
+        linked_files += 1
+        return destination_file
+
+    def ignore_transient_cache_files(_directory: str, names: list[str]) -> set[str]:
+        return {
+            name
+            for name in names
+            if name.endswith(".lock") or ".incomplete" in name
+        }
+
+    def make_cache_directories_writable() -> None:
+        for current, _, _ in os.walk(destination):
+            directory = Path(current)
+            mode = stat.S_IMODE(directory.stat().st_mode)
+            directory.chmod(mode | stat.S_IWUSR | stat.S_IXUSR)
+
+    # A previous adapter invocation may already have created this cache using
+    # source modes. Make it writable before copytree adds or updates entries.
+    if destination.is_dir():
+        make_cache_directories_writable()
+
+    shutil.copytree(
+        source,
+        destination,
+        dirs_exist_ok=True,
+        copy_function=link_file,
+        ignore=ignore_transient_cache_files,
+    )
+
+    # copytree copies each source directory's mode. Staged bundles can be
+    # read-only, but the runtime cache needs writable directories for locks
+    # and generated dataset files.
+    make_cache_directories_writable()
+
+    return linked_files
+
+
 def configure_hf_offline_environment(
     hf_home: str,
     env: dict[str, str] | None = None,
+    *,
+    writable_cache_home: str = WRITABLE_HF_CACHE_DIR,
 ) -> None:
-    """Use local Hugging Face caches only (disconnected / no huggingface.co)."""
-    root = Path(hf_home)
+    """Use staged Hub files read-only and place generated caches on writable job storage."""
+    staged_root = Path(hf_home)
+    writable_root = Path(writable_cache_home)
+    linked_datasets = _link_staged_datasets_cache(staged_root, writable_root)
+    if linked_datasets:
+        logger.info(
+            "Exposed %d staged Hugging Face dataset cache files through writable cache %s/datasets",
+            linked_datasets,
+            writable_root,
+        )
     values = {
-        "HF_HOME": str(root),
-        "HF_HUB_CACHE": str(root / "hub"),
-        "HF_DATASETS_CACHE": str(root / "datasets"),
+        # EvalHub mounts /test_data read-only. The Hub snapshot is input data,
+        # while datasets creates lock files and processed Arrow caches at run
+        # time, so those generated files belong on the writable /data volume.
+        "HF_HOME": str(writable_root),
+        "HF_HUB_CACHE": str(staged_root / "hub"),
+        "HF_DATASETS_CACHE": str(writable_root / "datasets"),
+        "HF_XET_CACHE": str(writable_root / "xet"),
+        "HF_ASSETS_CACHE": str(writable_root / "assets"),
         "HF_HUB_OFFLINE": "1",
         "HF_DATASETS_OFFLINE": "1",
         "HF_EVALUATE_OFFLINE": "1",
@@ -212,8 +296,9 @@ def seed_hf_offline_from_job_spec_file() -> None:
     if should_use_hf_offline(parameters, job_spec_path=path):
         configure_hf_offline_environment(TEST_DATA_DIR)
         logger.info(
-            "HF offline mode (import-time seed): HF_HOME=%s, Hub downloads disabled",
+            "HF offline mode (import-time seed): Hub cache=%s/hub, writable cache=%s, Hub downloads disabled",
             TEST_DATA_DIR,
+            WRITABLE_HF_CACHE_DIR,
         )
 
 

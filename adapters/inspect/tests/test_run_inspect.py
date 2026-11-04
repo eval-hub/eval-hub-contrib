@@ -1,11 +1,13 @@
 """Tests for the streaming, bounded inspect runner and its job-parameter overrides."""
 
+import shutil
 import sys
 import time
 
 import pytest
 
 import _execution as ex
+import _preflight as pf
 from main import InspectAdapter
 
 _OFF = {"INSPECT_PREFLIGHT": "off"}
@@ -14,6 +16,14 @@ _OFF = {"INSPECT_PREFLIGHT": "off"}
 def _cmd(script: str) -> list[str]:
     """Return a command list that runs script via sys.executable -c; cmd[2] acts as the task spec."""
     return [sys.executable, "-c", script]
+
+
+def _true_cmd(task_spec: str) -> list[str]:
+    """Return a portable no-op command retaining Inspect's task-spec argument position."""
+    executable = shutil.which("true")
+    if executable is None:
+        pytest.skip("the true executable is unavailable on PATH")
+    return [executable, "eval", task_spec]
 
 
 def _write_log_script(log_dir) -> str:
@@ -226,6 +236,56 @@ def test_unreachable_host_fails_before_inspect_starts(tmp_path, monkeypatch):
     monkeypatch.setattr(ex.subprocess, "Popen", lambda *_a, **_k: pytest.fail("inspect must not start"))
     with pytest.raises(RuntimeError, match="Pre-flight check"):
         ex.run_inspect(cmd, env, tmp_path)
+
+
+def test_run_inspect_uses_staged_cyberseceval_cache_before_preflight(
+    tmp_path, monkeypatch
+):
+    """The runner points Inspect-Evals at staged CyberSecEval data before preflight and launch."""
+    cache_file = pf._cyberseceval_prompt_injection_cache_file(tmp_path)
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text("[]\n", encoding="utf-8")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "run.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(ex, "TEST_DATA_DIR", str(tmp_path))
+    env = {
+        "HF_HUB_OFFLINE": "1",
+        "INSPECT_PREFLIGHT": "fail",
+        "XDG_CACHE_HOME": str(tmp_path / "default-cache"),
+    }
+
+    result = ex.run_inspect(
+        _true_cmd("inspect_evals/cyse2_prompt_injection"),
+        env,
+        log_dir,
+    )
+
+    assert result == log_dir / "run.json"
+    assert env[pf.INSPECT_EVALS_CACHE_DIR_ENV] == str(tmp_path)
+
+
+def test_run_inspect_preflight_off_allows_missing_cyberseceval_cache(
+    tmp_path, monkeypatch
+):
+    """The documented off override lets Inspect attempt its download without staged data."""
+    test_data_dir = tmp_path / "test_data"
+    monkeypatch.setattr(ex, "TEST_DATA_DIR", str(test_data_dir))
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "run.json").write_text("{}\n", encoding="utf-8")
+
+    result = ex.run_inspect(
+        _true_cmd("inspect_evals/cyse2_prompt_injection"),
+        {
+            "HF_HUB_OFFLINE": "1",
+            "INSPECT_PREFLIGHT": "off",
+            "XDG_CACHE_HOME": str(tmp_path / "default-cache"),
+        },
+        log_dir,
+    )
+
+    assert result == log_dir / "run.json"
 
 
 # -- job parameters -> env --------------------------------------------------------------------
