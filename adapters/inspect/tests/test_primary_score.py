@@ -39,6 +39,29 @@ def test_accuracy_selected_without_changing_individual_metrics(bid, scorer, key,
     }
 
 
+@pytest.mark.parametrize("invalid_value", [float("nan"), float("inf"), -float("inf")])
+def test_extract_results_skips_non_finite_metrics(invalid_value, caplog):
+    log = {"results": {"total_samples": 3, "scores": [{
+        "name": "example_scorer",
+        "scorer": "example_scorer",
+        "metrics": {
+            "accuracy": {"value": 0.75},
+            "invalid": {"value": invalid_value},
+        },
+    }]}}
+
+    results, capabilities, num_samples = extract_results(log, "inspect/example", "standard")
+
+    assert [(result.metric_name, result.metric_value) for result in results] == [
+        ("example_scorer/accuracy", 0.75),
+    ]
+    assert [(entry.metric, entry.zero_shot) for entry in capabilities] == [
+        ("example_scorer/accuracy", 0.75),
+    ]
+    assert num_samples == 3
+    assert "Skipping non-finite metric value" in caplog.text
+
+
 @pytest.mark.parametrize("bid,scorer,key,value,extras", CASES)
 @pytest.mark.parametrize("problem", ["missing", "duplicate", "nan", "inf", "negative_inf"])
 def test_invalid_accuracy_does_not_fall_back_to_other_metrics(bid, scorer, key, value, extras, problem):

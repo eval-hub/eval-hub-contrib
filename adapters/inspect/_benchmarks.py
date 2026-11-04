@@ -116,7 +116,9 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     "inspect/agentdojo":              "inspect_evals/agentdojo",
     "inspect/theagentcompany":        "inspect_evals/theagentcompany",
     "inspect/bfcl":                   "inspect_evals/bfcl",
-    "inspect/docvqa":                 "inspect_evals/docvqa",
+    # EvalHub's wrapper applies the sample limit before materializing the
+    # image-heavy dataset; the upstream task converts the entire split first.
+    "inspect/docvqa":                 "evalhub_docvqa.py@docvqa",
     # Custom
     "inspect/custom":                 None,
 }

@@ -309,6 +309,11 @@ def build_command(
     cmd += ["--log-level", config.parameters.get("log_level", "info")]
 
     task_args = _task_args(config)
+    if config.benchmark_id == "inspect/docvqa" and limit is not None:
+        # DocVQA's HF task otherwise materializes all 5,349 image records before
+        # Inspect applies its CLI --limit. Pass the same cap into the local task
+        # so it selects rows from the Arrow cache before converting them to Samples.
+        task_args["num_examples"] = limit
     if config.benchmark_id == "inspect/cyberseceval-2-pi" and _collection_judge_enabled(config):
         if task_args.get("judge_llm") not in (None, "null"):
             raise ValueError("judge_model cannot be combined with task_args.judge_llm")

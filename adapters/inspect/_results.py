@@ -76,6 +76,16 @@ def extract_results(
             if value is None:
                 continue
 
+            numeric_value = float(value)
+            if not math.isfinite(numeric_value):
+                logger.warning(
+                    "Skipping non-finite metric value | benchmark_id=%s | metric=%s | value=%s",
+                    benchmark_id,
+                    metric_name,
+                    value,
+                )
+                continue
+
             full_name = f"{dim_name}/{metric_name}"
             metric_name = BENCHMARK_METRIC_NAME_MAP.get(
                 (benchmark_id, full_name), full_name
@@ -96,7 +106,7 @@ def extract_results(
 
             evaluation_results.append(EvaluationResult(
                 metric_name=metric_name,
-                metric_value=float(value),
+                metric_value=numeric_value,
                 metric_type="float",
                 num_samples=num_samples,
                 metadata=metadata,
@@ -105,7 +115,7 @@ def extract_results(
                 ability=ability,
                 benchmark=benchmark_id,
                 metric=metric_name,
-                zero_shot=float(value),
+                zero_shot=numeric_value,
             ))
 
     return evaluation_results, capability_entries, num_samples
