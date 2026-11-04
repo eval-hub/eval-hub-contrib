@@ -170,13 +170,33 @@ The following parameters can be specified in the `benchmark_config` section or a
 | `data_args` | Arguments for dataset loading | `{"name": "3.0.0"}` |
 | `data_column_mapper` | Column mapping for datasets | `{"text_column": "article"}` |
 | `data_samples` | Maximum number of samples to use | `100` |
-| `processor` | HuggingFace tokenizer for synthetic data generation (required for `prompt_tokens=X,output_tokens=Y` format) | `"google/flan-t5-small"`, `"gpt2"` |
+| `processor` | HuggingFace tokenizer ID or local tokenizer directory for synthetic data generation | `"gpt2"`, `"/test_data/tokenizer"` |
+| `tokenizer` | Alias for `processor`; an explicit `processor` takes precedence | `"/test_data/tokenizer"` |
 
 **Note on `processor`:**
 - Required when using synthetic data format (`data: "prompt_tokens=X,output_tokens=Y"`)
-- Must be a valid HuggingFace model ID (e.g., `"google/flan-t5-small"`, `"meta-llama/Llama-3.1-8B-Instruct"`)
-- Defaults to `"gpt2"` if not specified (widely available, small)
+- Accepts a valid HuggingFace model ID or a local directory containing the tokenizer files.
+- Defaults to `"gpt2"` if neither parameter is supplied in connected mode.
+- An explicit `processor` or `tokenizer` pointing to an existing directory beneath `/test_data` automatically enables Hugging Face offline mode in the GuideLLM subprocess. Only the tokenizer directory is needed for synthetic data; no dataset bundle is required. The adapter checks the effective processor after applying precedence, and resolves symlinks before checking the path.
+- When `HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE`, `HF_DATASETS_OFFLINE`, or `HF_EVALUATE_OFFLINE` is enabled (`1`, `ON`, `YES`, or `TRUE`, case-insensitive), synthetic data requires an explicit `processor` or `tokenizer`; the adapter fails before launching GuideLLM rather than defaulting to `gpt2`.
 - Not needed when using actual datasets (HuggingFace datasets, files, etc.)
+
+For disconnected synthetic-data runs, pre-stage the complete tokenizer directory
+with `test_data_ref` so it is available at `/test_data/tokenizer`, and set:
+
+```json
+{
+  "processor": "/test_data/tokenizer",
+  "outputs": "json,csv,yaml"
+}
+```
+
+These are job `parameters`; `tokenizer` can also be used instead of `processor`.
+Offline runs default to `json,csv,yaml` when `outputs` is omitted. Explicit HTML
+output is rejected with a clear error because report generation downloads a
+template; local HTML templates are not supported by this offline policy.
+Connected runs retain the `json,csv,html,yaml` default. Mirror the adapter
+and runtime images and use a model endpoint reachable from the cluster.
 
 ### Request Configuration
 
