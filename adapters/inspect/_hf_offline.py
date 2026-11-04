@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -198,6 +199,17 @@ def _link_staged_datasets_cache(staged_root: Path, writable_root: Path) -> int:
             if name.endswith(".lock") or ".incomplete" in name
         }
 
+    def make_cache_directories_writable() -> None:
+        for current, _, _ in os.walk(destination):
+            directory = Path(current)
+            mode = stat.S_IMODE(directory.stat().st_mode)
+            directory.chmod(mode | stat.S_IWUSR | stat.S_IXUSR)
+
+    # A previous adapter invocation may already have created this cache using
+    # source modes. Make it writable before copytree adds or updates entries.
+    if destination.is_dir():
+        make_cache_directories_writable()
+
     shutil.copytree(
         source,
         destination,
@@ -205,6 +217,12 @@ def _link_staged_datasets_cache(staged_root: Path, writable_root: Path) -> int:
         copy_function=link_file,
         ignore=ignore_transient_cache_files,
     )
+
+    # copytree copies each source directory's mode. Staged bundles can be
+    # read-only, but the runtime cache needs writable directories for locks
+    # and generated dataset files.
+    make_cache_directories_writable()
+
     return linked_files
 
 

@@ -62,6 +62,44 @@ def test_extract_results_skips_non_finite_metrics(invalid_value, caplog):
     assert "Skipping non-finite metric value" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "mode,bid",
+    [("petri", "inspect/petri-sycophancy"), ("bloom", "inspect/bloom-custom")],
+)
+def test_non_finite_petri_bloom_primary_does_not_fall_back_to_other_dimensions(mode, bid):
+    log = {"results": {"total_samples": 1, "scores": [
+        {
+            "name": "concerning",
+            "scorer": "petri_judge",
+            "metrics": {"mean": {"value": "NaN"}},
+        },
+        {
+            "name": "admirable",
+            "scorer": "petri_judge",
+            "metrics": {"mean": {"value": 8}},
+        },
+    ]}}
+    non_finite_metrics: set[str] = set()
+
+    results, _, _ = extract_results(
+        log, bid, mode, non_finite_metrics=non_finite_metrics
+    )
+
+    assert non_finite_metrics == {"concerning/mean"}
+    assert [(result.metric_name, result.metric_value) for result in results] == [
+        ("admirable/mean", 8.0),
+    ]
+    assert compute_overall_score(
+        results, mode, bid, non_finite_metrics=non_finite_metrics
+    ) is None
+    assert resolve_primary_score(
+        results,
+        mode=mode,
+        benchmark_id=bid,
+        non_finite_metrics=non_finite_metrics,
+    ) is None
+
+
 @pytest.mark.parametrize("bid,scorer,key,value,extras", CASES)
 @pytest.mark.parametrize("problem", ["missing", "duplicate", "nan", "inf", "negative_inf"])
 def test_invalid_accuracy_does_not_fall_back_to_other_metrics(bid, scorer, key, value, extras, problem):
@@ -130,6 +168,48 @@ def test_petri_bloom_primary_selection_is_unchanged(bid):
 def test_petri_bloom_missing_primary_retains_legacy_fallback(bid):
     results = [metric("a/mean", 2), metric("b/mean", 4), metric("a/stderr", 0.1)]
     assert compute_overall_score(results, "petri" if "petri" in bid else "bloom", bid) == 3
+
+
+@pytest.mark.integration
+def test_job_does_not_report_secondary_score_when_petri_primary_is_non_finite(
+    monkeypatch, job_spec_path, tmp_path,
+):
+    raw = json.loads(Path(job_spec_path).read_text())
+    raw.pop("exports", None)
+    test_spec = tmp_path / "job.json"
+    test_spec.write_text(json.dumps(raw))
+    log_file = tmp_path / "result.json"
+    log_file.write_text(json.dumps({
+        "status": "success",
+        "results": {
+            "total_samples": 1,
+            "scores": [
+                {
+                    "name": "concerning",
+                    "scorer": "petri_judge",
+                    "metrics": {"mean": {"value": "NaN"}},
+                },
+                {
+                    "name": "admirable",
+                    "scorer": "petri_judge",
+                    "metrics": {"mean": {"value": 8}},
+                },
+            ],
+        },
+        "samples": [{"id": 1}],
+    }))
+    monkeypatch.setattr(main, "run_inspect", lambda *_: log_file)
+    callbacks = MagicMock()
+    callbacks.mlflow.save.return_value = None
+
+    adapter = InspectAdapter(job_spec_path=str(test_spec))
+    result = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    assert result.overall_score is None
+    assert result.primary_score is None
+    assert [(item.metric_name, item.metric_value) for item in result.results] == [
+        ("admirable/mean", 8.0),
+    ]
 
 
 def test_resolve_primary_score_custom_unique_accuracy():

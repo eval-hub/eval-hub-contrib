@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import _preflight as pf
 import pytest
+from _benchmarks import DOCVQA_TASK_SPEC
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -100,10 +101,26 @@ def test_hf_endpoint_override_is_probed_instead():
     assert urls == ["https://hf-mirror.internal"]
 
 
+def test_docvqa_custom_task_probes_default_hub():
+    """The local DocVQA wrapper still loads its dataset from Hugging Face."""
+    assert pf.required_urls(DOCVQA_TASK_SPEC, {}) == ["https://huggingface.co"]
+
+
+def test_docvqa_custom_task_probes_hub_override():
+    assert pf.required_urls(
+        DOCVQA_TASK_SPEC, {"HF_ENDPOINT": "https://hf-mirror.internal"}
+    ) == ["https://hf-mirror.internal"]
+
+
 @pytest.mark.parametrize("flag", ["HF_HUB_OFFLINE", "HF_DATASETS_OFFLINE"])
 def test_offline_mode_skips_hub_probe(flag):
     """Setting HF_HUB_OFFLINE or HF_DATASETS_OFFLINE to 1 suppresses the HF probe."""
     assert pf.required_urls("inspect_evals/mmlu_pro", {flag: "1"}) == []
+
+
+@pytest.mark.parametrize("flag", ["HF_HUB_OFFLINE", "HF_DATASETS_OFFLINE"])
+def test_docvqa_offline_mode_skips_hub_probe(flag):
+    assert pf.required_urls(DOCVQA_TASK_SPEC, {flag: "1"}) == []
 
 
 @pytest.mark.parametrize("task", ["inspect_petri/audit", "petri_bloom/bloom_audit"])

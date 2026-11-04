@@ -187,14 +187,26 @@ class InspectAdapter(FrameworkAdapter):
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
             )
 
-            evaluation_results, _, num_samples = extract_results(eval_log, config.benchmark_id, mode)
-            overall_score = compute_overall_score(evaluation_results, mode, catalog_benchmark_id)
+            non_finite_metrics: set[str] = set()
+            evaluation_results, _, num_samples = extract_results(
+                eval_log,
+                config.benchmark_id,
+                mode,
+                non_finite_metrics=non_finite_metrics,
+            )
+            overall_score = compute_overall_score(
+                evaluation_results,
+                mode,
+                catalog_benchmark_id,
+                non_finite_metrics=non_finite_metrics,
+            )
             job_primary = getattr(config, "primary_score", None)
             resolved_primary_score = resolve_primary_score(
                 evaluation_results,
                 mode=mode,
                 benchmark_id=catalog_benchmark_id,
                 job_primary=job_primary,
+                non_finite_metrics=non_finite_metrics,
             )
             if resolved_primary_score is not None:
                 logger.info(

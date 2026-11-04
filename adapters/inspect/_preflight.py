@@ -39,6 +39,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from _benchmarks import DOCVQA_TASK_SPEC
+
 logger = logging.getLogger(__name__)
 
 MODE_ENV = "INSPECT_PREFLIGHT"
@@ -467,8 +469,11 @@ def required_urls(
         hub_offline = env.get("HF_HUB_OFFLINE") == "1" or env.get("HF_DATASETS_OFFLINE") == "1"
         task_key = task_spec.lower()
         is_hf_task = (
-            task_key.startswith(_HF_TASK_PREFIXES)
-            and task_key not in _GITHUB_ONLY_TASKS
+            (
+                task_key.startswith(_HF_TASK_PREFIXES)
+                and task_key not in _GITHUB_ONLY_TASKS
+            )
+            or task_key == DOCVQA_TASK_SPEC
         )
         if is_hf_task and not hub_offline:
             urls.append(env.get("HF_ENDPOINT") or DEFAULT_HF_ENDPOINT)

@@ -21,10 +21,13 @@ def _load_task_module():
 
     datasets = ModuleType("datasets")
     datasets.Image = lambda decode=True: SimpleNamespace(decode=decode)
-    datasets.load_dataset = None
 
     inspect_evals = ModuleType("inspect_evals")
     inspect_evals.__path__ = []
+    inspect_evals_utils = ModuleType("inspect_evals.utils")
+    inspect_evals_utils.__path__ = []
+    inspect_evals_huggingface = ModuleType("inspect_evals.utils.huggingface")
+    inspect_evals_huggingface.load_dataset = None
     docvqa_package = ModuleType("inspect_evals.docvqa")
     docvqa_package.__path__ = []
     docvqa = ModuleType("inspect_evals.docvqa.docvqa")
@@ -42,6 +45,8 @@ def _load_task_module():
         "inspect_ai.dataset": inspect_dataset,
         "datasets": datasets,
         "inspect_evals": inspect_evals,
+        "inspect_evals.utils": inspect_evals_utils,
+        "inspect_evals.utils.huggingface": inspect_evals_huggingface,
         "inspect_evals.docvqa": docvqa_package,
         "inspect_evals.docvqa.docvqa": docvqa,
     }
@@ -103,7 +108,13 @@ def task_constructors(monkeypatch):
 def test_docvqa_selects_capped_rows_before_converting_records(monkeypatch, task_constructors):
     dataset = TrackingDataset([{"id": i} for i in range(5_349)])
     converted = []
-    monkeypatch.setattr(evalhub_docvqa, "load_dataset", lambda **kwargs: dataset)
+    calls = []
+
+    def load_dataset(**kwargs):
+        calls.append(kwargs)
+        return dataset
+
+    monkeypatch.setattr(evalhub_docvqa, "load_dataset", load_dataset)
     monkeypatch.setattr(
         evalhub_docvqa,
         "record_to_sample",
@@ -120,6 +131,12 @@ def test_docvqa_selects_capped_rows_before_converting_records(monkeypatch, task_
     ]
     assert converted == [0]
     assert result["dataset"]["samples"] == [{"id": 0}]
+    assert calls == [{
+        "path": "lmms-lab-encoder/DocVQA",
+        "name": "DocVQA",
+        "split": "validation",
+        "revision": "pinned-revision",
+    }]
 
 
 def test_docvqa_caps_at_dataset_length(monkeypatch, task_constructors):

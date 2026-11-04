@@ -6,9 +6,10 @@ from the cached Hugging Face Arrow dataset first so only the requested records
 and images are materialized in memory.
 """
 
-from datasets import Image, load_dataset
+from datasets import Image
 from inspect_ai import Task, task
 from inspect_ai.dataset import MemoryDataset
+from inspect_evals.utils.huggingface import load_dataset
 from inspect_evals.docvqa.docvqa import (
     DATASET_PATH,
     DOCVQA_DATASET_REVISION,
