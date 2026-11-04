@@ -62,6 +62,12 @@ class GuideLLMAdapter(FrameworkAdapter):
 
     ALLOWED_OUTPUT_FORMATS = frozenset({"json", "csv", "html", "yaml"})
     DEFAULT_OUTPUTS = "json,csv,html,yaml"
+    OFFLINE_OUTPUTS = "json,csv,yaml"
+    OFFLINE_ENV_VARS = (
+        "HF_HUB_OFFLINE", "HF_DATASETS_OFFLINE",
+        "HF_EVALUATE_OFFLINE", "TRANSFORMERS_OFFLINE",
+    )
+    TEST_DATA_DIR = Path("/test_data")
 
     def __init__(self, job_spec_path: Optional[str] = None):
         """Initialize the GuideLLM adapter.
@@ -244,6 +250,30 @@ class GuideLLMAdapter(FrameworkAdapter):
 
         return ",".join(normalized)
 
+    def _is_staged_processor(self, processor: Optional[str]) -> bool:
+        """Detect an existing tokenizer directory strictly beneath the staged data root."""
+        if not processor:
+            return False
+        path = Path(processor)
+        try:
+            root = self.TEST_DATA_DIR.resolve()
+            resolved = path.resolve()
+            return (
+                path.is_absolute()
+                and resolved != root
+                and resolved.is_relative_to(root)
+                and resolved.is_dir()
+            )
+        except OSError:
+            return False
+
+    def _offline_enabled(self, processor: Optional[str]) -> bool:
+        """Use the same offline detection for output selection and the subprocess."""
+        return self._is_staged_processor(processor) or any(
+            os.getenv(name, "").strip().upper() in {"1", "ON", "YES", "TRUE"}
+            for name in self.OFFLINE_ENV_VARS
+        )
+
     def _build_guidellm_command(self, job_spec: JobSpec) -> List[str]:
         """
         Build the GuideLLM CLI command from job specification.
@@ -334,15 +364,23 @@ class GuideLLMAdapter(FrameworkAdapter):
 
         # Processor for synthetic data
         # For synthetic data (prompt_tokens=X,output_tokens=Y), GuideLLM needs a HuggingFace tokenizer.
-        # The processor can be specified in benchmark_config, otherwise use a safe default.
-        processor = config.get("processor")
-        if processor is None and "prompt_tokens=" in data and "output_tokens=" in data:
+        # Accept EvalHub's tokenizer parameter as an alias, while preserving an
+        # explicitly supplied GuideLLM processor.
+        processor = config.get("processor") or config.get("tokenizer")
+        offline = self._offline_enabled(processor)
+        if not processor and "prompt_tokens=" in data and "output_tokens=" in data:
+            if offline:
+                raise ValueError(
+                    "Synthetic data requires an explicit processor or tokenizer in offline mode. "
+                    "Set parameters.processor or parameters.tokenizer to a staged local "
+                    "tokenizer directory (e.g. /test_data/tokenizer)."
+                )
             # Default to gpt2 tokenizer for synthetic data generation (widely available, small)
             processor = "gpt2"
             logger.info(
                 f"No processor specified for synthetic data. Using default '{processor}'. "
-                f"Specify a HuggingFace model in benchmark_config.processor for custom tokenization "
-                f"(e.g., 'google/flan-t5-small' or 'meta-llama/Llama-3.1-8B-Instruct')"
+                "Set parameters.processor or parameters.tokenizer for custom tokenization "
+                "(use a staged local tokenizer directory on disconnected clusters)."
             )
 
         if processor:
@@ -352,11 +390,15 @@ class GuideLLMAdapter(FrameworkAdapter):
         if "backend_kwargs" in config:
             cmd.extend(["--backend-kwargs", json.dumps(config["backend_kwargs"])])
 
-        # Output formats (default: all formats for comprehensive reporting)
-        # Note: GuideLLM uses --outputs, not --output-format
+        # HTML reports fetch a remote template and cannot be generated offline.
         outputs = self._validate_outputs(
-            config.get("outputs", self.DEFAULT_OUTPUTS)
+            config.get("outputs", self.OFFLINE_OUTPUTS if offline else self.DEFAULT_OUTPUTS)
         )
+        if offline and "html" in outputs.split(","):
+            raise ValueError(
+                "HTML output is unavailable in offline mode because GuideLLM downloads "
+                "a report template. Omit parameters.outputs or set it to 'json,csv,yaml'."
+            )
         cmd.extend(["--outputs", outputs])
 
         logger.debug(f"Built GuideLLM command: {' '.join(cmd)}")
@@ -374,6 +416,11 @@ class GuideLLMAdapter(FrameworkAdapter):
         """
         try:
             env = os.environ.copy()
+            processor = cmd[cmd.index("--processor") + 1] if "--processor" in cmd else None
+            if self._offline_enabled(processor):
+                for name in self.OFFLINE_ENV_VARS:
+                    env[name] = "1"
+                logger.info("Enabling Hugging Face offline mode for GuideLLM")
             # GuideLLM 0.5.3 defaults the HTML report template URL to
             # blog.vllm.ai which returns a 301 redirect that httpx does
             # not follow.  Override with the working GitHub-hosted template
