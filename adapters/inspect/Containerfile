@@ -9,6 +9,8 @@ WORKDIR /app
 # constraints.txt pins the transitive tree so rebuilds are reproducible.
 COPY requirements.txt constraints.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt
+# Exercise AgentDojo's optional runtime dependencies in the built image.
+RUN python3 -c "from pydantic import EmailStr, TypeAdapter; from inspect_evals.agentdojo import agentdojo; from inspect_evals.agentdojo.task_suites.travel.environment import TravelDeepDiff; from inspect_evals.agentdojo.task_suites.workspace.environment import WorkspaceDeepDiff; TypeAdapter(EmailStr); TravelDeepDiff({}, {}); WorkspaceDeepDiff({}, {})"
 
 # ── NLTK data — bundled at build time ────────────────────────────────────────
 #

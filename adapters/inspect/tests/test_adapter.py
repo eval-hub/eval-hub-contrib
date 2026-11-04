@@ -25,16 +25,6 @@ from _benchmarks import (
 
 
 # ---------------------------------------------------------------------------
-# Runtime dependency smoke tests
-# ---------------------------------------------------------------------------
-
-def test_email_validator_is_declared_as_runtime_dependency():
-    """AgentDojo's Pydantic EmailStr fields require this runtime dependency."""
-    requirements = Path(__file__).parents[1] / "requirements.txt"
-    assert "email-validator==2.3.0" in requirements.read_text().splitlines()
-
-
-# ---------------------------------------------------------------------------
 # Mode routing
 # ---------------------------------------------------------------------------
 
