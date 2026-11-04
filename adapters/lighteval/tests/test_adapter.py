@@ -10,7 +10,7 @@ import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest.mock import MagicMock, create_autospec
 
 import pytest
@@ -414,16 +414,18 @@ def test_generate_additional_info_fallback(adapter):
 
 @pytest.fixture
 def mock_hf_api(monkeypatch):
-    """Stub huggingface_hub so _resolve_dataset_shas never hits the network.
+    """Mock HfApi so _resolve_dataset_shas never hits the network.
 
     Returns the mock HfApi instance; SHA-specific tests can reconfigure
-    mock_api.dataset_info to return custom metadata.
+    mock_api.dataset_info to return custom metadata. Keep the real package
+    available because LightEval's registry imports datasets, which needs other
+    huggingface_hub exports.
     """
+    import huggingface_hub
+
     mock_api = MagicMock()
     mock_api.dataset_info.return_value = SimpleNamespace(sha="deterministic-sha")
-    stub = ModuleType("huggingface_hub")
-    stub.HfApi = MagicMock(return_value=mock_api)
-    monkeypatch.setitem(sys.modules, "huggingface_hub", stub)
+    monkeypatch.setattr(huggingface_hub, "HfApi", MagicMock(return_value=mock_api))
     return mock_api
 
 
@@ -985,8 +987,14 @@ def test_anthropic_allowed_for_generation_only_tasks(adapter, tasks):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("provider", ["endpoint", "openai", "vllm"])
-def test_other_providers_never_rejected_for_loglikelihood_tasks(adapter, provider):
+@pytest.mark.parametrize("provider", ["endpoint", "openai", "litellm", "anthropic"])
+def test_api_providers_rejected_for_loglikelihood_tasks(adapter, provider):
+    with pytest.raises(ValueError, match=provider):
+        adapter._validate_provider_supports_tasks(provider, ["arc:easy"])
+
+
+@pytest.mark.parametrize("provider", ["transformers", "vllm"])
+def test_local_providers_support_loglikelihood_tasks(adapter, provider):
     adapter._validate_provider_supports_tasks(provider, ["arc:easy"])
 
 
