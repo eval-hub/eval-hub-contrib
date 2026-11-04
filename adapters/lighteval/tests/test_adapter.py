@@ -144,6 +144,7 @@ def test_staged_hf_cache_enables_offline_mode(
     registry_asset = test_data_root / "lighteval" / "tinyBenchmarks.pkl"
     registry_asset.parent.mkdir()
     registry_asset.write_bytes(b"staged task-registry asset")
+    (test_data_root / "nltk_data").mkdir()
     registry_dir = tmp_path / "site-packages" / "lighteval" / "tasks" / "tasks"
     registry_dir.mkdir(parents=True)
     monkeypatch.setattr(offline_assets, "LIGHTEVAL_TASK_REGISTRY_DIR", registry_dir)
@@ -157,6 +158,12 @@ def test_staged_hf_cache_enables_offline_mode(
             writable_datasets_cache_dir=writable_cache,
         ),
     )
+    checked_nltk = []
+
+    def check_nltk(root):
+        checked_nltk.append((root, os.environ.get("NLTK_DATA")))
+
+    monkeypatch.setattr(adapter_main, "ensure_nltk_offline_resources", check_nltk)
     for variable in (
         "HF_HOME",
         "HF_HUB_CACHE",
@@ -167,6 +174,7 @@ def test_staged_hf_cache_enables_offline_mode(
         "TRANSFORMERS_OFFLINE",
     ):
         monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("NLTK_DATA", "/image/nltk_data")
 
     adapter = LightEvalAdapter(job_spec_path=str(job_path))
     observed_env = {}
@@ -181,6 +189,7 @@ def test_staged_hf_cache_enables_offline_mode(
                     "HF_DATASETS_CACHE",
                     "HF_HUB_OFFLINE",
                     "HF_DATASETS_OFFLINE",
+                    "NLTK_DATA",
                 )
             }
         )
@@ -197,7 +206,9 @@ def test_staged_hf_cache_enables_offline_mode(
         "HF_DATASETS_OFFLINE": "1",
         "HF_EVALUATE_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
+        "NLTK_DATA": str(test_data_root / "nltk_data"),
     }
+    assert checked_nltk == [(test_data_root, str(test_data_root / "nltk_data"))]
     assert observed_env == {
         key: expected_env[key]
         for key in (
@@ -206,6 +217,7 @@ def test_staged_hf_cache_enables_offline_mode(
             "HF_DATASETS_CACHE",
             "HF_HUB_OFFLINE",
             "HF_DATASETS_OFFLINE",
+            "NLTK_DATA",
         )
     }
     assert {key: os.environ.get(key) for key in expected_env} == expected_env
@@ -220,6 +232,33 @@ def test_staged_hf_cache_enables_offline_mode(
     assert cached_dataset.is_symlink()
     assert cached_dataset.read_bytes() == b"prepared dataset"
     assert (registry_dir / "tinyBenchmarks.pkl").read_bytes() == b"staged task-registry asset"
+
+
+@pytest.mark.integration
+def test_staged_job_reports_missing_nltk_before_registry_import(
+    adapter, mock_callbacks, tmp_path, monkeypatch
+):
+    """A disconnected job fails clearly before LightEval can fetch NLTK data."""
+    test_data_root = tmp_path / "test_data"
+    test_data_root.mkdir()
+    monkeypatch.setattr(adapter_main, "TEST_DATA_DIR", test_data_root)
+    monkeypatch.setattr(
+        adapter_main,
+        "build_hf_offline_environment",
+        lambda root: {"NLTK_DATA": str(root / "nltk_data")},
+    )
+    monkeypatch.setattr(
+        adapter_main,
+        "ensure_lighteval_registry_assets",
+        lambda root: pytest.fail("registry import must follow NLTK validation"),
+    )
+    monkeypatch.setenv("NLTK_DATA", "previous")
+
+    with pytest.raises(RuntimeError, match="Offline jobs will not download NLTK data"):
+        adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+
+    failed_status = mock_callbacks.report_status.call_args_list[-1].args[0]
+    assert "nltk_data/tokenizers" in failed_status.error_message.message
 
 
 @pytest.mark.integration

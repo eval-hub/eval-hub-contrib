@@ -45,6 +45,7 @@ from _hf_offline import (
     TEST_DATA_DIR,
     build_hf_offline_environment,
     ensure_lighteval_registry_assets,
+    ensure_nltk_offline_resources,
 )
 
 logger = logging.getLogger(__name__)
@@ -124,10 +125,13 @@ class LightEvalAdapter(FrameworkAdapter):
                 TEST_DATA_DIR,
             )
             if subprocess_env is not None:
-                ensure_lighteval_registry_assets(TEST_DATA_DIR)
                 # LightEval's task registry is also loaded in this process and
-                # can fetch task metadata before the evaluation subprocess starts.
+                # imports IFEval, which attempts NLTK downloads if these
+                # resources are missing. Set the staged path and validate it
+                # before any registry import, in both this process and the CLI.
                 os.environ.update(subprocess_env)
+                ensure_nltk_offline_resources(TEST_DATA_DIR)
+                ensure_lighteval_registry_assets(TEST_DATA_DIR)
                 logger.info(
                     "Using staged Hugging Face assets from %s; Hub downloads are disabled "
                     "and the writable datasets cache is %s",

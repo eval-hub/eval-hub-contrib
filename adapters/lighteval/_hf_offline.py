@@ -17,6 +17,7 @@ from pathlib import Path
 
 TEST_DATA_DIR = Path("/test_data")
 LIGHTEVAL_TASK_REGISTRY_DIR: Path | None = None
+NLTK_RESOURCES = ("tokenizers/punkt", "tokenizers/punkt_tab")
 
 
 def is_test_data_mount_usable(test_data_root: str | Path = TEST_DATA_DIR) -> bool:
@@ -81,7 +82,44 @@ def configure_hf_offline_environment(
             "TRANSFORMERS_OFFLINE": "1",
         }
     )
+    staged_nltk_data = root / "nltk_data"
+    if staged_nltk_data.is_dir():
+        target_env["NLTK_DATA"] = str(staged_nltk_data)
     return datasets_cache
+
+
+def ensure_nltk_offline_resources(test_data_root: str | Path) -> None:
+    """Check tokenizer data before LightEval imports IFEval and tries downloads.
+
+    The staged NLTK directory must provide both resources; do not fall back to
+    image-level data or attempt a download for a disconnected job.
+    """
+    staged_nltk_data = Path(test_data_root) / "nltk_data"
+    if not staged_nltk_data.is_dir():
+        raise RuntimeError(
+            "LightEval requires staged NLTK punkt and punkt_tab under "
+            f"{staged_nltk_data / 'tokenizers'} in this benchmark's test_data_ref "
+            "bundle. Offline jobs will not download NLTK data."
+        )
+
+    import nltk
+
+    staged_path = str(staged_nltk_data)
+    if staged_path not in nltk.data.path:
+        nltk.data.path.insert(0, staged_path)
+
+    try:
+        for resource in NLTK_RESOURCES:
+            nltk.data.find(resource, paths=[staged_path])
+        nltk.sent_tokenize("First sentence. Second sentence.")
+    except (LookupError, OSError, ValueError) as exc:
+        raise RuntimeError(
+            "LightEval requires NLTK punkt and punkt_tab before loading its task "
+            "registry. Stage both resources under "
+            f"{Path(test_data_root) / 'nltk_data' / 'tokenizers'} in this benchmark's "
+            "test_data_ref bundle. "
+            "Offline jobs will not download NLTK data."
+        ) from exc
 
 
 def _prepare_writable_datasets_cache(

@@ -445,6 +445,8 @@ The staged directory should have the cache layout produced by Hugging Face tooli
 ├── hub/         # dataset repository snapshots and blobs
 ├── lighteval/
 │   └── tinyBenchmarks.pkl  # registry asset required by LightEval 0.13.0
+├── nltk_data/
+│   └── tokenizers/         # punkt and punkt_tab for IFEval registry import
 └── xet/         # include when the staged repositories use Xet storage
 ```
 
@@ -462,9 +464,30 @@ adapter copies the staged file into LightEval's task package before loading the 
 early with an actionable error if it is missing. Include this file in the same `test_data_ref` as
 the Hugging Face cache.
 
-The adapter image also includes NLTK's `punkt` and `punkt_tab` resources. LightEval imports
-IFEval while building its task registry, and IFEval requests these resources if they are absent;
-bundling them prevents that import from attempting an NLTK download in a disconnected job.
+LightEval imports IFEval while building its task registry, and IFEval requests NLTK's `punkt`
+and `punkt_tab` resources even when the selected task is not IFEval. The image build does not
+download these resources. Prepare them on a connected machine using the **same NLTK version as
+the deployed image** (the community adapter currently pins `nltk==3.10.4`):
+
+```bash
+BUNDLE="$PWD/staging/gpqa-diamond"  # use this benchmark's prepared bundle
+mkdir -p "$BUNDLE/nltk_data"
+NLTK_DATA="$BUNDLE/nltk_data" python - <<'PY'
+import nltk
+import os
+
+for resource in ("punkt", "punkt_tab"):
+    nltk.download(resource, download_dir=os.environ["NLTK_DATA"], raise_on_error=True)
+nltk.sent_tokenize("First sentence. Second sentence.")
+PY
+```
+
+Upload the complete `nltk_data/tokenizers/` directory under **each** LightEval benchmark's
+`test_data_ref` prefix along with its Hugging Face cache and `tinyBenchmarks.pkl`. At runtime,
+the adapter checks both resources before importing the task registry and passes the staged
+`NLTK_DATA` path to the LightEval subprocess. Missing or partial `nltk_data/` fails early with
+a staging instruction; the disconnected job does not attempt an NLTK download. Jobs without
+`test_data_ref` retain the existing connected behavior.
 
 Attach `test_data_ref` to each benchmark entry that needs the staged data; uploading a cache to
 object storage alone does not make a job offline. For example:

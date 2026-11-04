@@ -1,4 +1,7 @@
-"""Unit tests for LightEval's staged Hugging Face cache support."""
+"""Unit tests for LightEval's staged Hugging Face and NLTK data support."""
+
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -6,6 +9,7 @@ from _hf_offline import (
     build_hf_offline_environment,
     configure_hf_offline_environment,
     ensure_lighteval_registry_assets,
+    ensure_nltk_offline_resources,
     is_test_data_mount_usable,
 )
 
@@ -66,6 +70,84 @@ def test_configure_hf_offline_environment_uses_writable_cache_overlay(tmp_path):
     assert env["HF_DATASETS_OFFLINE"] == "1"
     assert env["HF_EVALUATE_OFFLINE"] == "1"
     assert env["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_configure_hf_offline_environment_selects_staged_nltk_data(tmp_path):
+    root = tmp_path / "test_data"
+    (root / "nltk_data").mkdir(parents=True)
+    env = {"NLTK_DATA": "/image/nltk_data"}
+
+    configure_hf_offline_environment(root, env, tmp_path / "writable-datasets")
+
+    assert env["NLTK_DATA"] == str(root / "nltk_data")
+
+
+def test_ensure_nltk_offline_resources_uses_staged_files_without_download(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "test_data"
+    nltk_dir = root / "nltk_data"
+    for resource in ("punkt", "punkt_tab"):
+        (nltk_dir / "tokenizers" / resource).mkdir(parents=True)
+    searched = []
+    fake_nltk = SimpleNamespace()
+
+    def find(resource, paths=None):
+        searched.append((resource, paths))
+        if not (nltk_dir / resource).is_dir():
+            raise LookupError(resource)
+
+    fake_nltk.data = SimpleNamespace(path=["/image/nltk_data"], find=find)
+    fake_nltk.sent_tokenize = lambda text: ["First sentence.", "Second sentence."]
+    fake_nltk.download = lambda *args, **kwargs: pytest.fail("offline NLTK download")
+    monkeypatch.setitem(sys.modules, "nltk", fake_nltk)
+
+    ensure_nltk_offline_resources(root)
+
+    assert fake_nltk.data.path[0] == str(nltk_dir)
+    assert searched == [
+        ("tokenizers/punkt", [str(nltk_dir)]),
+        ("tokenizers/punkt_tab", [str(nltk_dir)]),
+    ]
+
+
+def test_ensure_nltk_offline_resources_rejects_incomplete_staged_data(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "test_data"
+    nltk_dir = root / "nltk_data" / "tokenizers" / "punkt"
+    nltk_dir.mkdir(parents=True)
+
+    def find(resource, paths=None):
+        if not (root / "nltk_data" / resource).is_dir():
+            raise LookupError(resource)
+
+    fake_nltk = SimpleNamespace(
+        data=SimpleNamespace(path=["/image/nltk_data"], find=find),
+        sent_tokenize=lambda text: pytest.fail("should fail before tokenization"),
+        download=lambda *args, **kwargs: pytest.fail("offline NLTK download"),
+    )
+    monkeypatch.setitem(sys.modules, "nltk", fake_nltk)
+
+    with pytest.raises(RuntimeError, match="Stage both resources.*test_data_ref"):
+        ensure_nltk_offline_resources(root)
+
+
+def test_ensure_nltk_offline_resources_fails_without_staged_data(
+    tmp_path, monkeypatch
+):
+    def missing(resource, paths=None):
+        raise LookupError(resource)
+
+    fake_nltk = SimpleNamespace(
+        data=SimpleNamespace(path=[], find=missing),
+        sent_tokenize=lambda text: pytest.fail("should fail before tokenization"),
+        download=lambda *args, **kwargs: pytest.fail("offline NLTK download"),
+    )
+    monkeypatch.setitem(sys.modules, "nltk", fake_nltk)
+
+    with pytest.raises(RuntimeError, match="Offline jobs will not download NLTK data"):
+        ensure_nltk_offline_resources(tmp_path / "test_data")
 
 
 def test_build_hf_offline_environment_is_noop_without_staged_mount(tmp_path):
