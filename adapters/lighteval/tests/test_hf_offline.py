@@ -1,9 +1,10 @@
 """Unit tests for LightEval's staged Hugging Face and NLTK data support."""
 
-import sys
-from types import SimpleNamespace
+import pickle
 
+import nltk
 import pytest
+from nltk.tokenize.punkt import PunktSentenceTokenizer, PunktTokenizer
 
 from _hf_offline import (
     build_hf_offline_environment,
@@ -82,70 +83,88 @@ def test_configure_hf_offline_environment_selects_staged_nltk_data(tmp_path):
     assert env["NLTK_DATA"] == str(root / "nltk_data")
 
 
+def _write_nltk_data(root):
+    """Create usable English Punkt data without fetching packages."""
+    nltk_dir = root / "nltk_data"
+    punkt_dir = nltk_dir / "tokenizers" / "punkt"
+    punkt_dir.mkdir(parents=True)
+    (punkt_dir / "english.pickle").write_bytes(
+        pickle.dumps(PunktSentenceTokenizer("First sentence. Second sentence."))
+    )
+    english_dir = nltk_dir / "tokenizers" / "punkt_tab" / "english"
+    english_dir.mkdir(parents=True)
+    for filename in (
+        "collocations.tab",
+        "sent_starters.txt",
+        "abbrev_types.txt",
+        "ortho_context.tab",
+    ):
+        (english_dir / filename).write_text("")
+    return nltk_dir
+
+
 def test_ensure_nltk_offline_resources_uses_staged_files_without_download(
     tmp_path, monkeypatch
 ):
     root = tmp_path / "test_data"
-    nltk_dir = root / "nltk_data"
-    for resource in ("punkt", "punkt_tab"):
-        (nltk_dir / "tokenizers" / resource).mkdir(parents=True)
-    searched = []
-    fake_nltk = SimpleNamespace()
-
-    def find(resource, paths=None):
-        searched.append((resource, paths))
-        if not (nltk_dir / resource).is_dir():
-            raise LookupError(resource)
-
-    fake_nltk.data = SimpleNamespace(path=["/image/nltk_data"], find=find)
-    fake_nltk.sent_tokenize = lambda text: ["First sentence.", "Second sentence."]
-    fake_nltk.download = lambda *args, **kwargs: pytest.fail("offline NLTK download")
-    monkeypatch.setitem(sys.modules, "nltk", fake_nltk)
+    nltk_dir = _write_nltk_data(root)
+    monkeypatch.setattr(nltk.data, "path", ["/image/nltk_data"])
+    monkeypatch.setattr(
+        nltk, "download", lambda *args, **kwargs: pytest.fail("offline NLTK download")
+    )
 
     ensure_nltk_offline_resources(root)
 
-    assert fake_nltk.data.path[0] == str(nltk_dir)
-    assert searched == [
-        ("tokenizers/punkt", [str(nltk_dir)]),
-        ("tokenizers/punkt_tab", [str(nltk_dir)]),
-    ]
+    assert nltk.data.path == [str(nltk_dir), "/image/nltk_data"]
 
 
-def test_ensure_nltk_offline_resources_rejects_incomplete_staged_data(
+def test_ensure_nltk_offline_resources_rejects_empty_staged_directories_with_fallback(
     tmp_path, monkeypatch
 ):
     root = tmp_path / "test_data"
-    nltk_dir = root / "nltk_data" / "tokenizers" / "punkt"
-    nltk_dir.mkdir(parents=True)
-
-    def find(resource, paths=None):
-        if not (root / "nltk_data" / resource).is_dir():
-            raise LookupError(resource)
-
-    fake_nltk = SimpleNamespace(
-        data=SimpleNamespace(path=["/image/nltk_data"], find=find),
-        sent_tokenize=lambda text: pytest.fail("should fail before tokenization"),
-        download=lambda *args, **kwargs: pytest.fail("offline NLTK download"),
-    )
-    monkeypatch.setitem(sys.modules, "nltk", fake_nltk)
+    for resource in ("punkt", "punkt_tab"):
+        (root / "nltk_data" / "tokenizers" / resource).mkdir(parents=True)
+    fallback = _write_nltk_data(tmp_path / "fallback")
+    monkeypatch.setattr(nltk.data, "path", [str(fallback)])
 
     with pytest.raises(RuntimeError, match="Stage both resources.*test_data_ref"):
         ensure_nltk_offline_resources(root)
+    assert nltk.data.path == [str(fallback)]
 
 
-def test_ensure_nltk_offline_resources_fails_without_staged_data(
+def test_ensure_nltk_offline_resources_rejects_empty_punkt_with_fallback(
     tmp_path, monkeypatch
 ):
-    def missing(resource, paths=None):
-        raise LookupError(resource)
+    root = tmp_path / "test_data"
+    nltk_dir = _write_nltk_data(root)
+    (nltk_dir / "tokenizers" / "punkt" / "english.pickle").unlink()
+    fallback = _write_nltk_data(tmp_path / "fallback")
+    monkeypatch.setattr(nltk.data, "path", [str(fallback)])
 
-    fake_nltk = SimpleNamespace(
-        data=SimpleNamespace(path=[], find=missing),
-        sent_tokenize=lambda text: pytest.fail("should fail before tokenization"),
-        download=lambda *args, **kwargs: pytest.fail("offline NLTK download"),
-    )
-    monkeypatch.setitem(sys.modules, "nltk", fake_nltk)
+    with pytest.raises(RuntimeError, match="Stage both resources.*test_data_ref"):
+        ensure_nltk_offline_resources(root)
+    assert nltk.data.path == [str(fallback)]
 
+
+def test_ensure_nltk_offline_resources_rejects_incomplete_punkt_tab_with_fallback(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "test_data"
+    nltk_dir = _write_nltk_data(root)
+    (nltk_dir / "tokenizers" / "punkt_tab" / "english" / "ortho_context.tab").unlink()
+    fallback = _write_nltk_data(tmp_path / "fallback")
+    monkeypatch.setattr(nltk.data, "path", [str(fallback)])
+    assert PunktTokenizer("english").tokenize("First sentence. Second sentence.") == [
+        "First sentence.",
+        "Second sentence.",
+    ]
+
+    with pytest.raises(RuntimeError, match="Stage both resources.*test_data_ref"):
+        ensure_nltk_offline_resources(root)
+    assert nltk.data.path == [str(fallback)]
+
+
+def test_ensure_nltk_offline_resources_fails_without_staged_data(tmp_path):
     with pytest.raises(RuntimeError, match="Offline jobs will not download NLTK data"):
         ensure_nltk_offline_resources(tmp_path / "test_data")
 

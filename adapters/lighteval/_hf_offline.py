@@ -17,7 +17,6 @@ from pathlib import Path
 
 TEST_DATA_DIR = Path("/test_data")
 LIGHTEVAL_TASK_REGISTRY_DIR: Path | None = None
-NLTK_RESOURCES = ("tokenizers/punkt", "tokenizers/punkt_tab")
 
 
 def is_test_data_mount_usable(test_data_root: str | Path = TEST_DATA_DIR) -> bool:
@@ -102,16 +101,34 @@ def ensure_nltk_offline_resources(test_data_root: str | Path) -> None:
             "bundle. Offline jobs will not download NLTK data."
         )
 
-    import nltk
-
-    staged_path = str(staged_nltk_data)
-    if staged_path not in nltk.data.path:
-        nltk.data.path.insert(0, staged_path)
-
     try:
-        for resource in NLTK_RESOURCES:
-            nltk.data.find(resource, paths=[staged_path])
-        nltk.sent_tokenize("First sentence. Second sentence.")
+        # PunktTokenizer reads punkt_tab, but IFEval also checks for punkt.
+        # NLTK's find() accepts empty directories, so require its English model.
+        punkt_model = staged_nltk_data / "tokenizers" / "punkt" / "english.pickle"
+        if not punkt_model.is_file() or punkt_model.stat().st_size == 0:
+            raise LookupError(f"missing or empty staged NLTK model: {punkt_model}")
+
+        import nltk
+        from nltk.tokenize.punkt import PunktTokenizer
+
+        staged_path = str(staged_nltk_data)
+        original_paths = nltk.data.path
+        try:
+            # sent_tokenize() can reuse a cached tokenizer or image-level data.
+            # A fresh instance must load the staged punkt_tab files alone.
+            nltk.data.path = [staged_path]
+            sentences = PunktTokenizer("english").tokenize(
+                "First sentence. Second sentence."
+            )
+            if sentences != ["First sentence.", "Second sentence."]:
+                raise ValueError(
+                    "staged NLTK sentence tokenizer returned unexpected results"
+                )
+        finally:
+            nltk.data.path = original_paths
+
+        if staged_path not in nltk.data.path:
+            nltk.data.path.insert(0, staged_path)
     except (LookupError, OSError, ValueError) as exc:
         raise RuntimeError(
             "LightEval requires NLTK punkt and punkt_tab before loading its task "
