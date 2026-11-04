@@ -1032,5 +1032,3 @@ def test_all_standard_benchmarks_have_task_or_none():
 
 def test_petri_primary_metric_is_defined():
     assert PETRI_PRIMARY_METRIC == "concerning"
-
-
