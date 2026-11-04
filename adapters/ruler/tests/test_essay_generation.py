@@ -12,7 +12,7 @@ from main import RulerAdapter
 from tokenizer import HFTokenizer
 
 
-def test_real_essay_generation_within_token_budget(tmp_path):
+def test_real_essay_generation_within_token_budget(tmp_path, monkeypatch):
     # Small deterministic prose fixture replaces the network-downloaded corpus,
     # retaining sentence boundaries and the essay repetition/insertion path.
     essay = (
@@ -35,11 +35,13 @@ def test_real_essay_generation_within_token_budget(tmp_path):
     ))
     tokenizer_path = tmp_path / "tokenizer"
     PreTrainedTokenizerFast(tokenizer_object=raw, unk_token="[UNK]").save_pretrained(tokenizer_path)
+    monkeypatch.setenv("RULER_OFFLINE", "1")
     tokenizer = HFTokenizer(str(tokenizer_path))
 
     adapter = RulerAdapter.__new__(RulerAdapter)
     output = adapter._generate_task_data(
         "niah_single_2", 4096, tmp_path, str(tokenizer_path), "hf", "base", 2, 42,
+        offline=True,
     )
     rows = [json.loads(line) for line in output.read_text().splitlines()]
     assert len(rows) == 2
