@@ -1,7 +1,8 @@
 # RHOAI production lock for Python 3.12 / Linux.
 # Generated from requirements.txt and requirements-overrides.txt using uv pip compile,
-# with the previous lock's unrelated pins retained as constraints.
---index-url https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
+# against the AIPCC cpu-torch2.13-el9.8 package index (the flavour the Konflux image
+# builds on), with the previous lock's unrelated pins retained as constraints.
+--index-url https://packages.redhat.com/api/pypi/public-rhai/cpu-torch2.13-el9.8/simple/
 
 absl-py==2.5.0
     # via rouge-score
