@@ -1,11 +1,16 @@
-"""Unit tests for LightEval's staged Hugging Face cache support."""
+"""Unit tests for LightEval's staged Hugging Face and NLTK data support."""
 
+import pickle
+
+import nltk
 import pytest
+from nltk.tokenize.punkt import PunktSentenceTokenizer, PunktTokenizer
 
 from _hf_offline import (
     build_hf_offline_environment,
     configure_hf_offline_environment,
     ensure_lighteval_registry_assets,
+    ensure_nltk_offline_resources,
     is_test_data_mount_usable,
 )
 
@@ -66,6 +71,102 @@ def test_configure_hf_offline_environment_uses_writable_cache_overlay(tmp_path):
     assert env["HF_DATASETS_OFFLINE"] == "1"
     assert env["HF_EVALUATE_OFFLINE"] == "1"
     assert env["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_configure_hf_offline_environment_selects_staged_nltk_data(tmp_path):
+    root = tmp_path / "test_data"
+    (root / "nltk_data").mkdir(parents=True)
+    env = {"NLTK_DATA": "/image/nltk_data"}
+
+    configure_hf_offline_environment(root, env, tmp_path / "writable-datasets")
+
+    assert env["NLTK_DATA"] == str(root / "nltk_data")
+
+
+def _write_nltk_data(root):
+    """Create usable English Punkt data without fetching packages."""
+    nltk_dir = root / "nltk_data"
+    punkt_dir = nltk_dir / "tokenizers" / "punkt"
+    punkt_dir.mkdir(parents=True)
+    (punkt_dir / "english.pickle").write_bytes(
+        pickle.dumps(PunktSentenceTokenizer("First sentence. Second sentence."))
+    )
+    english_dir = nltk_dir / "tokenizers" / "punkt_tab" / "english"
+    english_dir.mkdir(parents=True)
+    for filename in (
+        "collocations.tab",
+        "sent_starters.txt",
+        "abbrev_types.txt",
+        "ortho_context.tab",
+    ):
+        (english_dir / filename).write_text("")
+    return nltk_dir
+
+
+def test_ensure_nltk_offline_resources_uses_staged_files_without_download(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "test_data"
+    nltk_dir = _write_nltk_data(root)
+    monkeypatch.setattr(nltk.data, "path", ["/image/nltk_data"])
+    monkeypatch.setattr(
+        nltk, "download", lambda *args, **kwargs: pytest.fail("offline NLTK download")
+    )
+
+    ensure_nltk_offline_resources(root)
+
+    assert nltk.data.path == [str(nltk_dir), "/image/nltk_data"]
+
+
+def test_ensure_nltk_offline_resources_rejects_empty_staged_directories_with_fallback(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "test_data"
+    for resource in ("punkt", "punkt_tab"):
+        (root / "nltk_data" / "tokenizers" / resource).mkdir(parents=True)
+    fallback = _write_nltk_data(tmp_path / "fallback")
+    monkeypatch.setattr(nltk.data, "path", [str(fallback)])
+
+    with pytest.raises(RuntimeError, match="Stage both resources.*test_data_ref"):
+        ensure_nltk_offline_resources(root)
+    assert nltk.data.path == [str(fallback)]
+
+
+def test_ensure_nltk_offline_resources_rejects_empty_punkt_with_fallback(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "test_data"
+    nltk_dir = _write_nltk_data(root)
+    (nltk_dir / "tokenizers" / "punkt" / "english.pickle").unlink()
+    fallback = _write_nltk_data(tmp_path / "fallback")
+    monkeypatch.setattr(nltk.data, "path", [str(fallback)])
+
+    with pytest.raises(RuntimeError, match="Stage both resources.*test_data_ref"):
+        ensure_nltk_offline_resources(root)
+    assert nltk.data.path == [str(fallback)]
+
+
+def test_ensure_nltk_offline_resources_rejects_incomplete_punkt_tab_with_fallback(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "test_data"
+    nltk_dir = _write_nltk_data(root)
+    (nltk_dir / "tokenizers" / "punkt_tab" / "english" / "ortho_context.tab").unlink()
+    fallback = _write_nltk_data(tmp_path / "fallback")
+    monkeypatch.setattr(nltk.data, "path", [str(fallback)])
+    assert PunktTokenizer("english").tokenize("First sentence. Second sentence.") == [
+        "First sentence.",
+        "Second sentence.",
+    ]
+
+    with pytest.raises(RuntimeError, match="Stage both resources.*test_data_ref"):
+        ensure_nltk_offline_resources(root)
+    assert nltk.data.path == [str(fallback)]
+
+
+def test_ensure_nltk_offline_resources_fails_without_staged_data(tmp_path):
+    with pytest.raises(RuntimeError, match="Offline jobs will not download NLTK data"):
+        ensure_nltk_offline_resources(tmp_path / "test_data")
 
 
 def test_build_hf_offline_environment_is_noop_without_staged_mount(tmp_path):

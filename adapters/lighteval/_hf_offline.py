@@ -81,7 +81,62 @@ def configure_hf_offline_environment(
             "TRANSFORMERS_OFFLINE": "1",
         }
     )
+    staged_nltk_data = root / "nltk_data"
+    if staged_nltk_data.is_dir():
+        target_env["NLTK_DATA"] = str(staged_nltk_data)
     return datasets_cache
+
+
+def ensure_nltk_offline_resources(test_data_root: str | Path) -> None:
+    """Check tokenizer data before LightEval imports IFEval and tries downloads.
+
+    The staged NLTK directory must provide both resources; do not fall back to
+    image-level data or attempt a download for a disconnected job.
+    """
+    staged_nltk_data = Path(test_data_root) / "nltk_data"
+    if not staged_nltk_data.is_dir():
+        raise RuntimeError(
+            "LightEval requires staged NLTK punkt and punkt_tab under "
+            f"{staged_nltk_data / 'tokenizers'} in this benchmark's test_data_ref "
+            "bundle. Offline jobs will not download NLTK data."
+        )
+
+    try:
+        # PunktTokenizer reads punkt_tab, but IFEval also checks for punkt.
+        # NLTK's find() accepts empty directories, so require its English model.
+        punkt_model = staged_nltk_data / "tokenizers" / "punkt" / "english.pickle"
+        if not punkt_model.is_file() or punkt_model.stat().st_size == 0:
+            raise LookupError(f"missing or empty staged NLTK model: {punkt_model}")
+
+        import nltk
+        from nltk.tokenize.punkt import PunktTokenizer
+
+        staged_path = str(staged_nltk_data)
+        original_paths = nltk.data.path
+        try:
+            # sent_tokenize() can reuse a cached tokenizer or image-level data.
+            # A fresh instance must load the staged punkt_tab files alone.
+            nltk.data.path = [staged_path]
+            sentences = PunktTokenizer("english").tokenize(
+                "First sentence. Second sentence."
+            )
+            if sentences != ["First sentence.", "Second sentence."]:
+                raise ValueError(
+                    "staged NLTK sentence tokenizer returned unexpected results"
+                )
+        finally:
+            nltk.data.path = original_paths
+
+        if staged_path not in nltk.data.path:
+            nltk.data.path.insert(0, staged_path)
+    except (LookupError, OSError, ValueError) as exc:
+        raise RuntimeError(
+            "LightEval requires NLTK punkt and punkt_tab before loading its task "
+            "registry. Stage both resources under "
+            f"{Path(test_data_root) / 'nltk_data' / 'tokenizers'} in this benchmark's "
+            "test_data_ref bundle. "
+            "Offline jobs will not download NLTK data."
+        ) from exc
 
 
 def _prepare_writable_datasets_cache(
