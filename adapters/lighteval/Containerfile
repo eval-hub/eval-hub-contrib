@@ -15,8 +15,16 @@ COPY requirements.lock .
 RUN pip install --no-cache-dir --upgrade pip==26.2.2 && \
     pip install --no-cache-dir --no-deps -r requirements.lock
 
+# IFEval is imported while LightEval builds its task registry and downloads
+# these NLTK resources if they are not already available. Bundle them so
+# registry initialization does not require egress in disconnected jobs.
+ENV NLTK_DATA=/usr/local/share/nltk_data
+RUN python -c "import nltk; [nltk.download(resource, download_dir='/usr/local/share/nltk_data', raise_on_error=True) for resource in ('punkt', 'punkt_tab')]; nltk.sent_tokenize('First sentence. Second sentence.')" && \
+    chmod -R a+rX /usr/local/share/nltk_data
+
 # Copy adapter implementation and loglikelihood patch
 COPY main.py .
+COPY _hf_offline.py ./
 COPY lighteval_logprob_patch.py .
 COPY lighteval_memory_cap.py .
 COPY sample_results.py ./

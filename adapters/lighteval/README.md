@@ -416,6 +416,80 @@ docker run \
 
 This will run all tasks in the "commonsense_reasoning" category.
 
+## Disconnected clusters
+
+For a benchmark that reads its dataset from the Hugging Face Hub, stage the complete Hugging
+Face cache tree in the connected environment, then reference that staged tree with the
+benchmark's `test_data_ref`. The adapter mounts it at `/test_data`, sets `HF_HOME` to that
+directory, and points `HF_HUB_CACHE` at its `hub/` subdirectory. The mounted test data is
+read-only, while Hugging Face Datasets creates lock files even when reusing prepared data. The
+adapter therefore creates a writable per-job cache directory and mirrors the staged `datasets/`
+directory structure there with symlinks to staged files. `HF_DATASETS_CACHE` points to this
+writable cache; the dataset bytes remain in the staged mount. The adapter enables Hugging Face
+offline mode before loading LightEval tasks. If a prepared datasets cache is staged, its files
+are exposed through the writable cache overlay; otherwise the cache starts empty and the offline
+framework load still requires the needed dataset assets to be available locally.
+Jobs without `test_data_ref` keep the existing online behavior.
+
+The adapter detects staged data from the `/test_data` volume mount because EvalHub consumes
+`test_data_ref` before writing the adapter JobSpec; the reference itself is not present in that
+file. LightEval requires a prepared Hub cache (`hub/` and/or `datasets/`) at the mount root. The
+`hf` source stages raw repository files, not this cache layout, and is therefore not supported
+for this LightEval workflow. Use S3, PVC, or Git to stage the prepared cache tree.
+
+The staged directory should have the cache layout produced by Hugging Face tooling, for example:
+
+```text
+/test_data/
+├── datasets/    # processed dataset fingerprints and Arrow files
+├── hub/         # dataset repository snapshots and blobs
+├── lighteval/
+│   └── tinyBenchmarks.pkl  # registry asset required by LightEval 0.13.0
+└── xet/         # include when the staged repositories use Xet storage
+```
+
+Warm this cache by running every selected LightEval task with the same adapter/framework version
+in an environment that can reach the Hub. Preserve the full cache structure, including snapshot
+links, and stage all data required by the selected tasks. If a dataset is gated, Hub credentials
+are needed during staging; the disconnected evaluation job uses the local cache. A cache created
+for only one task or dataset revision may not satisfy another task or revision.
+
+Also stage `lighteval/tinyBenchmarks.pkl` in this tree. LightEval 0.13.0 imports every task
+definition while building its registry, and the [TinyBenchmarks task module](https://github.com/huggingface/lighteval/blob/v0.13.0/src/lighteval/tasks/tasks/tiny_benchmarks.py)
+downloads the [TinyBenchmarks pickle](https://raw.githubusercontent.com/felipemaiapolo/tinyBenchmarks/main/tinyBenchmarks/tinyBenchmarks.pkl)
+directly from GitHub during import even when the selected task does not use TinyBenchmarks. The
+adapter copies the staged file into LightEval's task package before loading the registry and fails
+early with an actionable error if it is missing. Include this file in the same `test_data_ref` as
+the Hugging Face cache.
+
+The adapter image also includes NLTK's `punkt` and `punkt_tab` resources. LightEval imports
+IFEval while building its task registry, and IFEval requests these resources if they are absent;
+bundling them prevents that import from attempting an NLTK download in a disconnected job.
+
+Attach `test_data_ref` to each benchmark entry that needs the staged data; uploading a cache to
+object storage alone does not make a job offline. For example:
+
+```json
+{
+  "id": "gpqa:diamond",
+  "provider_id": "lighteval",
+  "test_data_ref": {
+    "pvc": {
+      "claim_name": "lighteval-hf-cache",
+      "sub_path": "knowledge-reasoning"
+    }
+  },
+  "parameters": {
+    "provider": "endpoint",
+    "num_few_shot": 0
+  }
+}
+```
+
+The model endpoint must still be reachable from the cluster. This mechanism configures the
+Hugging Face dataset/model cache used by LightEval; a task that fetches assets from another
+external service needs its own staging support.
+
 ## Memory use
 
 Most benchmarks stay near the baseline of the LightEval process, about 2 GiB.
