@@ -25,6 +25,17 @@ from _benchmarks import (
 
 
 # ---------------------------------------------------------------------------
+# Runtime dependency smoke tests
+# ---------------------------------------------------------------------------
+
+def test_email_str_schema_dependency_available():
+    """AgentDojo's Pydantic EmailStr fields require email-validator at runtime."""
+    from pydantic import EmailStr, TypeAdapter
+
+    TypeAdapter(EmailStr)
+
+
+# ---------------------------------------------------------------------------
 # Mode routing
 # ---------------------------------------------------------------------------
 
