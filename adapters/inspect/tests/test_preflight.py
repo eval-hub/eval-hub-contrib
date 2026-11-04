@@ -1,5 +1,6 @@
 """Tests for the fail-fast network pre-flight (_preflight.py)."""
 
+import hashlib
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -7,6 +8,7 @@ from types import SimpleNamespace
 
 import _preflight as pf
 import pytest
+from _benchmarks import DOCVQA_TASK_SPEC
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -99,10 +101,26 @@ def test_hf_endpoint_override_is_probed_instead():
     assert urls == ["https://hf-mirror.internal"]
 
 
+def test_docvqa_custom_task_probes_default_hub():
+    """The local DocVQA wrapper still loads its dataset from Hugging Face."""
+    assert pf.required_urls(DOCVQA_TASK_SPEC, {}) == ["https://huggingface.co"]
+
+
+def test_docvqa_custom_task_probes_hub_override():
+    assert pf.required_urls(
+        DOCVQA_TASK_SPEC, {"HF_ENDPOINT": "https://hf-mirror.internal"}
+    ) == ["https://hf-mirror.internal"]
+
+
 @pytest.mark.parametrize("flag", ["HF_HUB_OFFLINE", "HF_DATASETS_OFFLINE"])
 def test_offline_mode_skips_hub_probe(flag):
     """Setting HF_HUB_OFFLINE or HF_DATASETS_OFFLINE to 1 suppresses the HF probe."""
     assert pf.required_urls("inspect_evals/mmlu_pro", {flag: "1"}) == []
+
+
+@pytest.mark.parametrize("flag", ["HF_HUB_OFFLINE", "HF_DATASETS_OFFLINE"])
+def test_docvqa_offline_mode_skips_hub_probe(flag):
+    assert pf.required_urls(DOCVQA_TASK_SPEC, {flag: "1"}) == []
 
 
 @pytest.mark.parametrize("task", ["inspect_petri/audit", "petri_bloom/bloom_audit"])
@@ -231,6 +249,125 @@ def _write_bfcl_runtime_assets(root, modules, docs):
 def test_bfcl_needs_github_not_huggingface():
     """BFCL downloads from GitHub, not HuggingFace; HF must never be probed for it."""
     assert pf.required_urls("inspect_evals/bfcl", {}) == ["https://github.com"]
+
+
+def test_cyberseceval_prompt_injection_probes_raw_github_when_not_cached(tmp_path):
+    """CyberSecEval 2 loads its dataset from a pinned raw GitHub URL, not the Hub."""
+    env = {"XDG_CACHE_HOME": str(tmp_path)}
+    assert pf.required_urls("inspect_evals/cyse2_prompt_injection", env) == [
+        "https://raw.githubusercontent.com"
+    ]
+
+
+def test_configure_staged_cyberseceval_cache_uses_exact_pinned_file(
+    tmp_path,
+):
+    """A staged cache uses the exact inspect-evals URL-hash filename and avoids GitHub probes."""
+    cache_file = pf._cyberseceval_prompt_injection_cache_file(tmp_path)
+    expected_hash = hashlib.sha256(
+        pf._CYBERSECEVAL_PROMPT_INJECTION_URL.encode("utf-8")
+    ).hexdigest()[:32]
+    assert cache_file == (
+        tmp_path / "cyberseceval_2" / f"prompt_injection_{expected_hash}.json"
+    )
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text("[]\n", encoding="utf-8")
+    env = {
+        "HF_HUB_OFFLINE": "1",
+        "XDG_CACHE_HOME": str(tmp_path / "default-cache"),
+    }
+
+    assert pf.configure_staged_cyberseceval_cache(
+        "inspect_evals/cyse2_prompt_injection", env, tmp_path
+    )
+    assert env[pf.INSPECT_EVALS_CACHE_DIR_ENV] == str(tmp_path)
+    assert pf.required_urls("inspect_evals/cyse2_prompt_injection", env) == []
+
+
+def test_cyberseceval_uses_inspect_evals_default_cache_when_env_is_unset(
+    tmp_path,
+):
+    """The preflight honors the same platform default cache as Inspect-Evals."""
+    cache_root = tmp_path / "xdg-cache" / "inspect_evals"
+    cache_file = pf._cyberseceval_prompt_injection_cache_file(cache_root)
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text("[]\n", encoding="utf-8")
+    env = {"XDG_CACHE_HOME": str(tmp_path / "xdg-cache")}
+
+    assert pf._inspect_evals_cache_dir(env) == cache_root
+    assert pf.required_urls("inspect_evals/cyse2_prompt_injection", env) == []
+
+
+def test_cyberseceval_uses_configured_cache_directory(tmp_path):
+    """INSPECT_EVALS_CACHE_DIR takes precedence over the platform default."""
+    configured_cache = tmp_path / "configured"
+    assert pf._inspect_evals_cache_dir(
+        {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(configured_cache)}
+    ) == configured_cache
+
+
+def test_cyberseceval_empty_cache_file_is_not_ready(tmp_path):
+    """A zero-byte cache file is treated as a pending download, matching Inspect-Evals."""
+    cache_file = pf._cyberseceval_prompt_injection_cache_file(tmp_path)
+    cache_file.parent.mkdir(parents=True)
+    cache_file.touch()
+    env = {pf.INSPECT_EVALS_CACHE_DIR_ENV: str(tmp_path)}
+
+    assert pf.required_urls("inspect_evals/cyse2_prompt_injection", env) == [
+        "https://raw.githubusercontent.com"
+    ]
+
+    assert not pf.configure_staged_cyberseceval_cache(
+        "inspect_evals/cyse2_prompt_injection",
+        {**env, "HF_HUB_OFFLINE": "1"},
+        tmp_path / "staged",
+    )
+
+
+@pytest.mark.parametrize(
+    "mode,should_probe,should_raise",
+    [("fail", True, True), ("warn", True, False), ("off", False, False)],
+)
+def test_missing_cyberseceval_cache_respects_preflight_mode(
+    tmp_path, monkeypatch, caplog, mode, should_probe, should_raise
+):
+    """Missing staged data follows network reachability and the selected preflight mode."""
+    env = {
+        "HF_HUB_OFFLINE": "1",
+        pf.MODE_ENV: mode,
+        "XDG_CACHE_HOME": str(tmp_path / "default-cache"),
+    }
+    task = "inspect_evals/cyse2_prompt_injection"
+    probed_urls = []
+
+    def unreachable_probe(url, _timeout_s, _env):
+        probed_urls.append(url)
+        return False, "unreachable", 0.0
+
+    monkeypatch.setattr(pf, "probe", unreachable_probe)
+    assert not pf.configure_staged_cyberseceval_cache(task, env, tmp_path / "staged")
+
+    if should_raise:
+        with pytest.raises(pf.PreflightError, match="raw.githubusercontent.com"):
+            pf.run_preflight(task, env)
+    else:
+        with caplog.at_level("WARNING"):
+            pf.run_preflight(task, env)
+
+    assert probed_urls == (
+        ["https://raw.githubusercontent.com"] if should_probe else []
+    )
+    if mode == "warn":
+        assert "continuing because" in caplog.text
+
+
+def test_configure_staged_cyberseceval_cache_does_not_change_other_tasks(tmp_path):
+    """CyberSecEval cache setup is limited to the prompt-injection task."""
+    env = {}
+    assert not pf.configure_staged_cyberseceval_cache(
+        "inspect_evals/mmlu_pro", env, tmp_path
+    )
+    assert pf.INSPECT_EVALS_CACHE_DIR_ENV not in env
 
 
 def test_bfcl_requires_data_docs_and_selected_backend_modules(

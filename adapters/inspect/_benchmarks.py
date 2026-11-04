@@ -70,6 +70,8 @@ BLOOM_TEMPLATE_MAP: dict[str, str | None] = {
 # Standard inspect-evals benchmark → task spec mapping
 # ---------------------------------------------------------------------------
 
+DOCVQA_TASK_SPEC = "evalhub_docvqa.py@docvqa"
+
 STANDARD_TASK_MAP: dict[str, str | None] = {
     # Safety & alignment
     "inspect/agentharm":              "inspect_evals/agentharm",
@@ -116,7 +118,9 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     "inspect/agentdojo":              "inspect_evals/agentdojo",
     "inspect/theagentcompany":        "inspect_evals/theagentcompany",
     "inspect/bfcl":                   "inspect_evals/bfcl",
-    "inspect/docvqa":                 "inspect_evals/docvqa",
+    # EvalHub's wrapper applies the sample limit before materializing the
+    # image-heavy dataset; the upstream task converts the entire split first.
+    "inspect/docvqa":                 DOCVQA_TASK_SPEC,
     # Custom
     "inspect/custom":                 None,
 }

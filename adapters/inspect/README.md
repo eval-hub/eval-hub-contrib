@@ -118,9 +118,12 @@ HuggingFace Hub unless offline data is staged.
 
 On disconnected clusters, configure **`test_data_ref.s3`** (or PVC/git) on the
 benchmark so Eval Hub syncs a Hugging Face cache layout into **`/test_data`**.
-The adapter then sets **`HF_HOME`**, **`HF_HUB_OFFLINE`**, and related env vars
-for the `inspect eval` subprocess (same approach as the lm-evaluation-harness
-adapter). Disconnected FVT jobs also set **`parameters.tokenizer`** to
+The adapter reads the staged Hub snapshot from **`/test_data/hub`** and sets
+**`HF_HUB_OFFLINE`** and related flags for the `inspect eval` subprocess. The
+test-data mount is read-only, so generated Hugging Face state (including
+`datasets` lock files and processed Arrow caches) is written to the job's
+writable **`/data/huggingface`** volume. Disconnected FVT jobs also set
+**`parameters.tokenizer`** to
 `/test_data/tokenizer` alongside **`test_data_ref`**; either signal enables
 offline mode when `/test_data` is populated.
 

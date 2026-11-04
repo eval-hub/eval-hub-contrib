@@ -50,6 +50,8 @@ def extract_results(
     eval_log: dict[str, Any],
     benchmark_id: str,
     mode: str,
+    *,
+    non_finite_metrics: set[str] | None = None,
 ) -> tuple[list[EvaluationResult], list[CapabilityEvalEntry], int]:
     results_section = eval_log.get("results") or {}
     scores_list: list[dict[str, Any]] = results_section.get("scores", [])
@@ -77,9 +79,22 @@ def extract_results(
                 continue
 
             full_name = f"{dim_name}/{metric_name}"
-            metric_name = BENCHMARK_METRIC_NAME_MAP.get(
+            reported_name = BENCHMARK_METRIC_NAME_MAP.get(
                 (benchmark_id, full_name), full_name
             )
+            numeric_value = float(value)
+            if not math.isfinite(numeric_value):
+                if non_finite_metrics is not None:
+                    non_finite_metrics.add(reported_name)
+                logger.warning(
+                    "Skipping non-finite metric value | benchmark_id=%s | metric=%s | value=%s",
+                    benchmark_id,
+                    metric_name,
+                    value,
+                )
+                continue
+
+            metric_name = reported_name
             ability = DIMENSION_ABILITY_MAP.get(
                 dim_name,
                 "alignment_risk" if mode in ("petri", "bloom") else "reasoning",
@@ -96,7 +111,7 @@ def extract_results(
 
             evaluation_results.append(EvaluationResult(
                 metric_name=metric_name,
-                metric_value=float(value),
+                metric_value=numeric_value,
                 metric_type="float",
                 num_samples=num_samples,
                 metadata=metadata,
@@ -105,7 +120,7 @@ def extract_results(
                 ability=ability,
                 benchmark=benchmark_id,
                 metric=metric_name,
-                zero_shot=float(value),
+                zero_shot=numeric_value,
             ))
 
     return evaluation_results, capability_entries, num_samples
@@ -142,6 +157,7 @@ def resolve_primary_score(
     mode: str,
     benchmark_id: str | None = None,
     job_primary: PrimaryScore | None = None,
+    non_finite_metrics: set[str] | None = None,
 ) -> PrimaryScore | None:
     """Pick the primary metric key to report on the completed status event.
 
@@ -158,13 +174,21 @@ def resolve_primary_score(
     if not score_names:
         return None
 
+    fixed = fixed_primary_for(benchmark_id, mode)
+    if fixed is not None and non_finite_metrics and fixed.metric in non_finite_metrics:
+        logger.warning(
+            "Fixed primary_score metric %s is non-finite | benchmark_id=%s",
+            fixed.metric,
+            benchmark_id,
+        )
+        return None
+
     if job_primary is not None and job_primary.metric and job_primary.metric in score_names:
         return PrimaryScore(
             metric=job_primary.metric,
             lower_is_better=bool(job_primary.lower_is_better),
         )
 
-    fixed = fixed_primary_for(benchmark_id, mode)
     if fixed is not None and fixed.metric in score_names:
         return PrimaryScore(
             metric=fixed.metric,
@@ -208,7 +232,10 @@ def resolve_primary_score(
 
 
 def compute_overall_score(
-    results: list[EvaluationResult], mode: str, benchmark_id: str | None = None
+    results: list[EvaluationResult],
+    mode: str,
+    benchmark_id: str | None = None,
+    non_finite_metrics: set[str] | None = None,
 ) -> float | None:
     """Representative score for logging and ``JobResults.overall_score``.
 
@@ -229,13 +256,21 @@ def compute_overall_score(
 
     fixed = fixed_primary_for(benchmark_id, mode)
     if fixed is not None:
+        if non_finite_metrics and fixed.metric in non_finite_metrics:
+            logger.warning(
+                "Fixed primary metric %s is non-finite | benchmark_id=%s",
+                fixed.metric,
+                benchmark_id,
+            )
+            return None
         if mode in ("petri", "bloom"):
             primary = next(
                 (r for r in results if r.metric_name == fixed.metric),
                 None,
             )
             if primary is not None:
-                return round(float(primary.metric_value), 4)
+                primary_value = float(primary.metric_value)
+                return round(primary_value, 4) if math.isfinite(primary_value) else None
         else:
             return selected_score(fixed.metric)
 

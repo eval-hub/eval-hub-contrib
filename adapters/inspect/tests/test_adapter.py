@@ -65,6 +65,12 @@ def test_resolve_task_standard_gsm8k(job_spec_path):
     assert adapter._resolve_task(adapter.job_spec, "standard", None) == "inspect_evals/gsm8k"
 
 
+def test_resolve_task_docvqa_uses_early_limit_wrapper(job_spec_path):
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/docvqa"
+    assert adapter._resolve_task(adapter.job_spec, "standard", None) == "evalhub_docvqa.py@docvqa"
+
+
 def test_resolve_task_explicit_override(job_spec_path):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.parameters["task"] = "inspect_evals/mmlu"
@@ -413,6 +419,37 @@ def test_sample_limit_from_num_examples(job_spec_path, tmp_path, monkeypatch):
     cmd = adapter._build_command(adapter.job_spec, "standard", "inspect_evals/gsm8k", tmp_path, None, env)
     assert "--limit" in cmd
     assert cmd[cmd.index("--limit") + 1] == "7"
+
+
+def test_docvqa_passes_num_examples_to_task_before_cli_limit(job_spec_path, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/docvqa"
+    adapter.job_spec.num_examples = 1
+
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(
+        adapter.job_spec, "standard", "evalhub_docvqa.py@docvqa", tmp_path, None, env
+    )
+
+    assert cmd[cmd.index("--limit") + 1] == "1"
+    assert "num_examples=1" in cmd
+
+
+def test_docvqa_passes_legacy_sample_limit_to_task(job_spec_path, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/docvqa"
+    adapter.job_spec.num_examples = None
+    adapter.job_spec.parameters["max_samples"] = 2
+
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(
+        adapter.job_spec, "standard", "evalhub_docvqa.py@docvqa", tmp_path, None, env
+    )
+
+    assert cmd[cmd.index("--limit") + 1] == "2"
+    assert "num_examples=2" in cmd
 
 
 def _standard_cmd(job_spec_path, tmp_path, monkeypatch, *, num_examples, **params):

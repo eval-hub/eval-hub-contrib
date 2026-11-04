@@ -18,6 +18,7 @@ from _hf_auth import apply_hf_hub_auth, refresh_hf_hub_auth
 from _model_auth import role_connection, without_connection_options
 from _hf_offline import (
     TEST_DATA_DIR,
+    WRITABLE_HF_CACHE_DIR,
     configure_hf_offline_environment,
     should_use_hf_offline,
 )
@@ -26,6 +27,7 @@ from _preflight import (
     MODE_ENV,
     TIMEOUT_ENV,
     configure_staged_bfcl_cache,
+    configure_staged_cyberseceval_cache,
     normalize_hosts,
     normalize_mode,
     normalize_timeout,
@@ -145,8 +147,9 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
     if should_use_hf_offline(p):
         configure_hf_offline_environment(TEST_DATA_DIR, env)
         logger.info(
-            "HF offline mode: HF_HOME=%s (staged test data), Hub downloads disabled",
+            "HF offline mode: staged Hub cache=%s/hub, writable cache=%s, Hub downloads disabled",
             TEST_DATA_DIR,
+            WRITABLE_HF_CACHE_DIR,
         )
 
     # Gated datasets (Open-Telco, humaneval, mmlu, …) need Hub auth when not offline.
@@ -285,6 +288,11 @@ def build_command(
     cmd += ["--log-level", config.parameters.get("log_level", "info")]
 
     task_args = _task_args(config)
+    if config.benchmark_id == "inspect/docvqa" and limit is not None:
+        # DocVQA's HF task otherwise materializes all 5,349 image records before
+        # Inspect applies its CLI --limit. Pass the same cap into the local task
+        # so it selects rows from the Arrow cache before converting them to Samples.
+        task_args["num_examples"] = limit
     if config.benchmark_id == "inspect/cyberseceval-2-pi" and _collection_judge_enabled(config):
         if task_args.get("judge_llm") not in (None, "null"):
             raise ValueError("judge_model cannot be combined with task_args.judge_llm")
@@ -457,6 +465,7 @@ def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
     """
     task_spec = cmd[2] if len(cmd) > 2 else ""
     task_args = _task_args_from_command(cmd)
+    configure_staged_cyberseceval_cache(task_spec, env, TEST_DATA_DIR)
     configure_staged_bfcl_cache(task_spec, env, TEST_DATA_DIR, task_args)
     refresh_hf_hub_auth(env)
     run_preflight(task_spec, env, task_args)
