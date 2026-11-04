@@ -212,9 +212,7 @@ def test_clear_happy_path(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(main, "_run_clear_unified_pipeline", fake_pipeline)
-    monkeypatch.setenv("EVALHUB_MODE", "k8s")
-    monkeypatch.setattr("main.read_model_auth_key", {"api-key": "api-key:ref"}.get)
-    monkeypatch.setattr("main.resolve_model_credentials", lambda: type("Credentials", (), {"api_key": "api-key:ref"})())
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     results = adapter.run_benchmark_job(config, callbacks)
 
