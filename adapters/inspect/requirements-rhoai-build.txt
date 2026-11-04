@@ -1,12 +1,7 @@
 # Build dependencies for offline (hermetic) pip installs.
-# The two source-archive dependencies (evals, instruction-following-eval) are
-# built by pip inside the network-isolated buildah step; pip's build isolation
-# needs their declared build requirements available offline. Hermeto prefetches
-# this file alongside the main requirements file (requirements_build_files in
-# the prefetch-input JSON). The evals pyproject declares setuptools>=64,
-# setuptools-scm>=8, wheel; instruction-following-eval declares setuptools>=61,
-# wheel. vcs-versioning is setuptools-scm 10's own runtime dependency (it is
-# on the curated index); packaging is already in the main requirements file.
+# GSMA and instruction-following-eval source archives have been removed from
+# the product lock. Keep the existing build-tool pins unchanged in this fix
+# to avoid unrelated dependency changes.
 # Hermeto resolves this file independently of the main lockfile, so it must
 # carry its own --index-url: without one the build deps are prefetched from
 # public pypi.org, which builds fine but fails the release policy's

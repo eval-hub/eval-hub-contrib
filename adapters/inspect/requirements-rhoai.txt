@@ -5,8 +5,9 @@
 # Minimal production refresh: inspect-evals 0.26.0 and nltk 3.10.4 were resolved
 # from the previous lock, with inspect-evals[math,bfcl] and SDK [adapter] extras.
 # s3fs/fsspec refreshed to 2026.6.0 with their compatible AWS dependency chain.
-# After compilation, the two pinned Git dependencies are rewritten as direct,
-# hash-verified archive URLs for Hermeto. The RHOAI-curated *production* index
+# GSMA evals and instruction-following-eval archives are excluded from the
+# product image; Inspect IFEval is excluded from the product collection.
+# The RHOAI-curated *production* index
 # is the sole index retained below: every third-party wheel in this lock,
 # petri-bloom included, is promoted content, so no pin falls back to
 # files.pythonhosted.org or to the channel's -test staging repository. Release
@@ -225,9 +226,6 @@ eval-hub-sdk==1.0.7 \
     --hash=sha256:ffafdbeaf1c3eb4418e50a2467525f816bac46860b90c804347879bef86ad7a6
     # via -r requirements.txt
     # from https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
-evals @ https://github.com/gsma-labs/evals/archive/708f1c5498793536824eae9919ae003f13c910ea.tar.gz \
-    --hash=sha256:644ec6f7eb32706a591d972321461e0e761b1e5b4f65120738383060d3c0ca5c
-    # via -r requirements.txt — git dep pinned to full commit sha, consumed as a hashable GitHub archive URL
 fastapi==0.143.0 \
     --hash=sha256:64030fe4b6d6e9db06fce1bd9866861f42933ee7684a517b85a3fc210ed17970
     # via
@@ -347,7 +345,6 @@ ijson==3.5.1 \
 immutabledict==4.3.1 \
     --hash=sha256:e73e4955fd3a12f07afddc16545f7f71c1295db3422fabda82e3bdc2be9c1248
     # via
-    #   instruction-following-eval
     # from https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
 importlib-metadata==9.0.1 \
     --hash=sha256:d7e9f0febcff74e3f9000abe34d51ad4c59c70907989a1a09fc6af313e8b902d
@@ -386,9 +383,6 @@ inspect-swe==0.2.71 \
     # via
     #   inspect-scout
     # from https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
-instruction-following-eval @ https://github.com/josejg/instruction_following_eval/archive/0c495b2f95155e8b10acb919ae283bfb4d5be6e2.tar.gz \
-    --hash=sha256:ce25f3bd2c29cefea147096f2520494f47e59220107b262cc0f54907499cc9df
-    # via -r requirements.txt — git dep pinned to full commit sha, consumed as a hashable GitHub archive URL
 jinja2==3.1.6 \
     --hash=sha256:f3610ab9c1e7c93cb3b1ee55afb34bc4cf3115954444b2b1bd8846d5d08ea9f1
     # via
@@ -458,7 +452,6 @@ jsonschema-specifications==2025.9.1 \
 langdetect==1.0.9 \
     --hash=sha256:5f80a0ce17763773b56cb088150331799d860b7b2a7ec54984c223e0b846a6cd
     # via
-    #   instruction-following-eval
     # from https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
 libcst==1.9.0 \
     --hash=sha256:3c40dd8731023f33d9609eba2f34a5b40b61b610512f35fcff70f7b76df48ce8 \
@@ -544,7 +537,6 @@ nltk==3.10.4 \
     --hash=sha256:2b01e240bce14c2404ff4d4efab1e9442e95ea5ed392750342b35f034169827b
     # via
     #   -r requirements.txt
-    #   instruction-following-eval
     # from https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
 numpy==2.5.3 \
     --hash=sha256:621e7c057b287c33e1de4987d69ff3754715174d34b2810a2281f2c75094df3e \
@@ -631,7 +623,6 @@ pandas==3.0.6 \
     # via
     #   datasets
     #   inspect-scout
-    #   instruction-following-eval
     # from https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
 pathlib-abc==0.5.2 \
     --hash=sha256:77eb228a7b9b050ad948f6bf601f3350c5bebab0b63565353d6081dd97a494ec
@@ -950,7 +941,6 @@ truststore==0.10.4 \
 typer==0.27.3 \
     --hash=sha256:5f8506bc89543e92516090bf9fda2fa1cf62da7a0c8ef4e1a72f910e81a68370
     # via
-    #   instruction-following-eval
     # from https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
 typing-extensions==4.16.0 \
     --hash=sha256:cb0d89f2664e5ae94b951d7e2e51d22607d5c78d2867763243f13e2b7c5f3a54
