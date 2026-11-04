@@ -25,6 +25,17 @@ from _benchmarks import (
 
 
 # ---------------------------------------------------------------------------
+# Runtime dependency smoke tests
+# ---------------------------------------------------------------------------
+
+def test_email_str_schema_dependency_available():
+    """AgentDojo's Pydantic EmailStr fields require email-validator at runtime."""
+    from pydantic import EmailStr, TypeAdapter
+
+    TypeAdapter(EmailStr)
+
+
+# ---------------------------------------------------------------------------
 # Mode routing
 # ---------------------------------------------------------------------------
 
@@ -995,5 +1006,4 @@ def test_all_standard_benchmarks_have_task_or_none():
 
 def test_petri_primary_metric_is_defined():
     assert PETRI_PRIMARY_METRIC == "concerning"
-
 
