@@ -1,0 +1,15 @@
+# PwnedAlert reads the root-level [allowlist], including for past commits.
+# Keep the default rules enabled when this file is used by standalone Gitleaks.
+[extend]
+  useDefault = true
+
+[allowlist]
+  description = "Synthetic model-auth credential references used by routing tests"
+
+  # These are lookup references resolved by the sidecar, with no credentials in
+  # their values. Match the exact references, either extracted or quoted in a
+  # source line, without excluding test files or entire commits.
+  regexes = [
+    '''(^|["'])judge_api-key:ref(["']|$)''',
+    '''(^|["'])embedding_api-key:ref(["']|$)''',
+  ]
