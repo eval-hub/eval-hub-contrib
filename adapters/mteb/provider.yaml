@@ -97,6 +97,11 @@ parameters:
     default: 32
     description: Batch size for encoding
 
+  - name: num_examples
+    type: integer
+    default: null
+    description: Maximum evaluation examples per task; null evaluates the full dataset
+
   - name: device
     type: string
     default: null

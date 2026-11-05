@@ -2,7 +2,7 @@
 # See: https://github.com/embeddings-benchmark/mteb
 
 # MTEB framework (includes CLI)
-mteb>=1.14.0
+mteb==2.26.31
 
 # Sentence Transformers (default model backend for embeddings)
 sentence-transformers>=2.2.0
