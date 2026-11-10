@@ -33,7 +33,7 @@ The gate script test needs `jq` and is skipped without it. The golden reports ar
 text redacted and paths normalised. The malicious-looking skill used by the live tests is generated into a temp
 directory at test time and never committed.
 
-CI also enforces lint (`ruff==0.16.9`) and docstring coverage of at least 80% (`interrogate`, tests included).
+CI also enforces lint (`ruff==0.17.4`) and docstring coverage of at least 80% (`interrogate`, tests included).
 
 ## Upgrading SkillEvaluator or SkillSpector
 
