@@ -17,7 +17,10 @@
 openai>=3.49.0
 
 # Data generation: synthetic dataset tools
-wonderwords>=3.0.1
+# Pinned exactly: niah.py and common_words_extraction.py read its word lists through the
+# private _get_words_from_text_file, and the lists differ between releases (nounlist
+# 6786 words in 2.2.0, 6782 in 3.0.1), so a seeded run would build different prompts.
+wonderwords==3.0.1
 # 3.10.4 is the first release without GHSA-8mgp-746c-j5xp (CVE-2026-81726)
 nltk>=3.10.4
 numpy>=2.5.4
