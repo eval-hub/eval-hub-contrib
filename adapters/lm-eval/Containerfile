@@ -9,7 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy adapter implementation
-COPY main.py _tasks.py _lmevaljob_tasks.py _execution.py _results.py ./
+COPY main.py _tasks.py _benchmarks.py _execution.py _results.py ./
 
 # /tmp/.cache must be writable by the arbitrary non-root UID OpenShift assigns
 # (group 0): HF_HOME and HF_DATASETS_CACHE live under it.

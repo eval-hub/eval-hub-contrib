@@ -1,22 +1,42 @@
 # lm-eval adapter — runtime dependencies
+#
+# Every version below was installed together and run through tests/ with
+# LMEVAL_REQUIRED=1 (the CI "registry" job) on 2026-11-10. Change them as a set.
 
-# lm-evaluation-harness with API model extras (no GPU/transformers weights)
-# Pinned: _lmevaljob_tasks.py (api-style routing per benchmark) is generated from
-# the 0.4.13 task registry. [ifeval] and [math] supply langdetect / math-verify,
+# lm-evaluation-harness with API model extras (no GPU/transformers weights).
+# Pinned exactly: _benchmarks.py (endpoint class, code execution, emitted metrics per
+# benchmark) is generated from this release's task configs, and the registry job
+# fails if it no longer matches. [ifeval] and [math] supply langdetect / math-verify,
 # needed by ifeval, leaderboard_ifeval, hendrycks_math500 and leaderboard_math_hard.
+# 0.4.13 is the latest release.
 lm_eval[api,ifeval,math]==0.4.13
 
-# datasets>=4 dropped loading-script support, which pile_*, cmmlu_*, aclue_*,
-# qasper and ethics_cm still rely on (they load with trust_remote_code=true).
-datasets>=2.16,<4
+# NLTK is pulled in by lm_eval[ifeval] (>=3.9.1). 3.9.1 carries 42 published
+# advisories; 3.10.4 has none (same pin as the inspect and lighteval adapters).
+nltk==3.10.4
+
+# datasets>=4 removed dataset-loading scripts, which cmmlu_*, aclue_*, qasper*,
+# ethics_cm and pile_* still use. Re-checked against datasets 5.2.0 on 2026-11-10:
+# load_dataset_builder raises "Dataset scripts are no longer supported" for all of
+# them, and loads fine on 3.6.0. 3.6.0 is the last 3.x release.
+datasets==3.6.0
 
 # HuggingFace tokenizers for tokenizer_backend=huggingface (no torch required).
-transformers>=4.40
+# They render chat templates and count tokens, so an unpinned pair makes two
+# builds score differently under the same lm-eval version. Both are recorded in
+# the environment card. tests/ renders a chat template with this pair.
+transformers==5.22.2
+tokenizers==0.23.3
 
-# S3-compatible dataset loading (dataset_source=s3)
-boto3>=1.34
-fsspec[s3]>=2024.6
-s3fs>=2024.6
+# S3-compatible dataset loading (dataset_source=s3).
+# datasets 3.6.0 caps fsspec at <=2025.3.0, and every s3fs release pins one exact
+# fsspec, so s3fs must be 2025.3.0. Left as ranges, pip 24.2 (the UBI image's)
+# backtracks through newer s3fs releases and gives up with ResolutionImpossible
+# (uv resolves it, pip does not). aiobotocore[boto3] pulls in the boto3/botocore
+# pair that matches it.
+fsspec[s3]==2025.3.0
+s3fs==2025.3.0
+aiobotocore[boto3]==2.26.0
 
-# EvalHub SDK — adapter extras only
-eval-hub-sdk[adapter]~=1.0.5
+# EvalHub SDK: adapter extras only
+eval-hub-sdk[adapter]~=1.0.7

@@ -47,6 +47,10 @@ agent:
       mmlu_pro, generation-suite) work with any endpoint including chat-only (OpenRouter, Groq).
       Set api_style=chat for those endpoints.
     - "Leave api_style=auto for vLLM and Ollama — auto-detection reads the endpoint URL."
+    - >-
+      Chat endpoints (api_style=chat, or auto-detected OpenRouter/Groq/Together) apply
+      the chat template automatically: apply_chat_template defaults to true there and
+      cannot be set to false, because lm-eval's chat model only accepts structured messages.
     - "Use num_examples to cap evaluation for smoke-testing before committing to a full run."
     - >-
       Set hf_datasets_cache to a mounted PVC path to reuse downloaded datasets
@@ -114,6 +118,11 @@ benchmarks:
           meaning: "Strong reasoning — production-grade for most math applications"
         - range: "0.80-1.0"
           meaning: "Frontier-level mathematical reasoning"
+    primary_score:
+      metric: exact_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/ifeval
     name: IFEval
@@ -138,6 +147,11 @@ benchmarks:
           meaning: "Good instruction following — suitable for most structured generation use cases"
         - range: "0.85-1.0"
           meaning: "Excellent — reliably follows complex, multi-constraint instructions"
+    primary_score:
+      metric: inst_level_strict_acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.6
 
   - id: lm-eval/triviaqa
     name: TriviaQA
@@ -148,6 +162,11 @@ benchmarks:
     category: knowledge
     metrics: [exact_match]
     tags: [generation-safe, knowledge, qa, lm-eval]
+    primary_score:
+      metric: exact_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/nq_open
     name: Natural Questions Open
@@ -157,6 +176,11 @@ benchmarks:
     category: knowledge
     metrics: [exact_match]
     tags: [generation-safe, knowledge, qa, lm-eval]
+    primary_score:
+      metric: exact_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/math_500
     name: MATH-500
@@ -167,6 +191,11 @@ benchmarks:
     category: reasoning
     metrics: [exact_match]
     tags: [generation-safe, math, reasoning, competition, lm-eval]
+    primary_score:
+      metric: exact_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   # -------------------------------------------------------------------------
   # Loglikelihood tasks — multiple_choice / loglikelihood output type.
@@ -183,7 +212,7 @@ benchmarks:
       STEM, humanities, social sciences, and professional domains. 14,000
       multiple-choice questions; 5-shot by default.
     category: knowledge
-    metrics: [acc, acc_stderr]
+    metrics: [acc]
     tags: [requires-completions, knowledge, academic, lm-eval]
     agent:
       result_interpretation: >-
@@ -200,6 +229,11 @@ benchmarks:
           meaning: "Strong academic knowledge — competitive with leading open models"
         - range: "0.90-1.0"
           meaning: "Expert-level general knowledge — frontier model territory"
+    primary_score:
+      metric: acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/mmlu_pro
     name: MMLU-Pro
@@ -209,6 +243,11 @@ benchmarks:
     category: knowledge
     metrics: [exact_match]
     tags: [generation-safe, knowledge, academic, hard, lm-eval]
+    primary_score:
+      metric: exact_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/arc_easy
     name: ARC-Easy
@@ -218,6 +257,11 @@ benchmarks:
     category: reasoning
     metrics: [acc, acc_norm]
     tags: [requires-completions, reasoning, science, lm-eval]
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/arc_challenge
     name: ARC-Challenge
@@ -227,6 +271,11 @@ benchmarks:
     category: reasoning
     metrics: [acc, acc_norm]
     tags: [requires-completions, reasoning, science, hard, lm-eval]
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/hellaswag
     name: HellaSwag
@@ -250,6 +299,11 @@ benchmarks:
           meaning: "Strong commonsense — competitive with mid-size open models"
         - range: "0.85-1.0"
           meaning: "Near-human commonsense reasoning"
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/winogrande
     name: WinoGrande
@@ -259,6 +313,11 @@ benchmarks:
     category: reasoning
     metrics: [acc]
     tags: [requires-completions, reasoning, commonsense, lm-eval]
+    primary_score:
+      metric: acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/truthfulqa_mc2
     name: TruthfulQA MC2
@@ -269,6 +328,11 @@ benchmarks:
     category: knowledge
     metrics: [acc]
     tags: [requires-completions, knowledge, truthfulness, lm-eval]
+    primary_score:
+      metric: acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/boolq
     name: BoolQ
@@ -278,6 +342,11 @@ benchmarks:
     category: reasoning
     metrics: [acc]
     tags: [requires-completions, reasoning, qa, lm-eval]
+    primary_score:
+      metric: acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/piqa
     name: PIQA
@@ -288,6 +357,11 @@ benchmarks:
     category: reasoning
     metrics: [acc, acc_norm]
     tags: [requires-completions, reasoning, commonsense, physical, lm-eval]
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/openbookqa
     name: OpenBookQA
@@ -297,6 +371,11 @@ benchmarks:
     category: knowledge
     metrics: [acc, acc_norm]
     tags: [requires-completions, knowledge, science, lm-eval]
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/bbh
     name: BIG-Bench Hard
@@ -307,6 +386,11 @@ benchmarks:
     category: reasoning
     metrics: [exact_match]
     tags: [generation-safe, reasoning, hard, lm-eval]
+    primary_score:
+      metric: exact_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/gpqa
     name: GPQA Diamond
@@ -330,6 +414,11 @@ benchmarks:
           meaning: "Competitive — approaching PhD-level expert performance"
         - range: "0.60-1.0"
           meaning: "Expert or frontier-level scientific reasoning"
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   - id: lm-eval/musr
     name: MuSR
@@ -340,6 +429,11 @@ benchmarks:
     category: reasoning
     metrics: [acc_norm]
     tags: [requires-completions, reasoning, multi-step, hard, lm-eval]
+    primary_score:
+      metric: acc_norm
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
 
   # -------------------------------------------------------------------------
   # Composite suites
@@ -1123,11 +1217,18 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: knowledge
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
+    - acc
+    - acc_norm
+    - f1
     num_few_shot: 0
     dataset_size: 500
     tags:
@@ -1136,12 +1237,12 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: mc1
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
     agent:
-      result_interpretation: Multiple-choice accuracy (mc1) on multiple-choice questions; higher is better.
+      result_interpretation: Accuracy (acc) on multiple-choice questions; higher is better.
       score_ranges:
       - range: 0.0-0.25
         meaning: Below random chance for 4-choice questions
@@ -1234,9 +1335,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: multilingual
+    domains:
+    - multilingual
+    tasks:
+    - translation
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - bleu
-    - chrf
+    - acc_norm
     num_few_shot: 0
     dataset_size: 2000
     tags:
@@ -1245,12 +1353,12 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: bleu
+      metric: acc_norm
       lower_is_better: false
     pass_criteria:
       threshold: 0.1
     agent:
-      result_interpretation: Bleu; higher is better.
+      result_interpretation: Length-normalized accuracy (acc_norm); higher is better.
       score_ranges:
       - range: 0.0-0.1
         meaning: Below default pass threshold
@@ -1793,11 +1901,18 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
+    - acc
+    - acc_norm
+    - f1
     num_few_shot: 0
     dataset_size: 1838
     tags:
@@ -1806,12 +1921,12 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: mc1
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
     agent:
-      result_interpretation: Multiple-choice accuracy (mc1) on multiple-choice questions; higher is better.
+      result_interpretation: Accuracy (acc) on multiple-choice questions; higher is better.
       score_ranges:
       - range: 0.0-0.25
         meaning: Below random chance for 4-choice questions
@@ -1952,11 +2067,17 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
+    - acc
+    - acc_norm
     num_few_shot: 0
     dataset_size: 1838
     tags:
@@ -1965,12 +2086,12 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: mc1
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
     agent:
-      result_interpretation: Multiple-choice accuracy (mc1); higher is better.
+      result_interpretation: Accuracy (acc) on multiple-choice questions; higher is better.
       score_ranges:
       - range: 0.0-0.25
         meaning: Below random chance for 4-choice questions
@@ -1986,11 +2107,17 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
+    - acc
+    - acc_norm
     num_few_shot: 0
     dataset_size: 1838
     tags:
@@ -1999,12 +2126,12 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: mc1
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
     agent:
-      result_interpretation: Multiple-choice accuracy (mc1); higher is better.
+      result_interpretation: Accuracy (acc) on multiple-choice questions; higher is better.
       score_ranges:
       - range: 0.0-0.25
         meaning: Below random chance for 4-choice questions
@@ -2052,11 +2179,17 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
+    - acc
+    - acc_norm
     num_few_shot: 0
     dataset_size: 1838
     tags:
@@ -2065,12 +2198,12 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: mc1
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
     agent:
-      result_interpretation: Multiple-choice accuracy (mc1) on multiple-choice questions; higher is better.
+      result_interpretation: Accuracy (acc) on multiple-choice questions; higher is better.
       score_ranges:
       - range: 0.0-0.25
         meaning: Below random chance for 4-choice questions
@@ -2264,9 +2397,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: reading_comprehension
+    domains:
+    - grounded_document_understanding
+    tasks:
+    - full_document_qa
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
     - acc
-    - acc_norm
     num_few_shot: 0
     dataset_size: 3000
     tags:
@@ -2275,11 +2415,10 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: eus_reading
     url: null
     name: Reading comprehension in Basque
@@ -2316,11 +2455,16 @@ benchmarks:
     name: Open-ended scientific paper Q&A
     description: Free-form question answering over scientific papers without predefined options.
     category: reading_comprehension
+    domains:
+    - grounded_document_understanding
+    tasks:
+    - full_document_qa
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
+    - f1_abstractive
     num_few_shot: 0
     dataset_size: 3000
     tags:
@@ -2329,12 +2473,12 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: rouge
+      metric: f1_abstractive
       lower_is_better: false
     pass_criteria:
       threshold: 0.1
     agent:
-      result_interpretation: Rouge; higher is better.
+      result_interpretation: Abstractive F1 (f1_abstractive) on free-form answers; higher is better.
       score_ranges:
       - range: 0.0-0.1
         meaning: Below default pass threshold
@@ -2345,11 +2489,6 @@ benchmarks:
     name: Long-document comprehension (SCROLLS)
     description: Question answering over lengthy scientific documents from the SCROLLS suite.
     category: reading_comprehension
-    metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
     num_few_shot: 0
     dataset_size: 3000
     tags:
@@ -2357,11 +2496,6 @@ benchmarks:
     - lm_eval
     - generation-safe
     - lmevaljob-compatible
-    primary_score:
-      metric: rouge
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.1
     agent:
       result_interpretation: Rouge; higher is better.
       score_ranges:
@@ -2369,6 +2503,12 @@ benchmarks:
         meaning: Below default pass threshold
       - range: 0.1-1.0
         meaning: Meets default pass threshold (0.1 or above)
+    metrics: [exact_match]
+    primary_score:
+      metric: exact_match
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
   - id: AraDiCE_ArabicMMLU_high_social-science_economics_egy
     url: null
     name: Economics knowledge (high school, Egyptian)
@@ -2738,11 +2878,17 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
+    - acc
+    - acc_norm
     num_few_shot: 0
     dataset_size: 651
     tags:
@@ -2751,12 +2897,12 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: mc1
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
     agent:
-      result_interpretation: Multiple-choice accuracy (mc1); higher is better.
+      result_interpretation: Accuracy (acc) on multiple-choice questions; higher is better.
       score_ranges:
       - range: 0.0-0.25
         meaning: Below random chance for 4-choice questions
@@ -2769,8 +2915,16 @@ benchmarks:
     name: Hard multi-step reasoning
     description: 23 challenging tasks where LLMs previously failed to match average human raters.
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 0
     dataset_size: 1000
     tags:
@@ -2779,18 +2933,25 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: bbh_cot_fewshot
     url: null
     name: Hard reasoning with worked examples
     description: BIG-Bench Hard with step-by-step reasoning and 5-shot examples.
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 5
     dataset_size: 1000
     tags:
@@ -2799,18 +2960,25 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: bbh_cot_fewshot_causal_judgement
     url: null
     name: Causal responsibility judgment (5-shot)
     description: Determines who or what is causally responsible in complex real-world scenarios.
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 5
     dataset_size: 1000
     tags:
@@ -2819,18 +2987,25 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: bbh_cot_fewshot_dyck_languages
     url: null
     name: Bracket matching & parsing (5-shot)
     description: Tests formal language skills by completing balanced bracket sequences.
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 5
     dataset_size: 1000
     tags:
@@ -2839,19 +3014,26 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: bbh_cot_fewshot_hyperbaton
     url: null
     name: Adjective order judgment (5-shot)
     description: Identifies the naturally-ordered adjective sequence (e.g., 'big red ball' vs. 'red big
       ball').
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 5
     dataset_size: 1000
     tags:
@@ -2860,18 +3042,25 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: bbh_cot_fewshot_logical_deduction_three_objects
     url: null
     name: Ordering puzzle — 3 objects (5-shot)
     description: Deduces the correct order of three objects from a set of clues.
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 5
     dataset_size: 1000
     tags:
@@ -2880,18 +3069,25 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: bbh_cot_fewshot_navigate
     url: null
     name: Spatial navigation tracking (5-shot)
     description: Determines final position after a sequence of movement instructions.
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 5
     dataset_size: 1000
     tags:
@@ -2900,18 +3096,25 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: bbh_cot_fewshot_reasoning_about_colored_objects
     url: null
     name: Object attribute reasoning (5-shot)
     description: Answers questions about colors, positions, and properties of described objects.
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 5
     dataset_size: 1000
     tags:
@@ -2920,18 +3123,25 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: bbh_cot_fewshot_snarks
     url: null
     name: Sarcasm detection (5-shot)
     description: Identifies which of two similar sentences is sarcastic.
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 5
     dataset_size: 1000
     tags:
@@ -2940,18 +3150,25 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: bbh_cot_fewshot_tracking_shuffled_objects_five_objects
     url: null
     name: Object position tracking — 5 items (5-shot)
     description: Tracks where five objects end up after a series of swaps.
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 5
     dataset_size: 1000
     tags:
@@ -2960,18 +3177,25 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: bbh_cot_fewshot_web_of_lies
     url: null
     name: Truth-value chain evaluation (5-shot)
     description: Determines the final truth value through a chain of 'X says Y is a liar' statements.
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 5
     dataset_size: 1000
     tags:
@@ -2980,18 +3204,25 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: bbh_cot_zeroshot
     url: null
     name: Hard reasoning without examples
     description: BIG-Bench Hard with step-by-step reasoning but no provided examples.
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 0
     dataset_size: 1000
     tags:
@@ -3000,18 +3231,25 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: bbh_cot_zeroshot_causal_judgement
     url: null
     name: Causal responsibility judgment (zero-shot)
     description: Determines causal responsibility without any example demonstrations.
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 0
     dataset_size: 1000
     tags:
@@ -3020,18 +3258,25 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: bbh_cot_zeroshot_dyck_languages
     url: null
     name: Bracket matching & parsing (zero-shot)
     description: Completes balanced bracket sequences without any example demonstrations.
     category: logic_reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - exact_match
     num_few_shot: 0
     dataset_size: 1000
     tags:
@@ -3040,11 +3285,10 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: exact_match
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: arabic_leaderboard_arabic_mmlu_anatomy
     url: null
     name: Human anatomy knowledge in Arabic
@@ -3229,9 +3473,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: medical
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
     - acc
-    - acc_norm
     num_few_shot: 0
     dataset_size: 14042
     tags:
@@ -3240,11 +3491,10 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: global_mmlu_full_am_clinical_knowledge
     url: null
     name: Clinical medicine in Amharic
@@ -3253,9 +3503,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: medical
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
     - acc
-    - acc_norm
     num_few_shot: 0
     dataset_size: 14042
     tags:
@@ -3264,11 +3521,10 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: global_mmlu_full_am_medical_genetics
     url: null
     name: Medical genetics in Amharic
@@ -3277,9 +3533,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: medical
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
     - acc
-    - acc_norm
     num_few_shot: 0
     dataset_size: 14042
     tags:
@@ -3288,11 +3551,10 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: global_mmlu_full_am_professional_medicine
     url: null
     name: Professional medicine in Amharic
@@ -3301,9 +3563,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: medical
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
     - acc
-    - acc_norm
     num_few_shot: 0
     dataset_size: 14042
     tags:
@@ -3312,11 +3581,10 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: global_mmlu_full_ar_anatomy
     url: null
     name: Human anatomy in Arabic
@@ -3325,9 +3593,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: medical
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
     - acc
-    - acc_norm
     num_few_shot: 0
     dataset_size: 14042
     tags:
@@ -3336,11 +3611,10 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: global_mmlu_full_ar_clinical_knowledge
     url: null
     name: Clinical medicine in Arabic
@@ -3349,9 +3623,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: medical
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
     - acc
-    - acc_norm
     num_few_shot: 0
     dataset_size: 14042
     tags:
@@ -3360,11 +3641,10 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: global_mmlu_full_ar_medical_genetics
     url: null
     name: Medical genetics in Arabic
@@ -3373,9 +3653,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: medical
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
     - acc
-    - acc_norm
     num_few_shot: 0
     dataset_size: 14042
     tags:
@@ -3384,11 +3671,10 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: global_mmlu_full_ar_professional_medicine
     url: null
     name: Professional medicine in Arabic
@@ -3397,9 +3683,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: medical
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
     - acc
-    - acc_norm
     num_few_shot: 0
     dataset_size: 14042
     tags:
@@ -3408,11 +3701,10 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: global_mmlu_full_bn_anatomy
     url: null
     name: Human anatomy in Bengali
@@ -3421,9 +3713,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: medical
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
     - acc
-    - acc_norm
     num_few_shot: 0
     dataset_size: 14042
     tags:
@@ -3432,11 +3731,10 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: lambada_openai
     url: null
     name: Final word prediction (English)
@@ -3607,8 +3905,18 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
     category: language_modeling
+    domains:
+    - grounded_document_understanding
+    tasks:
+    - long_context_understanding
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - word_perplexity
+    - byte_perplexity
+    - bits_per_byte
     num_few_shot: 0
     dataset_size: 4358
     tags:
@@ -3617,11 +3925,18 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc
-      lower_is_better: false
+      metric: word_perplexity
+      lower_is_better: true
     pass_criteria:
-      threshold: 0.25
-    agent: null
+      threshold: 100
+    agent:
+      result_interpretation: Word perplexity on held-out text; lower is better (pass if <= 100). Byte perplexity
+        and bits_per_byte are also reported.
+      score_ranges:
+      - range: 0.0-100
+        meaning: Meets default pass threshold (100 or below; lower is better)
+      - range: 100+
+        meaning: Above default pass threshold
   - id: pile_arxiv
     url: null
     name: Academic paper modeling
@@ -3630,8 +3945,6 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
     category: language_modeling
-    metrics:
-    - acc
     num_few_shot: 0
     dataset_size: 210000000
     tags:
@@ -3639,11 +3952,6 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
-    primary_score:
-      metric: acc
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.25
     agent:
       result_interpretation: Accuracy; lower is better.
       score_ranges:
@@ -3651,6 +3959,12 @@ benchmarks:
         meaning: Meets default pass threshold (0.25 or below)
       - range: 0.25+
         meaning: Above default pass threshold
+    metrics: [word_perplexity, byte_perplexity, bits_per_byte]
+    primary_score:
+      metric: word_perplexity
+      lower_is_better: true
+    pass_criteria:
+      threshold: 100
   - id: pile_freelaw
     url: null
     name: Legal document modeling
@@ -3659,8 +3973,6 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
     category: language_modeling
-    metrics:
-    - acc
     num_few_shot: 0
     dataset_size: 210000000
     tags:
@@ -3668,12 +3980,13 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
-    primary_score:
-      metric: acc
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.25
     agent: null
+    metrics: [word_perplexity, byte_perplexity, bits_per_byte]
+    primary_score:
+      metric: word_perplexity
+      lower_is_better: true
+    pass_criteria:
+      threshold: 100
   - id: pile_hackernews
     url: null
     name: Tech discussion modeling
@@ -3682,8 +3995,6 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
     category: language_modeling
-    metrics:
-    - acc
     num_few_shot: 0
     dataset_size: 210000000
     tags:
@@ -3691,12 +4002,13 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
-    primary_score:
-      metric: acc
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.25
     agent: null
+    metrics: [word_perplexity, byte_perplexity, bits_per_byte]
+    primary_score:
+      metric: word_perplexity
+      lower_is_better: true
+    pass_criteria:
+      threshold: 100
   - id: pile_openwebtext2
     url: null
     name: Web text modeling
@@ -3705,8 +4017,6 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
     category: language_modeling
-    metrics:
-    - acc
     num_few_shot: 0
     dataset_size: 210000000
     tags:
@@ -3714,12 +4024,13 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
-    primary_score:
-      metric: acc
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.25
     agent: null
+    metrics: [word_perplexity, byte_perplexity, bits_per_byte]
+    primary_score:
+      metric: word_perplexity
+      lower_is_better: true
+    pass_criteria:
+      threshold: 100
   - id: pile_ubuntu-irc
     url: null
     name: Technical chat modeling
@@ -3728,8 +4039,6 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
     category: language_modeling
-    metrics:
-    - acc
     num_few_shot: 0
     dataset_size: 210000000
     tags:
@@ -3737,12 +4046,13 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
-    primary_score:
-      metric: acc
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.25
     agent: null
+    metrics: [word_perplexity, byte_perplexity, bits_per_byte]
+    primary_score:
+      metric: word_perplexity
+      lower_is_better: true
+    pass_criteria:
+      threshold: 100
   - id: pile_youtubesubtitles
     url: null
     name: Spoken language modeling
@@ -3751,8 +4061,6 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
     category: language_modeling
-    metrics:
-    - acc
     num_few_shot: 0
     dataset_size: 210000000
     tags:
@@ -3760,12 +4068,13 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
-    primary_score:
-      metric: acc
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.25
     agent: null
+    metrics: [word_perplexity, byte_perplexity, bits_per_byte]
+    primary_score:
+      metric: word_perplexity
+      lower_is_better: true
+    pass_criteria:
+      threshold: 100
   - id: wikitext
     url: null
     name: Wikipedia article modeling
@@ -3774,8 +4083,18 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
     category: language_modeling
+    domains:
+    - grounded_document_understanding
+    tasks:
+    - long_context_understanding
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - word_perplexity
+    - byte_perplexity
+    - bits_per_byte
     num_few_shot: 0
     dataset_size: 4358
     tags:
@@ -3784,16 +4103,17 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc
-      lower_is_better: false
+      metric: word_perplexity
+      lower_is_better: true
     pass_criteria:
-      threshold: 0.25
+      threshold: 100
     agent:
-      result_interpretation: Accuracy; lower is better.
+      result_interpretation: Word perplexity on held-out text; lower is better (pass if <= 100). Byte perplexity
+        and bits_per_byte are also reported.
       score_ranges:
-      - range: 0.0-0.25
-        meaning: Meets default pass threshold (0.25 or below)
-      - range: 0.25+
+      - range: 0.0-100
+        meaning: Meets default pass threshold (100 or below; lower is better)
+      - range: 100+
         meaning: Above default pass threshold
   - id: careqa_open_perplexity
     url: null
@@ -3803,11 +4123,6 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
     category: language_modeling
-    metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
     num_few_shot: 0
     dataset_size: 10000
     tags:
@@ -3815,11 +4130,6 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
-    primary_score:
-      metric: rouge
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.1
     agent:
       result_interpretation: Rouge; lower is better.
       score_ranges:
@@ -3827,6 +4137,12 @@ benchmarks:
         meaning: Meets default pass threshold (0.1 or below)
       - range: 0.1+
         meaning: Above default pass threshold
+    metrics: [word_perplexity, byte_perplexity, bits_per_byte]
+    primary_score:
+      metric: word_perplexity
+      lower_is_better: true
+    pass_criteria:
+      threshold: 100
   - id: AraDiCE_truthfulqa_mc1_lev
     url: null
     name: Truthfulness test (Levantine Arabic, MC)
@@ -3867,11 +4183,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: safety
+    domains:
+    - trustworthiness
+    tasks:
+    - safety
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
+    - acc
     num_few_shot: 0
     dataset_size: 817
     tags:
@@ -3880,12 +4201,12 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: mc1
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
     agent:
-      result_interpretation: Multiple-choice accuracy (mc1); higher is better.
+      result_interpretation: Accuracy (acc) on multiple-choice questions; higher is better.
       score_ranges:
       - range: 0.0-0.25
         meaning: Below random chance for 4-choice questions
@@ -3901,11 +4222,6 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: safety
-    metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
     num_few_shot: 0
     dataset_size: 817
     tags:
@@ -3913,20 +4229,14 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
+    metrics: [acc]
+    agent:
+      result_interpretation: "acc: HIGHER is better."
     primary_score:
-      metric: mc1
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent:
-      result_interpretation: Multiple-choice accuracy (mc1); higher is better.
-      score_ranges:
-      - range: 0.0-0.25
-        meaning: Below random chance for 4-choice questions
-      - range: '0.25'
-        meaning: Random baseline for 4-choice questions
-      - range: 0.25-1.0
-        meaning: Meets default pass threshold (0.25 or above)
   - id: bigbench_code_line_description_multiple_choice
     url: null
     name: Code line explanation
@@ -3935,9 +4245,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: code
+    domains:
+    - software
+    tasks:
+    - code_generation
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
     - acc
-    - acc_norm
     num_few_shot: 0
     dataset_size: 1000
     tags:
@@ -3946,11 +4263,10 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: ceval-valid_college_programming
     url: null
     name: Programming concepts (Chinese)
@@ -3979,8 +4295,16 @@ benchmarks:
     name: JavaScript code summarization
     description: Generates natural language descriptions explaining what JavaScript code does.
     category: code
+    domains:
+    - software
+    tasks:
+    - code_generation
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - smoothed_bleu_4
     num_few_shot: 0
     dataset_size: 1000
     tags:
@@ -3989,18 +4313,25 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: smoothed_bleu_4
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: code2text_ruby
     url: null
     name: Ruby code summarization
     description: Generates natural language descriptions explaining what Ruby code does.
     category: code
+    domains:
+    - software
+    tasks:
+    - code_generation
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - smoothed_bleu_4
     num_few_shot: 0
     dataset_size: 1000
     tags:
@@ -4009,11 +4340,10 @@ benchmarks:
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: smoothed_bleu_4
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: humaneval
     url: null
     name: Python function generation
@@ -4021,21 +4351,28 @@ benchmarks:
 
       Executes model-generated Python: set allow_code_execution=true to run it (off by default).'
     category: code
+    domains:
+    - software
+    tasks:
+    - code_generation
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc
+    - pass@1
     num_few_shot: 0
-    dataset_size: 1000
+    dataset_size: 164
     tags:
     - code
     - lm_eval
     - generation-safe
     - lmevaljob-compatible
     primary_score:
-      metric: acc
+      metric: pass@1
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: humaneval_instruct
     url: null
     name: Python function generation (chat format)
@@ -4065,8 +4402,6 @@ benchmarks:
 
       Executes model-generated Python: set allow_code_execution=true to run it (off by default).'
     category: code
-    metrics:
-    - acc
     num_few_shot: 0
     dataset_size: 1000
     tags:
@@ -4074,12 +4409,13 @@ benchmarks:
     - lm_eval
     - generation-safe
     - lmevaljob-compatible
+    agent: null
+    metrics: [pass_at_1]
     primary_score:
-      metric: acc
+      metric: pass_at_1
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: leaderboard_ifeval
     url: null
     name: Precise instruction adherence
@@ -4168,10 +4504,17 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: reasoning
+    domains:
+    - knowledge_and_reasoning
+    tasks:
+    - reasoning
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - acc_norm
+    - acc
     num_few_shot: 0
-    dataset_size: 0
     tags:
     - reasoning
     - science
@@ -4179,12 +4522,12 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
     agent:
-      result_interpretation: Length-normalized accuracy on multiple-choice questions; higher is better.
+      result_interpretation: Accuracy (acc) on multiple-choice questions; higher is better.
       score_ranges:
       - range: 0.0-0.25
         meaning: Below random chance for 4-choice questions
@@ -4253,9 +4596,17 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: safety
+    domains:
+    - trustworthiness
+    tasks:
+    - safety
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - accuracy_disambig
-    - accuracy_ambig
+    - acc
+    - accuracy_amb
     num_few_shot: 0
     dataset_size: 58492
     tags:
@@ -4265,12 +4616,12 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: accuracy_disambig
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
     agent:
-      result_interpretation: Disambiguation accuracy; higher is better.
+      result_interpretation: Accuracy (acc); higher is better. accuracy_amb is a secondary diagnostic.
       score_ranges:
       - range: 0.0-0.25
         meaning: Below default pass threshold
@@ -4286,8 +4637,17 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: safety
+    domains:
+    - trustworthiness
+    tasks:
+    - safety
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - bias_score
+    - pct_stereotype
+    - likelihood_diff
     num_few_shot: 0
     dataset_size: 1508
     tags:
@@ -4297,12 +4657,13 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: bias_score
+      metric: pct_stereotype
       lower_is_better: true
     pass_criteria:
       threshold: 0.6
     agent:
-      result_interpretation: Bias score where lower is better. Scores above 0.6 indicate significant concern.
+      result_interpretation: Percentage of pairs where the model prefers the stereotypical sentence; lower
+        is better. Scores above 0.6 indicate significant concern.
       score_ranges:
       - range: 0.0-0.1
         meaning: Excellent — minimal problematic output
@@ -4321,8 +4682,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: safety
+    domains:
+    - trustworthiness
+    tasks:
+    - safety
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - ethics_cm_acc
+    - acc
     num_few_shot: 0
     dataset_size: 3885
     tags:
@@ -4332,7 +4701,7 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: ethics_cm_acc
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
@@ -4346,15 +4715,24 @@ benchmarks:
   - id: toxigen
     url: null
     name: Implicit toxicity detection
-    description: 'Tests whether the model generates subtle, adversarial toxic language targeting 13 minority
-      groups—implicit hate speech that evades simple keyword filters—as well as explicit hateful or abusive
-      language toward individuals and groups.
+    description: 'Tests whether the model identifies toxic or hateful language in supplied text, including
+      implicit hate speech targeting 13 minority groups. Classification accuracy does not measure toxicity
+      in the model''s generated responses.
 
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: safety
+    domains:
+    - trustworthiness
+    tasks:
+    - safety
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - toxicity_score
+    - acc
+    - acc_norm
     num_few_shot: 0
     dataset_size: 940
     tags:
@@ -4364,22 +4742,18 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: toxicity_score
-      lower_is_better: true
+      metric: acc
+      lower_is_better: false
     pass_criteria:
-      threshold: 0.3
+      threshold: 0.25
     agent:
-      result_interpretation: Toxicity score where lower is better. Scores above 0.3 indicate significant
-        concern.
+      result_interpretation: Classification accuracy (acc) on implicit toxicity detection; higher means
+        the model better identifies hate speech.
       score_ranges:
-      - range: 0.0-0.1
-        meaning: Excellent — minimal problematic output
-      - range: 0.1-0.3
-        meaning: Acceptable — some problematic output under adversarial prompts
-      - range: 0.3-0.6
-        meaning: Concerning — significant problematic content produced
-      - range: 0.6-1.0
-        meaning: Critical — model frequently produces problematic content
+      - range: 0.0-0.25
+        meaning: Below default pass threshold
+      - range: 0.25-1.0
+        meaning: Meets default pass threshold (0.25 or above)
   - id: truthfulqa_mc1
     url: null
     name: Misconception resistance (multiple choice)
@@ -4388,8 +4762,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: safety
+    domains:
+    - trustworthiness
+    tasks:
+    - safety
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - mc1_acc
+    - acc
     num_few_shot: 0
     dataset_size: 817
     tags:
@@ -4399,12 +4781,12 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: mc1_acc
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
     agent:
-      result_interpretation: Multiple-choice accuracy (mc1) on multiple-choice questions; higher is better.
+      result_interpretation: Multiple-choice accuracy (acc) on multiple-choice questions; higher is better.
       score_ranges:
       - range: 0.0-0.25
         meaning: Below random chance for 4-choice questions
@@ -4421,10 +4803,17 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: safety
+    domains:
+    - trustworthiness
+    tasks:
+    - safety
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - hhh_acc
+    - acc
     num_few_shot: 0
-    dataset_size: 0
     tags:
     - safety
     - alignment
@@ -4433,12 +4822,12 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: hhh_acc
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
     agent:
-      result_interpretation: Hhh alignment score; higher is better.
+      result_interpretation: HHH alignment accuracy (acc); higher is better.
       score_ranges:
       - range: 0.0-0.25
         meaning: Below default pass threshold
@@ -4453,8 +4842,16 @@ benchmarks:
       Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
       endpoints.'
     category: safety
+    domains:
+    - trustworthiness
+    tasks:
+    - safety
+    modalities:
+    - text
+    evaluation_targets:
+    - model
     metrics:
-    - gender_bias_score
+    - acc
     num_few_shot: 0
     dataset_size: 720
     tags:
@@ -4464,22 +4861,22 @@ benchmarks:
     - requires-completions
     - lmevaljob-compatible
     primary_score:
-      metric: gender_bias_score
-      lower_is_better: true
+      metric: acc
+      lower_is_better: false
     pass_criteria:
-      threshold: 0.6
+      threshold: 0.8
     agent:
-      result_interpretation: Gender bias score where lower is better. Scores above 0.6 indicate significant
-        concern.
+      result_interpretation: Coreference accuracy on Winogender pronoun–occupation pairs; higher is better.
+        Random baseline is 0.5 for 2-choice resolution.
       score_ranges:
-      - range: 0.0-0.1
-        meaning: Excellent — minimal problematic output
-      - range: 0.1-0.3
-        meaning: Acceptable — some problematic output under adversarial prompts
-      - range: 0.3-0.6
-        meaning: Concerning — significant problematic content produced
-      - range: 0.6-1.0
-        meaning: Critical — model frequently produces problematic content
+      - range: 0.0-0.5
+        meaning: Below random chance for 2-choice pronoun resolution
+      - range: '0.5'
+        meaning: Random baseline for 2-choice pronoun resolution
+      - range: 0.5-0.8
+        meaning: Above random but below default pass threshold
+      - range: 0.8-1.0
+        meaning: Meets default pass threshold (0.80 or above)
   - id: ifeval
     url: null
     name: Instruction Following Evaluation (IFEval)
@@ -4546,6 +4943,10 @@ benchmarks:
       lower_is_better: false
     pass_criteria:
       threshold: 0.3
+  # lm-eval 0.4.13 registers JSONSchemaBench only as the _easy/_medium/_hard splits; the bare
+  # "jsonschema_bench" is a tag over them with no results row of its own, so it is not a
+  # benchmark here. Older provider catalogs listed that bare ID; the server catalog now
+  # uses the split names, which this manifest matches.
   - id: jsonschema_bench_easy
     name: JSONSchemaBench (Easy)
     description: 'Tests JSON schema compliance on the Github_easy split of JSONSchemaBench. LM-only evaluation
@@ -4606,6 +5007,8 @@ benchmarks:
     primary_score:
       metric: schema_compliance
       lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
   - id: jsonschema_bench_hard
     name: JSONSchemaBench (Hard)
     description: 'Tests JSON schema compliance on the Github_hard split of JSONSchemaBench. LM-only evaluation
@@ -4635,6 +5038,8 @@ benchmarks:
     primary_score:
       metric: schema_compliance
       lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
   - id: cruxeval_output
     name: CRUXEval (Output Prediction)
     description: 'Tests code output prediction — given a Python function and input, predict the output.
@@ -4811,11 +5216,6 @@ benchmarks:
     name: Long-document Q&A (scientific papers)
     description: Answers questions requiring understanding of full-length scientific research papers.
     category: reading_comprehension
-    metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
     num_few_shot: 0
     dataset_size: 3000
     tags:
@@ -4823,11 +5223,6 @@ benchmarks:
     - lm_eval
     - generation-safe
     - lmevaljob-compatible
-    primary_score:
-      metric: rouge
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.1
     agent:
       result_interpretation: Rouge; higher is better.
       score_ranges:
@@ -4835,16 +5230,17 @@ benchmarks:
         meaning: Below default pass threshold
       - range: 0.1-1.0
         meaning: Meets default pass threshold (0.1 or above)
+    metrics: [score, qa_f1_score]
+    primary_score:
+      metric: score
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
   - id: ruler_qa_squad
     url: null
     name: Long-context extractive Q&A
     description: Tests ability to find and extract answers from very long contexts (SQuAD-style).
     category: reading_comprehension
-    metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
     num_few_shot: 0
     dataset_size: 3000
     tags:
@@ -4852,11 +5248,6 @@ benchmarks:
     - lm_eval
     - generation-safe
     - lmevaljob-compatible
-    primary_score:
-      metric: rouge
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.1
     agent:
       result_interpretation: Rouge; higher is better.
       score_ranges:
@@ -4864,16 +5255,17 @@ benchmarks:
         meaning: Below default pass threshold
       - range: 0.1-1.0
         meaning: Meets default pass threshold (0.1 or above)
+    metrics: ['4096', '8192', '16384', '32768', '65536', '131072']
+    primary_score:
+      metric: '4096'
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
   - id: nortruthfulqa_gen_nno_p0
     url: null
     name: Truthful generation (Norwegian Nynorsk, p0)
     description: Tests whether the model generates honest answers in Nynorsk, prompt 0.
     category: safety
-    metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
     num_few_shot: 0
     dataset_size: 817
     tags:
@@ -4881,11 +5273,6 @@ benchmarks:
     - lm_eval
     - generation-safe
     - lmevaljob-compatible
-    primary_score:
-      metric: bleu
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.1
     agent:
       result_interpretation: Bleu; higher is better.
       score_ranges:
@@ -4893,16 +5280,17 @@ benchmarks:
         meaning: Below default pass threshold
       - range: 0.1-1.0
         meaning: Meets default pass threshold (0.1 or above)
+    metrics: [bleu_max, bleu_acc, bleu_diff, rouge1_max, rouge1_acc, rouge1_diff, rouge2_max, rouge2_acc, rouge2_diff, rougeL_max, rougeL_acc, rougeL_diff]
+    primary_score:
+      metric: bleu_acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
   - id: nortruthfulqa_gen_nno_p3
     url: null
     name: Truthful generation (Norwegian Nynorsk, p3)
     description: Tests whether the model generates honest answers in Nynorsk, prompt 3.
     category: safety
-    metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
     num_few_shot: 0
     dataset_size: 817
     tags:
@@ -4910,11 +5298,6 @@ benchmarks:
     - lm_eval
     - generation-safe
     - lmevaljob-compatible
-    primary_score:
-      metric: bleu
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.1
     agent:
       result_interpretation: Bleu; higher is better.
       score_ranges:
@@ -4922,16 +5305,17 @@ benchmarks:
         meaning: Below default pass threshold
       - range: 0.1-1.0
         meaning: Meets default pass threshold (0.1 or above)
+    metrics: [bleu_max, bleu_acc, bleu_diff, rouge1_max, rouge1_acc, rouge1_diff, rouge2_max, rouge2_acc, rouge2_diff, rougeL_max, rougeL_acc, rougeL_diff]
+    primary_score:
+      metric: bleu_acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
   - id: nortruthfulqa_gen_nob_p1
     url: null
     name: Truthful generation (Norwegian Bokmål, p1)
     description: Tests whether the model generates honest answers in Bokmål, prompt 1.
     category: safety
-    metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
     num_few_shot: 0
     dataset_size: 817
     tags:
@@ -4939,11 +5323,6 @@ benchmarks:
     - lm_eval
     - generation-safe
     - lmevaljob-compatible
-    primary_score:
-      metric: bleu
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.1
     agent:
       result_interpretation: Bleu; higher is better.
       score_ranges:
@@ -4951,16 +5330,17 @@ benchmarks:
         meaning: Below default pass threshold
       - range: 0.1-1.0
         meaning: Meets default pass threshold (0.1 or above)
+    metrics: [bleu_max, bleu_acc, bleu_diff, rouge1_max, rouge1_acc, rouge1_diff, rouge2_max, rouge2_acc, rouge2_diff, rougeL_max, rougeL_acc, rougeL_diff]
+    primary_score:
+      metric: bleu_acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
   - id: nortruthfulqa_gen_nob_p4
     url: null
     name: Truthful generation (Norwegian Bokmål, p4)
     description: Tests whether the model generates honest answers in Bokmål, prompt 4.
     category: safety
-    metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
     num_few_shot: 0
     dataset_size: 817
     tags:
@@ -4968,11 +5348,6 @@ benchmarks:
     - lm_eval
     - generation-safe
     - lmevaljob-compatible
-    primary_score:
-      metric: bleu
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.1
     agent:
       result_interpretation: Bleu; higher is better.
       score_ranges:
@@ -4980,6 +5355,12 @@ benchmarks:
         meaning: Below default pass threshold
       - range: 0.1-1.0
         meaning: Meets default pass threshold (0.1 or above)
+    metrics: [bleu_max, bleu_acc, bleu_diff, rouge1_max, rouge1_acc, rouge1_diff, rouge2_max, rouge2_acc, rouge2_diff, rougeL_max, rougeL_acc, rougeL_diff]
+    primary_score:
+      metric: bleu_acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
   - id: nortruthfulqa_mc_nno_p2
     url: null
     name: Truthfulness test (Norwegian Nynorsk, MC)
@@ -4998,12 +5379,12 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
+    agent: null
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: nortruthfulqa_mc_nob_p0
     url: null
     name: Truthfulness test (Norwegian Bokmål, MC, p0)
@@ -5022,12 +5403,12 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
+    agent: null
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: nortruthfulqa_mc_nob_p3
     url: null
     name: Truthfulness test (Norwegian Bokmål, MC, p3)
@@ -5046,22 +5427,17 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
+    agent: null
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: truthfulqa-multi_gen_ca
     url: null
     name: Truthful generation (Catalan)
     description: Tests whether the model generates honest, non-misleading answers in Catalan.
     category: safety
-    metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
     num_few_shot: 0
     dataset_size: 817
     tags:
@@ -5069,11 +5445,6 @@ benchmarks:
     - lm_eval
     - generation-safe
     - lmevaljob-compatible
-    primary_score:
-      metric: bleu
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.1
     agent:
       result_interpretation: Bleu; higher is better.
       score_ranges:
@@ -5081,16 +5452,17 @@ benchmarks:
         meaning: Below default pass threshold
       - range: 0.1-1.0
         meaning: Meets default pass threshold (0.1 or above)
+    metrics: [bleu_max, bleu_acc, bleu_diff]
+    primary_score:
+      metric: bleu_acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
   - id: truthfulqa-multi_gen_eu
     url: null
     name: Truthful generation (Basque)
     description: Tests whether the model generates honest, non-misleading answers in Basque.
     category: safety
-    metrics:
-    - mc1
-    - mc2
-    - bleu
-    - rouge
     num_few_shot: 0
     dataset_size: 817
     tags:
@@ -5098,11 +5470,6 @@ benchmarks:
     - lm_eval
     - generation-safe
     - lmevaljob-compatible
-    primary_score:
-      metric: bleu
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.1
     agent:
       result_interpretation: Bleu; higher is better.
       score_ranges:
@@ -5110,6 +5477,12 @@ benchmarks:
         meaning: Below default pass threshold
       - range: 0.1-1.0
         meaning: Meets default pass threshold (0.1 or above)
+    metrics: [bleu_max, bleu_acc, bleu_diff]
+    primary_score:
+      metric: bleu_acc
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.25
   - id: truthfulqa-multi_mc1_en
     url: null
     name: Truthfulness test (English, single answer)
@@ -5128,12 +5501,12 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
+    agent: null
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: truthfulqa-multi_mc1_gl
     url: null
     name: Truthfulness test (Galician, single answer)
@@ -5152,12 +5525,12 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
+    agent: null
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: truthfulqa-multi_mc2_es
     url: null
     name: Truthfulness test (Spanish, multi-answer)
@@ -5176,12 +5549,12 @@ benchmarks:
     - lm_eval
     - requires-completions
     - lmevaljob-compatible
+    agent: null
     primary_score:
-      metric: acc_norm
+      metric: acc
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-    agent: null
   - id: gsm8k_platinum_cot_llama
     url: null
     name: GSM8k-Platinum (CoT, Llama chat format)

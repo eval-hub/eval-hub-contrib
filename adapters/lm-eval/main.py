@@ -57,6 +57,7 @@ from _execution import (
     build_env,
     build_model_args,
     get_lmeval_version,
+    redact_params,
     run_lmeval,
 )
 from _results import (
@@ -73,8 +74,10 @@ from _tasks import (
     is_rolling,
     lmeval_model_type,
     preflight_check,
+    primary_row,
     resolve_chat_template_mode,
     resolve_tasks,
+    resolve_tokenizer_backend,
     tasks_include_code_execution,
 )
 
@@ -159,7 +162,9 @@ class LMEvalAdapter(FrameworkAdapter):
             preflight_check(config.benchmark_id, api_style)
 
             tokenizer = params.get("tokenizer")
-            tokenizer_backend = str(params.get("tokenizer_backend", "None"))
+            tokenizer_backend = resolve_tokenizer_backend(
+                config.benchmark_id, tokenizer, str(params.get("tokenizer_backend", "None"))
+            )
             if not tokenizer and tokenizer_backend in ("None", "none"):
                 logger.warning(
                     "No tokenizer configured — context length enforcement is approximate. "
@@ -177,7 +182,9 @@ class LMEvalAdapter(FrameworkAdapter):
             env_card = EnvironmentCardMetadata.capture(
                 framework_name="lm-evaluation-harness",
                 framework_version=get_lmeval_version(),
-                extra_packages=["lm_eval"],
+                # The tokenizer path renders chat templates and counts tokens, so
+                # its versions belong in the environment card next to lm_eval's.
+                extra_packages=["lm_eval", "transformers", "tokenizers", "datasets"],
             )
 
             work_dir = Path(tempfile.mkdtemp(prefix="lmeval_"))
@@ -188,7 +195,20 @@ class LMEvalAdapter(FrameworkAdapter):
             api_key = params.get("api_key") or (creds.api_key if creds else "") or ""
 
             endpoint_url = build_endpoint_url(model_url, api_style)
-            apply_chat_template = bool(params.get("apply_chat_template", False))
+            # lm_eval's chat model only accepts structured messages, and it builds
+            # them only under --apply_chat_template, so a chat endpoint needs the
+            # flag. Default it on; the server renders the template, so
+            # tokenized_requests stays False and no local tokenizer is needed.
+            apply_chat_template = bool(
+                params.get("apply_chat_template", api_style == "chat")
+            )
+            if api_style == "chat" and not apply_chat_template:
+                raise ValueError(
+                    "apply_chat_template=false is not supported with a chat endpoint "
+                    "(api_style=chat): lm_eval would send plain strings and "
+                    "local-chat-completions rejects them. Omit apply_chat_template "
+                    "(it defaults to true for chat endpoints) or use api_style=completions."
+                )
             tokenizer_backend, tokenized_requests = resolve_chat_template_mode(
                 api_style, apply_chat_template, tokenizer, tokenizer_backend
             )
@@ -266,8 +286,9 @@ class LMEvalAdapter(FrameworkAdapter):
             raw = self._parse_results(output_dir)
             # A single task's results are the benchmark's own score and are also
             # reported under bare metric names (what primary_score.metric
-            # declares); a multi-task suite has no single primary task.
-            primary_task = tasks if "," not in tasks else None
+            # declares); a multi-task suite has no single primary task, and a
+            # tag (winogender) scores on its "<tag>_all" leaf.
+            primary_task = primary_row(config.benchmark_id, tasks)
             evaluation_results = extract_evaluation_results(
                 raw, primary_task=primary_task
             )
@@ -369,7 +390,9 @@ class LMEvalAdapter(FrameworkAdapter):
                     "num_fewshot_effective": effective_shots,
                     "gen_kwargs": params.get("gen_kwargs"),
                     "tokenizer": tokenizer,
-                    "benchmark_config": params,
+                    # Job parameters can carry api_key and S3 credentials; redact
+                    # them so an artefact export or debug dump cannot leak them.
+                    "benchmark_config": redact_params(params),
                 },
                 oci_artifact=oci_artifact,
                 eval_card=eval_card,

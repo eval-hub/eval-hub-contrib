@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 
 _REDACT_PATTERN = re.compile(r"((?:api_key|auth_token|token|hf_token)=)[^,]*")
 
+#: Job parameter names that hold credentials: api_key, hf_token, auth_token,
+#: aws_secret_access_key, aws_access_key_id, any *password* or *secret*.
+_SECRET_PARAM = re.compile(
+    r"(secret|password|credential|api[_-]?key|access[_-]?key|(^|[_-])token$)",
+    re.IGNORECASE,
+)
+
 
 def get_lmeval_version() -> str:
     """Return the installed lm_eval package version, or 'unknown' on failure."""
@@ -150,9 +157,53 @@ def redact_model_args(model_args: str) -> str:
     return _REDACT_PATTERN.sub(r"\1***", model_args)
 
 
+def redact_params(params: dict) -> dict:
+    """Return a copy of the job parameters with credential values replaced by ``***``.
+
+    Matches on the parameter name, recursively, so a key added later (``hf_token``)
+    is covered without being listed. Empty values are left as they are.
+    """
+    out: dict = {}
+    for key, value in params.items():
+        if isinstance(value, dict):
+            out[key] = redact_params(value)
+        elif value and isinstance(key, str) and _SECRET_PARAM.search(key):
+            out[key] = "***"
+        else:
+            out[key] = value
+    return out
+
+
 def redact_cmd(cmd: list[str]) -> list[str]:
     """Return a copy of cmd with credential values redacted."""
     return [_REDACT_PATTERN.sub(r"\1***", arg) for arg in cmd]
+
+
+#: lm-eval error text -> the adapter parameter that resolves it.
+_FAILURE_HINTS = (
+    (
+        "contains custom code which must be executed",
+        (
+            "the dataset is defined by a loading script; set the job parameter "
+            "trust_remote_code=true to allow it (it executes code from the dataset repository)"
+        ),
+    ),
+    (
+        "Tokenizer is required for loglikelihood",
+        (
+            "set the 'tokenizer' parameter (HuggingFace model ID or path), or "
+            "tokenizer_backend=remote to use the inference server's tokenizer"
+        ),
+    ),
+)
+
+
+def failure_hint(stderr: str) -> str:
+    """Return a one-line pointer to the adapter parameter behind a known lm-eval error."""
+    for needle, hint in _FAILURE_HINTS:
+        if needle in stderr:
+            return f"\nHint: {hint}."
+    return ""
 
 
 def run_lmeval(
@@ -197,5 +248,6 @@ def run_lmeval(
         raise RuntimeError(
             f"lm_eval exited {result.returncode}.\n"
             f"stderr (last 2000 chars):\n{result.stderr[-2000:]}"
+            f"{failure_hint(result.stderr)}"
         )
     return result.stdout, result.stderr

@@ -354,6 +354,8 @@ def test_evalcard_ability_routing(
     with open(Path("meta/job.json")) as f:
         job = json.load(f)
     job["benchmark_id"] = benchmark_id
+    # loglikelihood benchmarks need a tokenizer (lm-eval asserts without one)
+    job["parameters"]["tokenizer"] = "org/model"
     if benchmark_id == "lm-eval/custom":
         job["parameters"]["task"] = "wikitext"
     if benchmark_id in ("lm-eval/open-llm-leaderboard-v2",):
@@ -941,79 +943,331 @@ def test_safe_tasks_do_not_get_the_confirmation_flag(tmp_path, mock_callbacks, m
     assert "--confirm_run_unsafe_code" not in seen["cmd"]
 
 
-# ── Task registry drift against the pinned lm_eval ────────────────────────────
+# ── Generated benchmark table vs the pinned lm_eval ───────────────────────────
+#
+# These tests need the real lm_eval (requirements.txt); the CI "registry" job
+# installs it and sets LMEVAL_REQUIRED=1 so they fail instead of skipping.
+
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+
+from _benchmarks import BENCHMARKS, TASKS  # noqa: E402
+from _tasks import COMPOSITE_SUITES  # noqa: E402
+
+_PROVIDER = yaml.safe_load((_ADAPTER_DIR / "provider.yaml").read_text())
+_MANIFEST = {b["id"]: b for b in _PROVIDER["benchmarks"]}
+_NON_TASK_IDS = {"lm-eval/custom", *COMPOSITE_SUITES}
 
 
-@pytest.fixture(scope="module")
-def lmeval_task_index():
-    """lm_eval 0.4.13's own task index: name -> Entry (kind, cfg, tags)."""
-    pytest.importorskip("lm_eval")
-    from lm_eval.tasks import TaskManager
-
-    return TaskManager().task_index
-
-
-def _leaf_tasks(index, name, seen=None):
-    """Concrete tasks under a task, group or tag."""
-    seen = seen if seen is not None else set()
-    if name in seen or name not in index:
-        return []
-    seen.add(name)
-    entry = index[name]
-    if "TASK" in str(entry.kind):
-        return [name]
-    cfg = entry.cfg or {}
-    subs = cfg.get("task") or []
-    subs = [subs] if isinstance(subs, str) else subs
-    leaves = []
-    for sub in subs:
-        if isinstance(sub, dict):
-            sub = sub.get("task") or sub.get("group")
-        if sub:
-            leaves += _leaf_tasks(index, sub, seen)
-    if not subs:  # a tag: every task that carries it
-        leaves += [
-            n
-            for n, e in index.items()
-            if name in (e.tags or ()) and "TASK" in str(e.kind)
-        ]
-    return leaves
-
-
-def test_code_execution_ids_match_lmeval_unsafe_tasks(lmeval_task_index):
-    """Every benchmark whose lm-eval task sets unsafe_code needs the confirmation."""
-    from _lmevaljob_tasks import (
-        CODE_EXECUTION_IDS,
-        LMEVALJOB_COMPLETIONS_IDS,
-        LMEVALJOB_GENERATION_IDS,
-        LMEVALJOB_ROLLING_IDS,
+@pytest.mark.lmeval
+def test_benchmarks_table_is_current(lmeval):
+    """_benchmarks.py is exactly what scripts/generate_benchmarks.py produces."""
+    out = subprocess.run(
+        [sys.executable, "scripts/generate_benchmarks.py", "--check"],
+        cwd=_ADAPTER_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
     )
-
-    ids = LMEVALJOB_COMPLETIONS_IDS | LMEVALJOB_GENERATION_IDS | LMEVALJOB_ROLLING_IDS
-    unsafe = {
-        bid
-        for bid in ids | CODE_EXECUTION_IDS
-        if any(
-            (lmeval_task_index[leaf].cfg or {}).get("unsafe_code")
-            for leaf in _leaf_tasks(lmeval_task_index, bid)
-        )
-    }
-    assert unsafe, "no unsafe tasks found: index layout changed?"
-    assert unsafe <= CODE_EXECUTION_IDS, sorted(unsafe - CODE_EXECUTION_IDS)
+    assert out.returncode == 0, out.stderr
 
 
-def test_composite_suite_tasks_exist_in_lmeval(lmeval_task_index):
-    """A suite entry must be a registered lm-eval task name, not a benchmark ID."""
-    from _tasks import COMPOSITE_SUITES, GENERATION_TASKS, LOGLIKELIHOOD_TASKS
+@pytest.mark.lmeval
+def test_table_matches_pinned_lmeval_version(lmeval):
+    import _benchmarks
+    from importlib.metadata import version
 
-    names = {t for tasks in COMPOSITE_SUITES.values() for t in tasks}
-    for value in {**GENERATION_TASKS, **LOGLIKELIHOOD_TASKS}.values():
-        names.update(value if isinstance(value, list) else [value])
+    assert _benchmarks.LMEVAL_VERSION == version("lm_eval")
 
-    missing = sorted(n for n in names if n not in lmeval_task_index)
-    assert not missing, f"not registered in lm_eval: {missing}"
+
+def test_provider_and_table_list_the_same_benchmarks():
+    """Every manifest ID is classified, and the table adds nothing the manifest hides."""
+    assert set(_MANIFEST) - _NON_TASK_IDS == set(BENCHMARKS)
+
+
+def test_composite_members_are_classified():
+    for suite, members in COMPOSITE_SUITES.items():
+        assert members and all(m in TASKS for m in members), suite
     assert "hendrycks_math500" in COMPOSITE_SUITES["lm-eval/generation-suite"]
     assert "math_500" not in COMPOSITE_SUITES["lm-eval/generation-suite"]
+
+
+def test_suite_needs_completions_iff_a_member_does():
+    assert requires_completions_endpoint("lm-eval/open-llm-leaderboard-v2")
+    assert not requires_completions_endpoint("lm-eval/generation-suite")
+
+
+def test_unsafe_code_tasks_are_flagged():
+    """The tasks lm-eval refuses without --confirm_run_unsafe_code."""
+    unsafe = {t for t, s in TASKS.items() if s.unsafe_code}
+    assert {"humaneval", "humaneval_instruct", "mbpp", "cruxeval_output"} <= unsafe
+    assert not any(TASKS[t].unsafe_code for t in ("gsm8k", "arc_easy", "ifeval"))
+
+
+@pytest.mark.lmeval
+def test_registered_flag_matches_lmeval_index(lmeval):
+    from lm_eval.tasks import TaskManager
+
+    index = TaskManager().task_index
+    for task, spec in TASKS.items():
+        assert spec.registered == (task in index), task
+
+
+# ── Declared primary scores vs the metrics lm-eval emits ─────────────────────
+
+_SCORED = [i for i in _MANIFEST if i not in _NON_TASK_IDS]
+
+
+@pytest.mark.parametrize("benchmark_id", _SCORED)
+def test_every_benchmark_declares_a_primary_score(benchmark_id):
+    """Without primary_score and pass_criteria the server returns no verdict."""
+    entry = _MANIFEST[benchmark_id]
+    assert entry.get("primary_score", {}).get("metric"), benchmark_id
+    assert "threshold" in entry.get("pass_criteria", {}), benchmark_id
+
+
+@pytest.mark.parametrize("benchmark_id", _SCORED)
+def test_declared_primary_metric_is_emitted(benchmark_id):
+    """primary_score.metric must be a metric lm-eval writes for the benchmark's task.
+
+    The server matches it exactly and drops the whole test section otherwise.
+    Tasks whose metric names come from Python code (humaneval, code2text, ...)
+    cannot be read statically and are skipped here.
+    """
+    spec = TASKS[BENCHMARKS[benchmark_id]]
+    if spec.opaque or not spec.registered:
+        pytest.skip("metric names are not statically known")
+    metric = _MANIFEST[benchmark_id]["primary_score"]["metric"]
+    assert metric in spec.emits, f"{benchmark_id} declares {metric!r}, emits {spec.emits}"
+
+
+@pytest.mark.parametrize("benchmark_id", _SCORED)
+def test_declared_direction_matches_lmeval(benchmark_id):
+    """lower_is_better must agree with the metric's own higher_is_better in lm-eval."""
+    spec = TASKS[BENCHMARKS[benchmark_id]]
+    primary = _MANIFEST[benchmark_id]["primary_score"]
+    if primary["metric"] not in spec.emits:
+        pytest.skip("metric not statically known")
+    declared = bool(primary.get("lower_is_better", False))
+    assert declared == (primary["metric"] in spec.lower), benchmark_id
+
+
+@pytest.mark.parametrize("benchmark_id", _SCORED)
+def test_listed_metrics_are_emitted_results(benchmark_id):
+    """provider.yaml metrics lists no stderr key: the adapter folds it into the CI."""
+    metrics = _MANIFEST[benchmark_id].get("metrics") or []
+    assert not [m for m in metrics if m.endswith("_stderr")], benchmark_id
+
+
+def test_tag_benchmark_scores_on_its_all_leaf():
+    """winogender is a tag with no row of its own; its overall row is winogender_all."""
+    from _tasks import primary_row
+
+    assert primary_row("winogender", "winogender") == "winogender_all"
+    assert primary_row("lm-eval/custom", "gsm8k,ifeval") is None
+    assert primary_row("lm-eval/custom", "gsm8k") == "gsm8k"
+    assert primary_row("arc_easy", "arc_easy") == "arc_easy"
+
+
+# ── Loglikelihood benchmarks need a tokenizer ────────────────────────────────
+
+from _execution import failure_hint  # noqa: E402
+from _tasks import resolve_tokenizer_backend  # noqa: E402
+
+
+def test_loglikelihood_benchmark_without_tokenizer_is_rejected_at_startup():
+    """lm-eval asserts 'Tokenizer is required for loglikelihood tasks' mid-run."""
+    for benchmark_id in ("lm-eval/mmlu", "arc_easy", "toxigen", "wikitext"):
+        with pytest.raises(ValueError, match="needs a tokenizer"):
+            resolve_tokenizer_backend(benchmark_id, None, "None")
+    with pytest.raises(ValueError, match="tokenizer_backend=remote"):
+        resolve_tokenizer_backend("lm-eval/open-llm-leaderboard-v2", None, "none")
+
+
+def test_a_tokenizer_without_a_backend_selects_huggingface():
+    """lm-eval ignores a tokenizer when the backend is None."""
+    assert resolve_tokenizer_backend("arc_easy", "Qwen/Qwen3-8B", "None") == "huggingface"
+    assert resolve_tokenizer_backend("lm-eval/gsm8k", "Qwen/Qwen3-8B", "None") == "huggingface"
+
+
+def test_explicit_backends_and_generation_benchmarks_are_left_alone():
+    assert resolve_tokenizer_backend("arc_easy", None, "remote") == "remote"
+    assert resolve_tokenizer_backend("arc_easy", "gpt2", "tiktoken") == "tiktoken"
+    assert resolve_tokenizer_backend("lm-eval/gsm8k", None, "None") == "None"
+    assert resolve_tokenizer_backend("lm-eval/custom", None, "None") == "None"
+
+
+@pytest.mark.integration
+def test_tokenizer_param_reaches_the_command_with_the_huggingface_backend(
+    tmp_path, mock_callbacks, monkeypatch
+):
+    seen = _unsafe_code_run(
+        tmp_path,
+        mock_callbacks,
+        monkeypatch,
+        benchmark_id="arc_easy",
+        parameters={"tokenizer": "Qwen/Qwen3-8B", "api_style": "completions"},
+    )
+    cmd = seen["cmd"]
+    model_args = cmd[cmd.index("--model_args") + 1]
+    assert "tokenizer_backend=huggingface" in model_args
+    assert "tokenizer=Qwen/Qwen3-8B" in model_args
+
+
+@pytest.mark.integration
+def test_job_without_a_tokenizer_fails_before_lmeval_starts(tmp_path, mock_callbacks, monkeypatch):
+    with pytest.raises(ValueError, match="needs a tokenizer"):
+        _unsafe_code_run(
+            tmp_path,
+            mock_callbacks,
+            monkeypatch,
+            benchmark_id="arc_easy",
+            parameters={"api_style": "completions"},
+        )
+
+
+def test_failure_hints_name_the_adapter_parameter():
+    assert "trust_remote_code=true" in failure_hint(
+        "ValueError: The repository for X contains custom code which must be executed"
+    )
+    assert "'tokenizer' parameter" in failure_hint(
+        "AssertionError: Tokenizer is required for loglikelihood tasks"
+    )
+    assert failure_hint("some other failure") == ""
+
+
+# ── Credentials never reach evaluation_metadata ──────────────────────────────
+
+from _execution import redact_params  # noqa: E402
+
+
+def test_redact_params_masks_credentials_by_name():
+    params = {
+        "api_key": "sk-live",
+        "aws_secret_access_key": "s3cret",
+        "aws_access_key_id": "AKIA123",
+        "hf_token": "hf_x",
+        "auth_token": "t",
+        "nested": {"password": "p", "keep": 1},
+        "tokenizer": "org/model",
+        "max_gen_tokens": 512,
+        "num_concurrent": 4,
+        "empty_key": "",
+    }
+    out = redact_params(params)
+    for key in ("api_key", "aws_secret_access_key", "aws_access_key_id", "hf_token", "auth_token"):
+        assert out[key] == "***", key
+    assert out["nested"] == {"password": "***", "keep": 1}
+    assert out["tokenizer"] == "org/model"
+    assert out["max_gen_tokens"] == 512
+    assert out["num_concurrent"] == 4
+    assert params["api_key"] == "sk-live", "input must not be mutated"
+
+
+def _stub_lmeval(adapter, monkeypatch):
+    monkeypatch.setattr(adapter, "_run_lmeval", lambda cmd, env, timeout: None)
+    monkeypatch.setattr(adapter, "_parse_results", lambda output_dir: CANNED_RESULTS)
+
+
+@pytest.mark.integration
+def test_evaluation_metadata_does_not_carry_credentials(adapter, mock_callbacks, monkeypatch, tmp_path):
+    """benchmark_config in the results is the redacted parameter map."""
+    adapter.job_spec.parameters.update(
+        {"api_key": "sk-live", "aws_secret_access_key": "s3cret", "dataset_source": "hub"}
+    )
+    _stub_lmeval(adapter, monkeypatch)
+    results = adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+    cfg = results.evaluation_metadata["benchmark_config"]
+    assert cfg["api_key"] == "***"
+    assert cfg["aws_secret_access_key"] == "***"
+    assert "sk-live" not in json.dumps(results.evaluation_metadata)
+    assert "s3cret" not in json.dumps(results.evaluation_metadata)
+
+
+# ── Chat endpoints build structured messages ─────────────────────────────────
+
+
+@pytest.mark.integration
+def test_chat_endpoint_defaults_to_apply_chat_template(tmp_path, mock_callbacks, monkeypatch):
+    """local-chat-completions rejects plain strings; the harness builds messages
+    only under --apply_chat_template, so a chat endpoint gets it by default."""
+    seen = _unsafe_code_run(
+        tmp_path,
+        mock_callbacks,
+        monkeypatch,
+        benchmark_id="lm-eval/gsm8k",
+        parameters={"api_style": "chat"},
+    )
+    cmd = seen["cmd"]
+    assert "--apply_chat_template" in cmd
+    assert cmd[cmd.index("--model") + 1] == "local-chat-completions"
+    model_args = cmd[cmd.index("--model_args") + 1]
+    assert "tokenized_requests=False" in model_args
+
+
+@pytest.mark.integration
+def test_auto_detected_chat_endpoint_defaults_to_apply_chat_template(
+    tmp_path, mock_callbacks, monkeypatch
+):
+    """openrouter.ai, groq.com and together.ai resolve to chat without api_style."""
+    seen = _unsafe_code_run(
+        tmp_path,
+        mock_callbacks,
+        monkeypatch,
+        benchmark_id="lm-eval/gsm8k",
+        model={"url": "https://openrouter.ai/api", "name": "m"},
+    )
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("--model") + 1] == "local-chat-completions"
+    assert "--apply_chat_template" in cmd
+
+
+@pytest.mark.integration
+def test_completions_endpoint_keeps_apply_chat_template_off(tmp_path, mock_callbacks, monkeypatch):
+    seen = _unsafe_code_run(
+        tmp_path, mock_callbacks, monkeypatch, parameters={"api_style": "completions"}
+    )
+    assert "--apply_chat_template" not in seen["cmd"]
+
+
+@pytest.mark.integration
+def test_chat_endpoint_rejects_explicit_apply_chat_template_false(
+    tmp_path, mock_callbacks, monkeypatch
+):
+    with pytest.raises(ValueError, match="apply_chat_template=false is not supported"):
+        _unsafe_code_run(
+            tmp_path,
+            mock_callbacks,
+            monkeypatch,
+            benchmark_id="lm-eval/gsm8k",
+            parameters={"api_style": "chat", "apply_chat_template": False},
+        )
+
+
+@pytest.mark.lmeval
+def test_pinned_lmeval_chat_model_needs_structured_messages(lmeval):
+    """The pinned local-chat-completions accepts messages and asserts on strings,
+    which is why the adapter turns --apply_chat_template on for chat endpoints."""
+    from lm_eval.models.openai_completions import LocalChatCompletion
+    from lm_eval.utils import simple_parse_args_string
+
+    args = build_model_args(
+        base_url="http://127.0.0.1:1/v1/chat/completions",
+        model_name="m",
+        num_concurrent=1,
+        max_retries=1,
+        timeout_http=5,
+        max_length=128,
+        max_gen_toks=8,
+        tokenizer=None,
+        tokenizer_backend="None",
+        tokenized_requests=False,
+    )
+    model = LocalChatCompletion(**simple_parse_args_string(args))
+    payload = model._create_payload([{"role": "user", "content": "hi"}], generate=True)
+    assert payload["messages"] == [{"role": "user", "content": "hi"}]
+    with pytest.raises(AssertionError, match="expects messages as list"):
+        model._create_payload("plain string", generate=True)
 
 
 # ── Chat templating on a completions endpoint ─────────────────────────────────
@@ -1103,13 +1357,13 @@ def _offline_chat_tokenizer(path: Path) -> str:
     return str(path)
 
 
-def test_pinned_lmeval_renders_the_template_only_with_tokenized_requests(tmp_path):
+@pytest.mark.lmeval
+def test_pinned_lmeval_renders_the_template_only_with_tokenized_requests(tmp_path, lmeval):
     """lm_eval 0.4.13 on local-completions: JSON string vs a rendered template.
 
     Documents why the adapter must send tokenized_requests=True here, and checks
     the model args it builds select the rendering path.
     """
-    pytest.importorskip("lm_eval")
     pytest.importorskip("transformers")
     from lm_eval.models.openai_completions import LocalCompletionsAPI
     from lm_eval.utils import simple_parse_args_string

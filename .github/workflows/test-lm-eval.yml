@@ -22,15 +22,15 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.12'
 
@@ -42,11 +42,47 @@ jobs:
 
       - name: Run unit tests
         working-directory: adapters/lm-eval
-        run: pytest tests/ -v -m "not integration and not local"
+        run: pytest tests/ -v -m "not integration and not local and not lmeval"
 
       - name: Run integration tests
         working-directory: adapters/lm-eval
-        run: pytest tests/ -v -m integration
+        run: pytest tests/ -v -m "integration and not lmeval"
+
+  # ── Registry and manifest checks against the real, pinned lm_eval ───────────
+  # The generated benchmark table (_benchmarks.py), the composite suites and the
+  # chat-template tests all read lm_eval's own task configs and tokenizer path, so
+  # they need the full requirements.txt. LMEVAL_REQUIRED turns a missing install
+  # into a failure instead of a skip, so this check cannot go green by skipping.
+  registry:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      LMEVAL_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install adapter and test dependencies
+        working-directory: adapters/lm-eval
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+
+      - name: Benchmark table is current
+        working-directory: adapters/lm-eval
+        run: python scripts/generate_benchmarks.py --check
+
+      - name: Run registry, manifest and chat-template tests
+        working-directory: adapters/lm-eval
+        run: pytest tests/ -v -m lmeval
 
   # ── Live endpoint tests (Ollama, vLLM) ────────────────────────────────────────
   # Placeholder: these jobs require a tests/test_local_openai.py file with

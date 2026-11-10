@@ -1,3 +1,5 @@
+import importlib
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -24,6 +26,22 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "openai_endpoint: tests requiring a local OpenAI-compatible endpoint"
     )
+    config.addinivalue_line(
+        "markers", "lmeval: tests that need the real lm_eval installed (requirements.txt)"
+    )
+
+
+@pytest.fixture(scope="session")
+def lmeval():
+    """The real lm_eval module.
+
+    Skips when it is not installed, unless LMEVAL_REQUIRED is set (the CI
+    registry job), where a missing install must fail rather than hide the
+    registry and task-name assertions behind a green skip.
+    """
+    if os.environ.get("LMEVAL_REQUIRED"):
+        return importlib.import_module("lm_eval")
+    return pytest.importorskip("lm_eval")
 
 
 @pytest.fixture
