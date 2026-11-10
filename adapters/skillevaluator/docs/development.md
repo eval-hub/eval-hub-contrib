@@ -39,7 +39,8 @@ CI also enforces lint (`ruff==0.16.9`) and docstring coverage of at least 80% (`
 
 1. Change the commit in `requirements-skillevaluator.txt` / `requirements-skillspector.txt` (and the SkillSpector
    version SkillEvaluator documents).
-2. Run `make test-skillevaluator-live`. A schema change fails here first.
+2. Run `make test-skillevaluator-live`. A schema change fails here first, and so does a command that starts
+   downloading Gitleaks or SkillSpector (the job pod has no egress).
 3. If the report shape changed, regenerate `tests/fixtures/reports/*.json` from real output (redact `message`,
    `line_content`, `suggestion` and `[CATEGORY-SEVERITY]` lines; normalise paths) and update `_results.py`.
 4. Re-run the container checks in `.github/workflows/test-skillevaluator.yml`.

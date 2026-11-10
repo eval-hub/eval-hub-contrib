@@ -14,6 +14,11 @@ Skills are untrusted input.
   `exports.oci` is set.
 - No network access is needed: `security-scan` runs with `--no-llm`, and Semgrep (not used by these benchmarks) is
   configured upstream with metrics off. Deny egress to the job pod.
+- No scanner is downloaded at run time. SkillEvaluator's `validate` command fetches a pinned Gitleaks (8.30.0 in
+  v0.8.0) for its code-integrity secrets scan, and fetches SkillSpector when none is configured. These benchmarks run
+  `quality-check`, `security-scan` and `pii-scan` only, with SkillSpector installed in the image, so nothing is
+  fetched and a pod without egress produces no `incomplete` result. `pii-scan` covers credentials in skill text; it is
+  not a Gitleaks run. `test_real_cli_downloads_no_scanner_for_any_benchmark` fails if an upgrade changes this.
 - The image runs read-only as a non-root user, including with an arbitrary UID.
 - Credentials for private skill sources are referenced through `secret_ref`, never placed in the job request.
 
