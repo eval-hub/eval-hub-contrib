@@ -104,3 +104,25 @@ def test_real_cli_runs_against_a_read_only_skill(
     finally:
         skill.chmod(0o755)
         (skill / "SKILL.md").chmod(0o644)
+
+
+def test_real_cli_downloads_no_scanner_for_any_benchmark(
+    adapter_for, mock_callbacks, monkeypatch, tmp_path
+):
+    """No benchmark provisions Gitleaks or SkillSpector into the runtime directory.
+
+    SkillEvaluator fetches a pinned Gitleaks for ``validate`` (the code-integrity
+    secrets scan) and its own SkillSpector wheel when none is configured. The job
+    pod has no egress, so a bump that makes one of these commands need a download
+    would turn every scan ``incomplete`` there. HOME is forwarded to the CLI, so a
+    download lands under the temporary home.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    _stage(monkeypatch, tmp_path, bad=True)
+    for benchmark in ("skill-quality", "skill-security", "skill-pii"):
+        results = _run(adapter_for, mock_callbacks, benchmark, on_incomplete="report")
+        assert results.evaluation_metadata["outcome"] != "incomplete", benchmark
+    assert not (home / ".local" / "share" / "skillevaluator").exists()
+    assert not any(p.is_file() for p in home.rglob("*gitleaks*"))
