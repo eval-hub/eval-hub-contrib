@@ -1177,15 +1177,12 @@ def test_anthropic_allowed_for_generation_only_tasks(adapter, tasks):
     adapter._validate_provider_supports_tasks("anthropic", tasks)
 
 
-@pytest.mark.integration
-@pytest.mark.parametrize("provider", ["endpoint", "openai", "litellm", "anthropic"])
-def test_api_providers_rejected_for_loglikelihood_tasks(adapter, provider):
-    with pytest.raises(ValueError, match=provider):
-        adapter._validate_provider_supports_tasks(provider, ["arc:easy"])
-
-
-@pytest.mark.parametrize("provider", ["transformers", "vllm"])
-def test_local_providers_support_loglikelihood_tasks(adapter, provider):
+@pytest.mark.parametrize(
+    "provider", ["endpoint", "openai", "litellm", "transformers", "vllm"]
+)
+def test_non_anthropic_providers_are_not_blocked_for_loglikelihood_tasks(
+    adapter, provider
+):
     adapter._validate_provider_supports_tasks(provider, ["arc:easy"])
 
 
@@ -1219,6 +1216,25 @@ def test_run_benchmark_job_anthropic_loglikelihood_task_fails_before_lighteval(
     )
     with pytest.raises(ValueError, match="arc:easy"):
         adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+
+
+@pytest.mark.integration
+def test_run_benchmark_job_endpoint_arc_reaches_lighteval(
+    adapter, mock_callbacks, monkeypatch, mock_hf_api
+):
+    """The merged echo+logprobs endpoint path must reach LightEval for ARC:Easy."""
+    adapter.job_spec.benchmark_id = "arc:easy"
+    adapter.job_spec.parameters["provider"] = "endpoint"
+    reached = {}
+
+    def fake_run_lighteval(**kwargs):
+        reached["tasks"] = kwargs["tasks"]
+        raise RuntimeError("stop after provider validation")
+
+    monkeypatch.setattr(adapter, "_run_lighteval", fake_run_lighteval)
+    with pytest.raises(RuntimeError, match="stop after provider validation"):
+        adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+    assert reached["tasks"] == ["arc:easy"]
 
 
 # ── C4: Top-level generation_parameters forwarding ────────────────────────────

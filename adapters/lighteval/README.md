@@ -86,19 +86,36 @@ The adapter supports all LightEval tasks, organised by category:
 - **endpoint**: Custom OpenAI-compatible endpoints
 - **litellm**: LiteLLM proxy
 
-## Task compatibility
+## API log-likelihood compatibility
 
-API providers (`endpoint`, `openai`, `litellm`, and `anthropic`) support
-generation-only tasks. They are rejected before evaluation for benchmarks that
-score predefined candidate continuations with loglikelihood, including ARC,
-WinoGrande, GLUE multiple-choice tasks, and TruthfulQA multiple choice.
-The error names the unsupported tasks so a failed job cannot produce a misleading
-accuracy. Use the `transformers` or `vllm` provider for these benchmarks.
+For OpenAI-compatible API providers (`endpoint`, `openai`, and `litellm`),
+log-likelihood tasks such as ARC, WinoGrande, GLUE multiple-choice tasks, and
+TruthfulQA multiple choice are scored through `/v1/completions` with
+`echo=true` and `logprobs=1`. The server must support these parameters. A
+request that cannot be scored fails the job instead of producing an accuracy.
+Anthropic does not implement this API and is rejected for these tasks; its
+generation-only tasks remain available.
 
-Generation tasks such as GSM8K, MATH-500, AIME, TriviaQA, TruthfulQA generation,
-and LiveCodeBench run against OpenAI-compatible endpoints normally.
+The scoring path uses LightEval's plain-text prompt and separately tokenizes
+the question and each answer choice. When supported, the adapter requests the
+server's token IDs so it can preserve LightEval's question/choice token
+boundary. For other compatible servers, set
+`EVALHUB_LIGHTEVAL_LOGLIKELIHOOD_TOKENIZATION=joint` to score the joined text
+using `echo`; scores can differ from the Transformers backend when tokenization
+merges across that boundary. The path does not support PMI-normalized metrics
+(`Doc.unconditioned_query`).
 
-API providers (`endpoint`, `openai`, `litellm`, and `anthropic`) are rejected for the log-likelihood benchmarks above, with an error that names the unsupported tasks. HellaSwag and MMLU use LightEval's generation-based task definitions in this adapter and therefore run normally, but their scores are not loglikelihood-comparable. Other generation benchmarks run normally.
+HellaSwag and MMLU use generation-based task definitions in the pinned
+LightEval 0.13.0 registry: they set `generation_size` and use exact-match
+metrics. They run through API providers as generated-answer tasks, so their
+scores are not log-likelihood scores. Other generation tasks such as GSM8K,
+MATH-500, AIME, TriviaQA, TruthfulQA generation, and LiveCodeBench also run
+against compatible API endpoints.
+
+If an API-backed model's server does not support `echo` and `logprobs`, use
+`lm-evaluation-harness` for log-likelihood benchmarks. `transformers` and `vllm`
+load model weights locally; they are alternatives when local model execution is
+intended.
 
 **Majority-vote benchmarks** (`math:algebra`, `math:counting_and_probability`, which score `maj@4`) need several samples per question, which lighteval refuses at `temperature=0`. When you do not set `generation_parameters.temperature`, the adapter uses `0.7` for the run and logs it. A temperature you set, including `0`, is never overridden. The `math` suite contains these tasks, so the whole suite then runs at that temperature unless you set one.
 
