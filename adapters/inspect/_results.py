@@ -7,10 +7,18 @@ from pathlib import Path
 from typing import Any
 
 from evalhub.adapter import CapabilityEvalEntry, EvaluationResult
+from evalhub.models.api import PrimaryScore
 
-from _benchmarks import DIMENSION_ABILITY_MAP, PETRI_PRIMARY_METRIC
+from _benchmarks import DIMENSION_ABILITY_MAP, FIXED_PRIMARY_METRICS, fixed_primary_for
 
 logger = logging.getLogger(__name__)
+
+# Inspect Evals' DocVQA scorer reports the ANLS aggregate under the generic
+# ``docvqa_scorer/accuracy`` key. Publish the benchmark's canonical metric name
+# so collection configs can select it without changing the computed value.
+BENCHMARK_METRIC_NAME_MAP: dict[tuple[str, str], str] = {
+    ("inspect/docvqa", "docvqa_scorer/accuracy"): "anls",
+}
 
 
 def parse_log(log_file: Path) -> dict[str, Any]:
@@ -42,6 +50,8 @@ def extract_results(
     eval_log: dict[str, Any],
     benchmark_id: str,
     mode: str,
+    *,
+    non_finite_metrics: set[str] | None = None,
 ) -> tuple[list[EvaluationResult], list[CapabilityEvalEntry], int]:
     results_section = eval_log.get("results") or {}
     scores_list: list[dict[str, Any]] = results_section.get("scores", [])
@@ -69,23 +79,48 @@ def extract_results(
                 continue
 
             full_name = f"{dim_name}/{metric_name}"
+            reported_name = BENCHMARK_METRIC_NAME_MAP.get(
+                (benchmark_id, full_name), full_name
+            )
+            numeric_value = float(value)
+            if not math.isfinite(numeric_value):
+                if non_finite_metrics is not None:
+                    non_finite_metrics.add(reported_name)
+                logger.warning(
+                    "Skipping non-finite metric value | benchmark_id=%s | metric=%s | value=%s",
+                    benchmark_id,
+                    metric_name,
+                    value,
+                )
+                continue
+
+            metric_name = reported_name
             ability = DIMENSION_ABILITY_MAP.get(
                 dim_name,
                 "alignment_risk" if mode in ("petri", "bloom") else "reasoning",
             )
 
+            metadata = {
+                "framework": "inspect-ai",
+                "mode": mode,
+                "scorer": scorer,
+                "dimension": dim_name,
+            }
+            if metric_name != full_name:
+                metadata["native_metric_name"] = full_name
+
             evaluation_results.append(EvaluationResult(
-                metric_name=full_name,
-                metric_value=float(value),
+                metric_name=metric_name,
+                metric_value=numeric_value,
                 metric_type="float",
                 num_samples=num_samples,
-                metadata={"framework": "inspect-ai", "mode": mode, "scorer": scorer, "dimension": dim_name},
+                metadata=metadata,
             ))
             capability_entries.append(CapabilityEvalEntry(
                 ability=ability,
                 benchmark=benchmark_id,
-                metric=full_name,
-                zero_shot=float(value),
+                metric=metric_name,
+                zero_shot=numeric_value,
             ))
 
     return evaluation_results, capability_entries, num_samples
@@ -102,15 +137,112 @@ def _is_dispersion_metric(metric_name: str) -> bool:
     return name in _DISPERSION_METRICS or name.endswith(("_stderr", "_sterr"))
 
 
+def _score_metric_names(results: list[EvaluationResult]) -> list[str]:
+    """Non-dispersion metric names with finite numeric values."""
+    names: list[str] = []
+    for r in results:
+        if _is_dispersion_metric(r.metric_name):
+            continue
+        if not isinstance(r.metric_value, (int, float)) or isinstance(r.metric_value, bool):
+            continue
+        if not math.isfinite(float(r.metric_value)):
+            continue
+        names.append(r.metric_name)
+    return names
+
+
+def resolve_primary_score(
+    results: list[EvaluationResult],
+    *,
+    mode: str,
+    benchmark_id: str | None = None,
+    job_primary: PrimaryScore | None = None,
+    non_finite_metrics: set[str] | None = None,
+) -> PrimaryScore | None:
+    """Pick the primary metric key to report on the completed status event.
+
+    Preference:
+    1. Job/catalog ``primary_score.metric`` when it exactly matches an emitted score
+    2. Known fixed benchmarks (HLE, BFCL, Petri/Bloom)
+    3. Unique ``*/accuracy`` (or bare ``accuracy``) among non-dispersion scores
+    4. Unique non-dispersion score metric
+
+    EvalHub builds ``results.benchmarks[].test`` from this event field when the
+    catalog primary key is absent from metrics (e.g. inspect/custom).
+    """
+    score_names = _score_metric_names(results)
+    if not score_names:
+        return None
+
+    fixed = fixed_primary_for(benchmark_id, mode)
+    if fixed is not None and non_finite_metrics and fixed.metric in non_finite_metrics:
+        logger.warning(
+            "Fixed primary_score metric %s is non-finite | benchmark_id=%s",
+            fixed.metric,
+            benchmark_id,
+        )
+        return None
+
+    if job_primary is not None and job_primary.metric and job_primary.metric in score_names:
+        return PrimaryScore(
+            metric=job_primary.metric,
+            lower_is_better=bool(job_primary.lower_is_better),
+        )
+
+    if fixed is not None and fixed.metric in score_names:
+        return PrimaryScore(
+            metric=fixed.metric,
+            lower_is_better=fixed.lower_is_better,
+        )
+    # HLE/BFCL catalog primaries must not fall back to a secondary score when
+    # accuracy is missing (same policy as compute_overall_score).
+    if benchmark_id is not None and benchmark_id in FIXED_PRIMARY_METRICS:
+        logger.warning(
+            "Fixed primary_score metric %s is missing | benchmark_id=%s | candidates=%s",
+            FIXED_PRIMARY_METRICS[benchmark_id].metric,
+            benchmark_id,
+            score_names,
+        )
+        return None
+
+    accuracy_like = [
+        n for n in score_names
+        if n == "accuracy" or n.endswith("/accuracy")
+    ]
+    # Preserve order, unique
+    seen: set[str] = set()
+    accuracy_unique: list[str] = []
+    for n in accuracy_like:
+        if n not in seen:
+            seen.add(n)
+            accuracy_unique.append(n)
+    if len(accuracy_unique) == 1:
+        return PrimaryScore(metric=accuracy_unique[0])
+
+    unique_scores = list(dict.fromkeys(score_names))
+    if len(unique_scores) == 1:
+        return PrimaryScore(metric=unique_scores[0])
+
+    logger.warning(
+        "Could not resolve a unique primary_score metric | benchmark_id=%s | candidates=%s",
+        benchmark_id,
+        unique_scores,
+    )
+    return None
+
+
 def compute_overall_score(
-    results: list[EvaluationResult], mode: str, benchmark_id: str | None = None
+    results: list[EvaluationResult],
+    mode: str,
+    benchmark_id: str | None = None,
+    non_finite_metrics: set[str] | None = None,
 ) -> float | None:
     """Representative score for logging and ``JobResults.overall_score``.
 
     HLE and BFCL report their accuracy metric. Petri/Bloom report
     ``concerning/mean``. For other benchmarks this remains the mean of
     the score metrics, excluding dispersion metrics such as stderr. EvalHub selects the
-    primary metric for pass/fail from the full results list via ``primary_score.metric``.
+    primary metric for pass/fail from the event/job ``primary_score.metric``.
     """
     if not results:
         return None
@@ -122,18 +254,25 @@ def compute_overall_score(
             return None
         return round(float(matches[0].metric_value), 4)
 
-    if benchmark_id == "inspect/hle":
-        return selected_score("hle/regex_judge/hle/accuracy")
-    if benchmark_id == "inspect/bfcl":
-        return selected_score("bfcl_scorer/accuracy")
-
-    if mode in ("petri", "bloom"):
-        primary = next(
-            (r for r in results if r.metric_name == f"{PETRI_PRIMARY_METRIC}/mean"),
-            None,
-        )
-        if primary is not None:
-            return round(float(primary.metric_value), 4)
+    fixed = fixed_primary_for(benchmark_id, mode)
+    if fixed is not None:
+        if non_finite_metrics and fixed.metric in non_finite_metrics:
+            logger.warning(
+                "Fixed primary metric %s is non-finite | benchmark_id=%s",
+                fixed.metric,
+                benchmark_id,
+            )
+            return None
+        if mode in ("petri", "bloom"):
+            primary = next(
+                (r for r in results if r.metric_name == fixed.metric),
+                None,
+            )
+            if primary is not None:
+                primary_value = float(primary.metric_value)
+                return round(primary_value, 4) if math.isfinite(primary_value) else None
+        else:
+            return selected_score(fixed.metric)
 
     values = [
         float(r.metric_value)

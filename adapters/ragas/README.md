@@ -38,40 +38,82 @@ Key `parameters` parameters:
 
 - `metrics`: List of metric names to evaluate
 - `embedding_model`: Model name for embeddings (defaults to LLM model)
-- `embedding_url`: Separate endpoint for embeddings
+- `embedding_url`: Standalone endpoint override; Kubernetes uses the `embedding_url` Secret entry
 - `judge_model`: Optional model used for LLM-based RAGAS metrics (defaults to the evaluated model)
-- `judge_url`: Optional OpenAI-compatible judge endpoint (defaults to the evaluated model URL)
-- `judge_api_key`: Optional judge API key; prefer `OPENAI_API_KEY` from a Secret or runtime environment
+- `judge_url`: Standalone endpoint override; Kubernetes uses the `judge_url` Secret entry
+- `judge_api_key`: Standalone key override or explicit sidecar reference; Kubernetes normally reads `judge_api-key` from the projected Secret
 - `max_tokens`: Max tokens for LLM completions
 - `temperature`: Sampling temperature
 - `column_map`: Map dataset columns to RAGAS names
 - `data_path`: Explicit path to dataset file
 
-### Using a separate judge model
+### Kubernetes judge and embedding connections
 
-RAGAS metrics such as `answer_relevancy` and `answer_correctness` request
-structured JSON from the judge LLM. Small local models can return the schema
-description instead of valid values, which causes `AnswerRelevanceOutput`
-validation errors. Configure a stronger model as the judge while keeping the
-evaluated model local:
+Both RAG suites include metrics that call `/v1/embeddings`. A chat-only model
+needs a separate embedding service. LLM-based metrics also need a judge that
+supports structured JSON; set `judge_model` when that should differ from the
+evaluated model.
+
+Put connection URLs and credentials in the Secret referenced by
+`model.auth.secret_ref`:
 
 ```yaml
-parameters:
-  judge_model: gpt-4o-mini
-  judge_url: https://api.openai.com/v1
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ragas-model-connections
+type: Opaque
+stringData:
+  api-key: "<target-api-key>"
+  judge_api-key: "<judge-api-key>"
+  judge_url: https://judge.example/v1
+  embedding_api-key: "<embedding-api-key>"
+  embedding_url: http://granite-embedding:8080/v1
 ```
 
-The adapter resolves the judge API key in this order:
+Use the actual URLs and credentials from your deployment. An unauthenticated
+embedding service can use a nonempty dummy `embedding_api-key` if it ignores
+the Authorization header. Each role-specific URL requires its matching
+`<role>_api-key` entry, even when the role and target share the same credential.
 
-1. `judge_api_key` (use only through a secure runtime/secret mechanism)
-2. `OPENAI_API_KEY`
-3. the EvalHub model credential mounted for the job
+Select model names in the job's benchmark parameters:
 
-For a direct OpenAI endpoint, provide an API key and allow outbound network
-access from the adapter. Do not place a real key in a committed benchmark,
-JobSpec, or provider configuration. `gpt-4o-mini` is a suitable default judge
-because it supports structured outputs; use a compatible model for other
-OpenAI-compatible endpoints.
+```yaml
+model:
+  name: evaluated-chat-model
+  url: https://target.example/v1
+  auth:
+    secret_ref: ragas-model-connections
+benchmarks:
+  - id: ragas_rag_default
+    provider_id: ragas
+    parameters:
+      judge_model: deployed-judge-model
+      embedding_model: granite-embedding
+```
+
+Supply the dataset as usual. EvalHub projects the Secret's URLs as localhost
+sidecar URLs and its keys as reference tokens. The adapter reads those projected
+entries automatically and sends `judge_api-key:ref` for judge requests and
+`embedding_api-key:ref` for embedding requests. The sidecar selects the real
+upstream and injects the real credential. Equal localhost URLs still represent
+independent connections because the reference token controls routing.
+
+With no role-specific Secret entries, that role reuses the primary model
+connection (`api-key:ref`). A role-specific key without a URL selects a separate
+credential on the primary endpoint. Projected URL paths are preserved.
+
+In Kubernetes, parameter URL overrides must use the sidecar origin and key
+overrides must be reference tokens. Put real upstream URLs and keys in the
+Secret. `OPENAI_API_KEY` does not replace a projected role credential.
+
+### Standalone endpoint overrides
+
+Standalone/local runs retain `judge_url`, `judge_api_key`, and `embedding_url`
+parameter overrides. A different endpoint uses its explicit key or the process's
+`OPENAI_API_KEY`, falling back to a dummy key for unauthenticated endpoints.
+It does not borrow the evaluated model's credential. Local model-auth directories
+can also contain the role-specific URL/key files described above.
 
 ## Local Development
 

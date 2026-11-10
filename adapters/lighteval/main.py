@@ -11,6 +11,7 @@ The adapter:
 5. Returns structured JobResults
 """
 
+import functools
 import json
 import logging
 import os
@@ -37,10 +38,42 @@ from evalhub.adapter import (
     read_model_auth_key,
     resolve_model_credentials,
 )
+from evalhub.adapter.mlflow import MlflowFileArtifact
 from evalhub.models import MetricSchema, ResultType
-from evalhub.adapter.mlflow import MlflowArtifact
+
+from _hf_offline import (
+    TEST_DATA_DIR,
+    build_hf_offline_environment,
+    ensure_lighteval_registry_assets,
+    ensure_nltk_offline_resources,
+)
 
 logger = logging.getLogger(__name__)
+
+CUSTOM_TASK_ALIASES = {
+    "piqa": "evalhub_piqa",
+    "truthfulqa:mc": "evalhub_truthfulqa_mc",
+    "truthfulqa:gen": "evalhub_truthfulqa_gen",
+}
+CUSTOM_TASK_RESULT_NAMES = {
+    custom_name: task_name for task_name, custom_name in CUSTOM_TASK_ALIASES.items()
+}
+
+#: Temperature used when a task samples several answers per question (maj@n)
+#: and the caller did not choose one.  lighteval's LiteLLM backend refuses
+#: ``num_samples > 1`` at its default ``temperature=0``.
+DEFAULT_SAMPLING_TEMPERATURE = 0.7
+
+
+@functools.lru_cache(maxsize=1)
+def _task_configs() -> dict[str, Any]:
+    """lighteval's task registry plus this adapter's custom tasks, loaded once."""
+    from lighteval.tasks.registry import Registry
+
+    return Registry.load_all_task_configs(
+        custom_tasks=str(Path(__file__).with_name("custom_tasks.py")),
+        load_multilingual=False,
+    )
 
 
 class LightEvalAdapter(FrameworkAdapter):
@@ -57,10 +90,11 @@ class LightEvalAdapter(FrameworkAdapter):
         "scientific_reasoning": ["arc:easy", "arc:challenge"],
         "physical_commonsense": ["piqa"],
         "truthfulness": ["truthfulqa:mc", "truthfulqa:gen"],
-        "math": ["gsm8k", "math:algebra", "math:counting_and_probability"],
-        "knowledge": ["mmlu", "triviaqa"],
+        "math": ["gsm8k", "math:algebra", "math:counting_and_probability", "math_500"],
+        "knowledge": ["mmlu", "triviaqa", "openbookqa"],
         "language_understanding": ["glue:cola", "glue:sst2", "glue:mrpc"],
     }
+    CUSTOM_TASK_ALIASES = CUSTOM_TASK_ALIASES
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         """Execute a LightEval benchmark evaluation job.
@@ -87,8 +121,29 @@ class LightEvalAdapter(FrameworkAdapter):
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
             )
 
+            subprocess_env = build_hf_offline_environment(
+                TEST_DATA_DIR,
+            )
+            if subprocess_env is not None:
+                # LightEval's task registry is also loaded in this process and
+                # imports IFEval, which attempts NLTK downloads if these
+                # resources are missing. Set the staged path and validate it
+                # before any registry import, in both this process and the CLI.
+                os.environ.update(subprocess_env)
+                ensure_nltk_offline_resources(TEST_DATA_DIR)
+                ensure_lighteval_registry_assets(TEST_DATA_DIR)
+                logger.info(
+                    "Using staged Hugging Face assets from %s; Hub downloads are disabled "
+                    "and the writable datasets cache is %s",
+                    TEST_DATA_DIR,
+                    subprocess_env["HF_DATASETS_CACHE"],
+                )
+
             self._validate_config(config)
             tasks = self._parse_benchmark_tasks(config.benchmark_id, config.parameters)
+            self._validate_provider_supports_tasks(
+                config.parameters.get("provider", "endpoint"), tasks
+            )
             output_dir = Path(tempfile.mkdtemp(prefix="lighteval_"))
             logger.info(f"Configuration validated. Tasks: {tasks}, Output dir: {output_dir}")
 
@@ -107,9 +162,10 @@ class LightEvalAdapter(FrameworkAdapter):
                 tasks=tasks,
                 output_dir=output_dir,
                 num_fewshot=config.parameters.get("num_few_shot", 0),
-                limit=config.num_examples,
+                limit=config.num_examples or config.parameters.get("max_samples"),
                 batch_size=config.parameters.get("batch_size", 1),
                 benchmark_config=config.parameters,
+                subprocess_env=subprocess_env,
             )
 
             # Phase 4: Post-processing
@@ -137,15 +193,6 @@ class LightEvalAdapter(FrameworkAdapter):
                 evaluation_results=evaluation_results,
                 additional_info=additional_info,
             )
-            self.mlflow_artifacts = [
-                MlflowArtifact(
-                    file.name,
-                    file.read_bytes(),
-                    "application/json" if file.suffix == ".json" else "text/plain",
-                )
-                for file in output_files
-            ]
-
             if config.parameters.get("save_sample_results"):
                 from sample_results import save_sample_results
 
@@ -156,6 +203,20 @@ class LightEvalAdapter(FrameworkAdapter):
                 )
                 output_files.append(sample_file)
                 logger.info("Saved %d per-example results to %s", sample_count, sample_file)
+
+            # Keep files available until the synchronous MLflow save in main()
+            # returns. The SDK streams these files without loading them into memory.
+            self.mlflow_artifacts = [
+                MlflowFileArtifact(
+                    path=file.name,
+                    local_path=file,
+                    content_type={
+                        ".json": "application/json",
+                        ".jsonl": "application/x-ndjson",
+                    }.get(file.suffix, "text/plain"),
+                )
+                for file in output_files
+            ]
 
             logger.info(
                 f"Post-processing complete. Overall score: {overall_score}, "
@@ -264,7 +325,9 @@ class LightEvalAdapter(FrameworkAdapter):
 
         # Validate model provider (from benchmark_config)
         provider = config.parameters.get("provider", "endpoint")
-        valid_providers = ["transformers", "vllm", "openai", "anthropic", "endpoint", "litellm"]
+        valid_providers = [
+            "transformers", "vllm", "openai", "anthropic", "endpoint", "litellm",
+        ]
         if provider not in valid_providers:
             logger.warning(
                 f"Unknown model provider '{provider}'. "
@@ -293,15 +356,101 @@ class LightEvalAdapter(FrameworkAdapter):
             tasks = benchmark_config["tasks"]
             if isinstance(tasks, str):
                 tasks = [tasks]
-            return tasks
+        elif benchmark_id in self.SUPPORTED_TASKS:
+            # Check if benchmark_id is a known category
+            tasks = self.SUPPORTED_TASKS[benchmark_id]
+        else:
+            # Otherwise, treat benchmark_id as a single task name
+            # LightEval task names can include colons (e.g., "arc:easy", "truthfulqa:mc")
+            tasks = [benchmark_id]
 
-        # Check if benchmark_id is a known category
-        if benchmark_id in self.SUPPORTED_TASKS:
-            return self.SUPPORTED_TASKS[benchmark_id]
+        return [self._resolve_task_alias(task) for task in tasks]
 
-        # Otherwise, treat benchmark_id as a single task name
-        # LightEval task names can include colons (e.g., "arc:easy", "truthfulqa:mc")
-        return [benchmark_id]
+    @staticmethod
+    def _loglikelihood_tasks(tasks: list[str]) -> list[str]:
+        """Return the tasks that score with ``SamplingMethod.LOGPROBS``.
+
+        Read from lighteval's own task registry (plus this adapter's custom
+        tasks), so the answer follows the installed lighteval version instead of
+        a hand-kept list.  Unknown task names are left for lighteval to reject.
+        """
+        from lighteval.tasks.requests import SamplingMethod
+
+        configs = _task_configs()
+        needing = []
+        for task in tasks:
+            config = configs.get(task.split("|", 1)[0])
+            if config is not None and any(
+                metric.category == SamplingMethod.LOGPROBS for metric in config.metrics
+            ):
+                needing.append(task)
+        return needing
+
+    @staticmethod
+    def _max_samples_per_prompt(tasks: list[str]) -> int:
+        """Most answers any of ``tasks`` samples per question (``maj@4`` -> 4)."""
+        from lighteval.tasks.lighteval_task import LightevalTask
+
+        configs = _task_configs()
+        most = 1
+        for task in tasks:
+            config = configs.get(task.split("|", 1)[0])
+            if config is not None:
+                most = max(most, *LightevalTask(config).num_samples)
+        return most
+
+    def _with_sampling_temperature(
+        self, tasks: list[str], generation_parameters: Any
+    ) -> Any:
+        """Give majority-vote tasks a sampling temperature unless the caller set one.
+
+        ``math:algebra`` and ``math:counting_and_probability`` score ``maj@4``.
+        lighteval's LiteLLM backend raises "num_samples > 1 is not supported with
+        temperature=0", so without this the benchmarks fail on every endpoint.
+        A temperature given by the caller (even 0) is left alone.
+        """
+        if generation_parameters is not None and not isinstance(generation_parameters, dict):
+            return generation_parameters  # pre-formatted string: not ours to edit
+        params = dict(generation_parameters or {})
+        if "temperature" in params:
+            return generation_parameters
+        samples = self._max_samples_per_prompt(tasks)
+        if samples <= 1:
+            return generation_parameters
+        params["temperature"] = DEFAULT_SAMPLING_TEMPERATURE
+        logger.warning(
+            "Tasks %s sample %d answers per question, which needs temperature > 0; "
+            "using temperature=%s. Set generation_parameters.temperature to override.",
+            tasks, samples, DEFAULT_SAMPLING_TEMPERATURE,
+        )
+        return params
+
+    def _validate_provider_supports_tasks(self, provider: str, tasks: list[str]) -> None:
+        """Reject a provider only for the tasks that need a capability it lacks.
+
+        Log-likelihood scoring is served through ``/v1/completions`` with
+        ``echo=True`` and ``logprobs``, which Anthropic's API does not offer.
+        Generation-only tasks do not use it and run fine on Anthropic.
+        """
+        if provider != "anthropic":
+            return
+        needing = self._loglikelihood_tasks(tasks)
+        if needing:
+            raise ValueError(
+                "provider: anthropic cannot run log-likelihood benchmarks "
+                f"({', '.join(needing)}): they are scored through /v1/completions with "
+                "echo=True and logprobs=1, which Anthropic's API does not implement. "
+                "Use provider: endpoint with a vLLM-compatible server for these tasks."
+            )
+
+    @classmethod
+    def _resolve_task_alias(cls, task: str) -> str:
+        """Map a provider benchmark id to the task name lighteval registers.
+
+        Only the benchmarks this adapter re-implements (see ``custom_tasks.py``)
+        are renamed; every other id is already a lighteval 0.13.0 registry name.
+        """
+        return cls.CUSTOM_TASK_ALIASES.get(task, task)
 
     def _run_lighteval(
         self,
@@ -312,6 +461,7 @@ class LightEvalAdapter(FrameworkAdapter):
         limit: int | None,
         batch_size: int,
         benchmark_config: dict[str, Any],
+        subprocess_env: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Execute LightEval CLI and return parsed results.
 
@@ -341,18 +491,22 @@ class LightEvalAdapter(FrameworkAdapter):
         # Determine model provider from benchmark_config
         provider = benchmark_config.get("provider", "endpoint")
 
+        # Path to the loglikelihood patch wrapper (installed alongside main.py in the container)
+        _patch_script = str(Path(__file__).parent / "lighteval_logprob_patch.py")
+        _lighteval_cmd = ["python", _patch_script] if Path(_patch_script).exists() else ["lighteval"]
+
         if provider == "transformers":
             # For HuggingFace transformers models
             model_args = f"pretrained={model_config.name}"
             device = benchmark_config.get("device")
             if device:
                 model_args += f",device={device}"
-            cmd = ["lighteval", "accelerate", model_args, tasks_arg]
+            cmd = [*_lighteval_cmd, "accelerate", model_args, tasks_arg]
 
         elif provider == "vllm":
             # For vLLM models
             model_args = f"pretrained={model_config.name}"
-            cmd = ["lighteval", "vllm", model_args, tasks_arg]
+            cmd = [*_lighteval_cmd, "vllm", model_args, tasks_arg]
 
         elif provider in ["openai", "anthropic", "endpoint", "litellm"]:
             # For API-based models (OpenAI, Anthropic, custom endpoints)
@@ -387,12 +541,22 @@ class LightEvalAdapter(FrameworkAdapter):
             parameters = benchmark_config.get("parameters") or {}
             if not isinstance(parameters, dict):
                 raise ValueError("parameters must be an object")
+            parameters = dict(parameters)
+            # generation_parameters is declared at the top level of the provider schema;
+            # forward it if not already overridden by the nested "parameters" sub-key.
+            if "generation_parameters" in benchmark_config and "generation_parameters" not in parameters:
+                parameters["generation_parameters"] = benchmark_config["generation_parameters"]
+            sampling_params = self._with_sampling_temperature(
+                tasks, parameters.get("generation_parameters")
+            )
+            if sampling_params is not None:
+                parameters["generation_parameters"] = sampling_params
             for key, value in parameters.items():
                 if key == "generation_parameters":
                     value = self._format_generation_parameters(value)
                 model_args += f",{key}={value}"
 
-            cmd = ["lighteval", "endpoint", "litellm", model_args, tasks_arg]
+            cmd = [*_lighteval_cmd, "endpoint", "litellm", model_args, tasks_arg]
 
         else:
             raise ValueError(f"Unsupported model provider: {provider}")
@@ -404,6 +568,10 @@ class LightEvalAdapter(FrameworkAdapter):
             "--save-details",
         ])
 
+        if any(task in self.CUSTOM_TASK_ALIASES.values() for task in tasks):
+            custom_tasks_path = Path(__file__).with_name("custom_tasks.py")
+            cmd.extend(["--custom-tasks", str(custom_tasks_path)])
+
         # Add max-samples limit if specified
         if limit is not None:
             cmd.extend(["--max-samples", str(limit)])
@@ -412,11 +580,12 @@ class LightEvalAdapter(FrameworkAdapter):
         safe_cmd = [re.sub(r"(,api_key=)[^,]*", r"\1***", arg) for arg in cmd]
         logger.info(f"Executing LightEval CLI: {' '.join(safe_cmd)}")
 
-        env = None
-        if "HF_TOKEN" not in os.environ:
+        env = dict(subprocess_env) if subprocess_env is not None else None
+        effective_env = env if env is not None else os.environ
+        if "HF_TOKEN" not in effective_env:
             hf_token = read_model_auth_key("hf-token")
             if hf_token:
-                env = {**os.environ, "HF_TOKEN": hf_token}
+                env = {**effective_env, "HF_TOKEN": hf_token}
                 logger.info("Injected HF_TOKEN from model secret")
 
         try:
@@ -566,14 +735,21 @@ class LightEvalAdapter(FrameworkAdapter):
         # Strip |N fewshot suffix LightEval appends to task names in results JSON
         # (e.g. math_500|0 → math_500)
         if "|" in task_name:
-            return task_name.rsplit("|", 1)[0]
-        return task_name
+            task_name = task_name.rsplit("|", 1)[0]
+        return CUSTOM_TASK_RESULT_NAMES.get(task_name, task_name)
 
     @staticmethod
     def _normalise_metric_name(metric_name: str) -> str:
         # Normalise LightEval metric names to match collection primary_score.metric.
         # pass@k:k=1&n=3 → pass@1  (query-string: extract k value)
         # codegen_pass@1:16 → codegen_pass@1  (plain numeric suffix)
+        # maj@n:n=4&...normalize_pred=<function ... at 0x...> → maj@4
+        # Keep the majority-vote sample count in the public metric name, just
+        # as pass@k keeps k, rather than exposing process-specific function reprs.
+        if metric_name.startswith("maj@n:"):
+            match = re.search(r"(?:^|&)n=([1-9]\d*)(?:&|$)", metric_name.partition(":")[2])
+            if match:
+                return f"maj@{match.group(1)}"
         if ":" not in metric_name:
             return metric_name
         base, _, suffix = metric_name.rpartition(":")
@@ -853,6 +1029,7 @@ def main() -> None:
     Note: The service URL for callbacks comes from job_spec.callback_url (mounted via ConfigMap)
     """
     import sys
+
     from evalhub.adapter import DefaultCallbacks, configure_telemetry
 
     # Configure logging

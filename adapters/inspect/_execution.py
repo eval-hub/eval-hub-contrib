@@ -1,5 +1,6 @@
 """Command building, environment setup, and subprocess execution."""
 
+import json
 import logging
 import os
 import re
@@ -10,13 +11,11 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from evalhub.adapter import JobSpec
-from evalhub.adapter.auth import resolve_model_credentials
-
-from _benchmarks import PETRI_SEED_MAP
+from _benchmarks import _CLIENT_OPENAI_COMPAT, PETRI_SEED_MAP
 from _hf_auth import apply_hf_hub_auth, refresh_hf_hub_auth
 from _hf_offline import (
     TEST_DATA_DIR,
+    WRITABLE_HF_CACHE_DIR,
     configure_hf_offline_environment,
     ensure_test_data_ready_for_offline,
     should_use_hf_offline,
@@ -25,6 +24,8 @@ from _preflight import (
     HOSTS_ENV,
     MODE_ENV,
     TIMEOUT_ENV,
+    configure_staged_bfcl_cache,
+    configure_staged_cyberseceval_cache,
     normalize_hosts,
     normalize_mode,
     normalize_timeout,
@@ -38,6 +39,8 @@ from _routing import (
     select_client,
     target_model_spec,
 )
+from evalhub.adapter import JobSpec
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,45 @@ _STREAM_LOGS_ENV = "INSPECT_STREAM_LOGS"    # parameters.stream_logs
 _DEFAULT_LOCAL_TIMEOUT_S = 7200.0
 _OUTPUT_TAIL_LINES = 200
 _KILL_GRACE_S = 10.0
+_COLLECTION_JUDGE_BENCHMARKS = frozenset({"inspect/hle", "inspect/cyberseceval-2-pi"})
+
+
+def _collection_judge_enabled(config: JobSpec) -> bool:
+    """Validate the opt-in flat judge inputs without changing legacy jobs."""
+    parameters = config.parameters
+    if config.benchmark_id not in _COLLECTION_JUDGE_BENCHMARKS:
+        return False
+    if "judge_model" not in parameters:
+        return False
+    # Existing standalone HLE jobs may carry a provider-level judge_model
+    # alongside an explicit grader role; keep that role authoritative.
+    model_roles = parameters.get("model_roles")
+    if isinstance(model_roles, dict) and "grader" in model_roles:
+        return False
+    name = parameters.get("judge_model")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("parameters.judge_model must be a non-empty model name")
+    conflicting_keys = (
+        "judge_url", "judge_api_key", "judge_base_url",
+        "judge_anthropic_base_url", "judge_anthropic_api_key",
+        "grader_model", "grader_base_url",
+    )
+    for key in conflicting_keys:
+        if parameters.get(key):
+            raise ValueError(f"judge_model cannot be combined with parameters.{key}")
+    return True
+
+
+def _collection_grader_spec(config: JobSpec, env: dict[str, str]) -> str:
+    """Bind Inspect's grader role without putting credentials in CLI arguments."""
+    name = config.parameters["judge_model"].strip()
+    if read_model_auth_key("judge_api-key"):
+        return grader_model_spec(name)
+    client = select_client(env, endpoint_url=config.model.url)
+    model = route_model(name, client)
+    if client == _CLIENT_OPENAI_COMPAT:
+        return json.dumps({"model": model, "model_args": {"responses_api": False}})
+    return model
 
 
 def redact_cmd(cmd: list[str]) -> str:
@@ -73,6 +115,7 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
     """
     env = os.environ.copy()
     p = config.parameters
+    collection_judge_enabled = _collection_judge_enabled(config)
 
     if config.model.url:
         if _is_ollama_endpoint(config.model.url):
@@ -111,6 +154,20 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
             or "https://api.openai.com/v1"
         )
 
+    if collection_judge_enabled:
+        # The adapter receives only synthetic reference values in Kubernetes;
+        # the sidecar resolves the real credential and optional upstream URL.
+        judge_key = read_model_auth_key("judge_api-key")
+        projected_url = read_model_auth_key("judge_url")
+        if projected_url and not judge_key:
+            raise ValueError("judge_url in model.auth.secret_ref requires judge_api-key")
+        if judge_key:
+            judge_url = projected_url or config.model.url
+            if not judge_url:
+                raise ValueError("judge_api-key requires judge_url or config.model.url")
+            env["OPENAI_JUDGE_API_KEY"] = judge_key
+            env["OPENAI_JUDGE_BASE_URL"] = judge_url
+
     # ANTHROPIC_BASE_URL passes through from host env.
 
     if mode not in ("petri", "bloom"):
@@ -121,8 +178,9 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
     if should_use_hf_offline(p):
         configure_hf_offline_environment(TEST_DATA_DIR, env)
         logger.info(
-            "HF offline mode: HF_HOME=%s (staged test data), Hub downloads disabled",
+            "HF offline mode: staged Hub cache=%s/hub, writable cache=%s, Hub downloads disabled",
             TEST_DATA_DIR,
+            WRITABLE_HF_CACHE_DIR,
         )
 
     # Gated datasets (Open-Telco, humaneval, mmlu, …) need Hub auth when not offline.
@@ -214,6 +272,9 @@ def build_command(
                 f"parameters.model_roles must be a dict (got {type(model_roles).__name__}). "
                 "Example: model_roles: {grader: openai/gpt-4o-mini}"
             )
+        if _collection_judge_enabled(config):
+            model_roles = dict(model_roles)
+            model_roles["grader"] = _collection_grader_spec(config, env)
         for role, spec in model_roles.items():
             cmd += ["--model-role", f"{role}={spec}"]
 
@@ -248,6 +309,16 @@ def build_command(
     cmd += ["--log-level", config.parameters.get("log_level", "info")]
 
     task_args = _task_args(config)
+    if config.benchmark_id == "inspect/docvqa" and limit is not None:
+        # DocVQA's HF task otherwise materializes all 5,349 image records before
+        # Inspect applies its CLI --limit. Pass the same cap into the local task
+        # so it selects rows from the Arrow cache before converting them to Samples.
+        task_args["num_examples"] = limit
+    if config.benchmark_id == "inspect/cyberseceval-2-pi" and _collection_judge_enabled(config):
+        if task_args.get("judge_llm") not in (None, "null"):
+            raise ValueError("judge_model cannot be combined with task_args.judge_llm")
+        # The task's built-in judge_llm would otherwise bypass the grader role.
+        task_args["judge_llm"] = "null"
     if config.benchmark_id == "inspect/strong-reject" and config.parameters.get("grader_model"):
         # Ignore a legacy explicit judge_llm (often set to the target model) so
         # StrongREJECT uses the separately configured grader role.
@@ -392,6 +463,18 @@ def _petri_task_flags(
     return flags
 
 
+def _task_args_from_command(cmd: list[str]) -> dict[str, str]:
+    """Extract BFCL cache-selection args from Inspect's repeated ``-T key=value`` flags."""
+    task_args: dict[str, str] = {}
+    for index, arg in enumerate(cmd[:-1]):
+        if arg != "-T":
+            continue
+        key, separator, value = cmd[index + 1].partition("=")
+        if separator and key in {"categories", "snapshot_id"}:
+            task_args[key] = value
+    return task_args
+
+
 def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
     """Run ``inspect eval``, streaming its output to the adapter log as it arrives.
 
@@ -400,8 +483,12 @@ def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
     live (prefixed ``inspect |``), a network pre-flight fails fast when a required host is
     unreachable, and the run is bounded by ``timeout_s`` when one is configured.
     """
+    task_spec = cmd[2] if len(cmd) > 2 else ""
+    task_args = _task_args_from_command(cmd)
+    configure_staged_cyberseceval_cache(task_spec, env, TEST_DATA_DIR)
+    configure_staged_bfcl_cache(task_spec, env, TEST_DATA_DIR, task_args)
     refresh_hf_hub_auth(env)
-    run_preflight(cmd[2] if len(cmd) > 2 else "", env)
+    run_preflight(task_spec, env, task_args)
     timeout = _resolve_job_timeout(env)
     stream = (env.get(_STREAM_LOGS_ENV) or "1").strip().lower() not in ("0", "false", "no", "off")
 

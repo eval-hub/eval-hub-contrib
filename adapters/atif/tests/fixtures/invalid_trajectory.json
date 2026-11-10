@@ -1,0 +1,9 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "trajectory_id": "invalid-trajectory",
+  "agent": {"name": "fixture-agent", "version": "1.0.0"},
+  "steps": [
+    {"step_id": 1, "source": "agent", "message": "first"},
+    {"step_id": 3, "source": "agent", "message": "not sequential"}
+  ]
+}

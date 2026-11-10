@@ -45,12 +45,12 @@ from evalhub.adapter import (
     MessageInfo,
     OCIArtifactSpec,
 )
-from evalhub.adapter.auth import resolve_model_credentials
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 from ragas import EvaluationDataset
 from ragas.run_config import RunConfig
 
 try:
-    from openai import AsyncOpenAI, DefaultAsyncHttpxClient
+    from openai import APIStatusError, AsyncOpenAI, DefaultAsyncHttpxClient
 
     _HAS_OPENAI = True
 except ImportError:
@@ -213,6 +213,48 @@ def _run_collections_evaluation(
 # ---------------------------------------------------------------------------
 # OpenAI-compatible LLM wrapper
 # ---------------------------------------------------------------------------
+def _resolve_role_connection(
+    role: str,
+    model_url: str,
+    *,
+    url_override: str | None = None,
+    api_key_override: str | None = None,
+) -> tuple[str, str | None, bool]:
+    """Resolve a role's projected URL/ref pair, with standalone overrides.
+
+    In Kubernetes all roles use the sidecar. Equal localhost URLs can select
+    different upstreams: the Authorization reference token controls routing.
+    """
+    role_key = read_model_auth_key(f"{role}_api-key")
+    projected_url = read_model_auth_key(f"{role}_url")
+    if projected_url and not role_key:
+        raise ValueError(
+            f"{role}_url in model.auth.secret_ref requires {role}_api-key"
+        )
+    role_url = (projected_url or model_url).strip().rstrip("/")
+    url = (url_override or role_url).strip().rstrip("/")
+    in_k8s = os.getenv("EVALHUB_MODE", "").lower() == "k8s"
+    if in_k8s:
+        sidecar = urlparse(model_url)
+        endpoint = urlparse(url)
+        if (endpoint.scheme, endpoint.netloc) != (sidecar.scheme, sidecar.netloc):
+            raise ValueError(
+                f"Configure {role}_url and {role}_api-key in model.auth.secret_ref "
+                f"for Kubernetes; parameters.{role}_url must use the sidecar"
+            )
+        api_key = api_key_override or role_key
+        if api_key and not api_key.endswith(":ref"):
+            raise ValueError(
+                f"Configure {role}_api-key in model.auth.secret_ref for Kubernetes; "
+                "the adapter must send a credential reference token"
+            )
+    else:
+        # A standalone override to another endpoint must not borrow the role's
+        # configured credential. The caller supplies its key or OPENAI_API_KEY.
+        api_key = api_key_override or (role_key if url == role_url else None)
+    return url, api_key, in_k8s or url == model_url
+
+
 def _openai_credentials(
     base_url: str,
     api_key_override: str | None = None,
@@ -228,9 +270,8 @@ def _openai_credentials(
         creds = resolve_model_credentials()
         api_key = creds.api_key
     else:
-        # A separate judge endpoint must not attempt to use the evaluated
-        # model's mounted credential. External endpoints use an explicit
-        # judge_api_key or OPENAI_API_KEY instead.
+        # Standalone endpoint overrides use their own key or OPENAI_API_KEY.
+        # Kubernetes role connections supply a projected reference above.
         api_key = os.getenv("OPENAI_API_KEY")
     return url, api_key or "DUMMY"
 
@@ -297,11 +338,15 @@ def _create_ragas_embeddings(
     model_id: str,
     *,
     run_config: RunConfig | None = None,
+    api_key: str | None = None,
+    use_model_credentials: bool = True,
 ) -> Any:
     """Build embeddings for ragas.metrics.collections via embedding_factory."""
     from ragas.embeddings.base import embedding_factory
 
-    client = _async_openai_client(base_url)
+    client = _async_openai_client(
+        base_url, api_key, use_model_credentials=use_model_credentials
+    )
     return embedding_factory(
         "openai",
         model=model_id,
@@ -440,31 +485,15 @@ class RagasAdapter(FrameworkAdapter):
             model_url = config.model.url.strip().rstrip("/")
             model_name = config.model.name
             judge_model = bc.get("judge_model") or model_name
-            judge_url = (bc.get("judge_url") or model_url).strip().rstrip("/")
-            judge_api_key = bc.get("judge_api_key")
-            judge_uses_model_credentials = judge_url == model_url
+            judge_url, judge_api_key, judge_uses_model_credentials = _resolve_role_connection(
+                "judge", model_url,
+                url_override=bc.get("judge_url"),
+                api_key_override=bc.get("judge_api_key"),
+            )
             embedding_model = bc.get("embedding_model") or model_name
-            embedding_url = bc.get("embedding_url") or model_url
-
-            # In k8s mode the service rewrites model.url to the local credential-
-            # injection sidecar (http://localhost:…).  If a caller also supplies an
-            # explicit embedding_url that points at an external host, the embedding
-            # calls would bypass the sidecar and reach the model endpoint with the
-            # unresolved "api-key:ref" ref token, causing a 401.  Detect this and
-            # fall back to the sidecar URL so both LLM and embedding calls share the
-            # same credential-injection path.
-            _sidecar_hosts = {"localhost", "127.0.0.1", "::1"}
-            _model_is_local = urlparse(model_url).hostname in _sidecar_hosts
-            _embed_is_external = urlparse(embedding_url).hostname not in _sidecar_hosts
-            if _model_is_local and _embed_is_external and embedding_url != model_url:
-                logger.warning(
-                    "embedding_url %r is external but model.url points to the local "
-                    "sidecar (%r); falling back to the sidecar URL for embeddings so "
-                    "that credential injection applies to both LLM and embedding calls.",
-                    embedding_url,
-                    model_url,
-                )
-                embedding_url = model_url
+            embedding_url, embedding_api_key, embedding_uses_model_credentials = _resolve_role_connection(
+                "embedding", model_url, url_override=bc.get("embedding_url")
+            )
 
             max_workers = min(max(int(bc.get("max_workers") or 1), 1), 10)
             run_config = RunConfig(max_workers=max_workers)
@@ -480,6 +509,8 @@ class RagasAdapter(FrameworkAdapter):
                 embedding_url,
                 embedding_model,
                 run_config=run_config,
+                api_key=embedding_api_key,
+                use_model_credentials=embedding_uses_model_credentials,
             )
 
             callbacks.report_status(
@@ -594,12 +625,17 @@ class RagasAdapter(FrameworkAdapter):
             )
 
         except Exception as e:
-            logger.exception("RAGAS EvalHub job %s failed", config.id)
+            error_message = str(e)
+            if _HAS_OPENAI and isinstance(e, APIStatusError):
+                request = e.request
+                url = request.url.copy_with(username=None, password=None, query=None, fragment=None)
+                error_message = f"{error_message} ({request.method} {url})"
+            logger.exception("RAGAS EvalHub job %s failed: %s", config.id, error_message)
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
                     error_message=MessageInfo(
-                        message=str(e),
+                        message=error_message,
                         message_code="job_failed",
                     ),
                 )

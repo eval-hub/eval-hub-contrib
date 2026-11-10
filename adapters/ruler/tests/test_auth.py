@@ -98,6 +98,55 @@ def test_hf_token_reaches_precheck_and_child(monkeypatch, tmp_path):
     assert "mounted-hf-token" not in str(calls[0][0])
 
 
+def test_offline_tokenizer_precheck_uses_only_staged_files(monkeypatch):
+    tokenizer = Mock()
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=tokenizer))
+    adapter = main.RulerAdapter.__new__(main.RulerAdapter)
+    monkeypatch.setattr(adapter, "_hf_token", lambda: pytest.fail("offline mode must not read Hub credentials"))
+
+    assert adapter._verify_tokenizer("/test_data/tokenizer", "hf", offline=True)
+    assert tokenizer.from_pretrained.call_args.kwargs["local_files_only"] is True
+    assert tokenizer.from_pretrained.call_args.kwargs["token"] is None
+
+
+def test_offline_tokenizer_precheck_fails_instead_of_falling_back(monkeypatch):
+    tokenizer = Mock()
+    tokenizer.from_pretrained.side_effect = OSError("files are not local")
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=tokenizer))
+    adapter = main.RulerAdapter.__new__(main.RulerAdapter)
+
+    with pytest.raises(ValueError, match="local files only"):
+        adapter._verify_tokenizer("/test_data/tokenizer", "hf", offline=True)
+
+
+def test_offline_data_generation_disables_hub_and_does_not_pass_token(monkeypatch, tmp_path):
+    adapter = main.RulerAdapter.__new__(main.RulerAdapter)
+    monkeypatch.setattr(adapter, "_hf_token", lambda: pytest.fail("offline mode must not read Hub credentials"))
+    monkeypatch.setenv("HF_TOKEN", "parent-hf-token")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "parent-legacy-hf-token")
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        output = tmp_path / "4096" / "niah_single_1" / "validation.jsonl"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text('{}\n')
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(main.subprocess, "run", run)
+    adapter._generate_task_data(
+        "niah_single_1", 4096, tmp_path, "/test_data/tokenizer", "hf", "base", 1, 42,
+        offline=True,
+    )
+
+    child_env = calls[0][1]["env"]
+    assert child_env["RULER_OFFLINE"] == "1"
+    assert child_env["HF_HUB_OFFLINE"] == "1"
+    assert child_env["TRANSFORMERS_OFFLINE"] == "1"
+    assert "HF_TOKEN" not in child_env
+    assert "HUGGING_FACE_HUB_TOKEN" not in child_env
+
+
 def test_legacy_credentials_and_hf_env_remain_supported(monkeypatch):
     monkeypatch.setattr(main, "resolve_model_credentials", lambda: SimpleNamespace(api_key=None))
     monkeypatch.setattr(main, "read_model_auth_key", lambda key: None)

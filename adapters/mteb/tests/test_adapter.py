@@ -9,7 +9,7 @@ import subprocess
 
 import pytest
 from pathlib import Path
-from unittest.mock import create_autospec
+from unittest.mock import MagicMock, create_autospec
 
 from evalhub.adapter import JobCallbacks, JobPhase, OCIArtifactResult
 from main import MTEBAdapter
@@ -140,6 +140,30 @@ def test_oci_export_persists_artifacts(tmp_path, monkeypatch):
     # OCI artifact is attached to results
     assert results.oci_artifact is not None
     assert results.oci_artifact.digest == "sha256:fake"
+
+    from evalhub.adapter.mlflow import MlflowFileArtifact
+    import main
+
+    assert {artifact.path for artifact in adapter.mlflow_artifacts} == {
+        "mteb_results.json", "results.json", "summary.txt"
+    }
+    for artifact in adapter.mlflow_artifacts:
+        assert isinstance(artifact, MlflowFileArtifact)
+        assert artifact.local_path == spec.files_path / artifact.path
+        assert artifact.local_path.is_file()
+    callbacks.mlflow = MagicMock()
+    callbacks.mlflow.save.return_value = "mteb-run"
+    monkeypatch.setattr(main, "MTEBAdapter", lambda **kwargs: adapter)
+    monkeypatch.setattr(main.DefaultCallbacks, "from_adapter", lambda adapter: callbacks)
+    monkeypatch.setattr(main, "configure_telemetry", lambda: None)
+    monkeypatch.setattr(adapter, "run_benchmark_job", lambda *args: results)
+    with pytest.raises(SystemExit) as exc:
+        main.main()
+    assert exc.value.code == 0
+    callbacks.mlflow.save.assert_called_once_with(
+        results, adapter.job_spec, artifacts=adapter.mlflow_artifacts
+    )
+    assert callbacks.report_results.call_args.args[0].mlflow_run_id == "mteb-run"
 
 
 @pytest.mark.integration

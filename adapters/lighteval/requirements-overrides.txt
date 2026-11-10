@@ -1,0 +1,9 @@
+# Applied AFTER requirements.txt and deliberately outside it: lighteval pins
+# nltk exactly (==3.9.1 in 0.13.0, 42 advisories), so a normal resolve cannot raise it.
+# nltk 3.10.4 has no known advisories.
+# Checked: word_tokenize, TreebankWordTokenizer, edit_distance, sentence_bleu,
+# scores.f_measure and the punkt_tab download behave exactly as on 3.9.1.
+#
+#   uv pip install -r requirements.txt --override requirements-overrides.txt
+#   pip install --no-deps -r requirements-overrides.txt     # after requirements.txt
+nltk==3.10.4

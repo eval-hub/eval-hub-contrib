@@ -96,12 +96,23 @@ Set `model.url` in the JobSpec to the `/v1` endpoint and `model.name` to the mod
 cd adapters/ruler
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-test.txt
 
+# Provision sentence tokenizer data for real essay-generation tests
+export NLTK_DATA="$PWD/.venv/nltk_data"
+.venv/bin/python -m nltk.downloader -d "$NLTK_DATA" punkt punkt_tab
+
 # Run tests
 .venv/bin/pytest tests/ -v
 
 # Run a single test file
 .venv/bin/pytest tests/test_task_config.py -v
 ```
+
+From the repository root, `make test-ruler` installs dependencies and NLTK data
+and runs the suite, including real `niah_single_2` generation at 4096 tokens
+with a local Hugging Face tokenizer and a deterministic prose fixture.
+The image includes `punkt` and `punkt_tab` under `/usr/local/share/nltk_data`,
+readable by arbitrary runtime UIDs; essay sentence tokenization needs no
+runtime download or PyTorch installation.
 
 ## Building the Container Image
 
@@ -153,9 +164,49 @@ between runs. A failed download or invalid completed input stops preparation
 before inference; the vendored essay downloader still logs and continues after
 individual URL failures, so its download counts should be checked.
 
-Runtime network access to the required sources is needed for a cold cache.
-Tokenizer resources and NLTK sentence-tokenization data are separate runtime
-dependencies and may also require network access on first use.
+Connected jobs download missing inputs and may resolve a Hugging Face tokenizer
+from the Hub. Disconnected jobs use the staged-data contract below and do not
+fall back to those downloads.
+
+### Disconnected jobs and staged assets
+
+For a disconnected EvalHub job, set `test_data_ref` on each benchmark job that
+needs staged files. The referenced bundle is mounted read-only at `/test_data`.
+RULER copies only the inputs required by the selected task into its writable
+per-job cache, validates them, and fails with a list of missing or invalid files
+instead of attempting a download.
+
+Place each required JSON file at the root of the staged bundle:
+
+| Selected task | Required staged file |
+|---|---|
+| Common words extraction (CWE) | `/test_data/english_words.json` |
+| SQuAD QA | `/test_data/squad.json` |
+| HotpotQA QA | `/test_data/hotpotqa.json` |
+| NIAH or variable tracking configured with an essay haystack | `/test_data/PaulGrahamEssays.json` |
+| FWE, default VT, noise/needle NIAH | No task dataset file |
+
+Every disconnected RULER job also needs a local Hugging Face tokenizer, including
+tasks that do not require a dataset file. Stage the complete tokenizer directory
+at `/test_data/tokenizer/`; include all files required by that tokenizer (for
+example `tokenizer.json` or vocabulary/model files, `tokenizer_config.json`, and
+`special_tokens_map.json` when used). If `parameters.tokenizer_path` is omitted
+or equals the evaluated model name, the adapter uses `/test_data/tokenizer`. You
+can set `parameters.tokenizer_path` to a path relative to `/test_data` or an
+absolute local path. The tokenizer is loaded with local-files-only mode. The
+`openai`/tiktoken tokenizer backend is not supported for disconnected jobs in
+this increment.
+
+The adapter image already includes NLTK's `punkt` and `punkt_tab` resources.
+Offline data generation verifies these resources and fails without attempting
+to download them if the image is missing them. For connected jobs, NLTK can
+still provision missing resources at runtime.
+
+For collections containing multiple RULER benchmarks, provide `test_data_ref`
+for each benchmark job that needs staged files. Uploading assets to object
+storage alone does not make a job disconnected; the job must reference the
+staged data source. Each benchmark only needs its own task inputs and tokenizer
+in its referenced bundle.
 
 Sources, attribution and licensing information for all four inputs are in
 [DATA_LICENSES.md](DATA_LICENSES.md), installed at `/app/DATA_LICENSES.md`.

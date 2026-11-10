@@ -1,19 +1,17 @@
 {
-  "id": "lighteval-hellaswag-001",
+  "id": "lighteval-gsm8k-001",
   "provider_id": "lighteval",
-  "benchmark_id": "boolq",
+  "benchmark_id": "gsm8k",
   "benchmark_index": 0,
   "model": {
     "url": "http://127.0.0.1:8000/v1",
     "name": "openai/Qwen/Qwen2.5-1.5B-Instruct"
   },
-  "num_examples": 5,
   "parameters": {
     "provider": "endpoint",
-    "batch_size": 8,
+    "max_samples": 5,
     "num_few_shot": 0,
-    "random_seed": 42,
-    "split": "validation"
+    "random_seed": 42
   },
   "callback_url": "http://localhost:8080",
   "tags": [

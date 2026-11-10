@@ -1,4 +1,7 @@
-eval-hub-sdk[adapter]~=1.0.5
+eval-hub-sdk[adapter]~=1.0.6
 datasets
 openai>=1.0.0
 httpx
+# Staged-dataset (airgap) parquet reading for /test_data — imported directly
+# by _dataset_source.load_rows_from_file
+pyarrow

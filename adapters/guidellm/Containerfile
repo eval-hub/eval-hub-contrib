@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/python-311:latest
+FROM registry.access.redhat.com/ubi9/python-312:latest
 
 WORKDIR /app
 
@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py .
+COPY main.py subprocess_utils.py ./
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1

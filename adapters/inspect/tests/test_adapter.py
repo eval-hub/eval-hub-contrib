@@ -10,9 +10,11 @@ or LLM calls are made. Tests cover all three execution modes:
 import json
 import pytest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from evalhub.adapter import EvaluationResult, JobPhase, OCIArtifactResult
+import _execution
 from main import InspectAdapter
 from _benchmarks import (
     PETRI_SEED_MAP,
@@ -63,28 +65,10 @@ def test_resolve_task_standard_gsm8k(job_spec_path):
     assert adapter._resolve_task(adapter.job_spec, "standard", None) == "inspect_evals/gsm8k"
 
 
-def test_resolve_task_standard_telemath(job_spec_path):
+def test_resolve_task_docvqa_uses_early_limit_wrapper(job_spec_path):
     adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.benchmark_id = "telemath"
-    assert adapter._resolve_task(adapter.job_spec, "standard", None) == "evals/telemath"
-
-
-def test_resolve_task_standard_teleqna(job_spec_path):
-    adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.benchmark_id = "teleqna"
-    assert adapter._resolve_task(adapter.job_spec, "standard", None) == "evals/teleqna"
-
-
-def test_resolve_task_standard_telelogs(job_spec_path):
-    adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.benchmark_id = "telelogs"
-    assert adapter._resolve_task(adapter.job_spec, "standard", None) == "evals/telelogs"
-
-
-def test_resolve_task_standard_3gpp_tsg(job_spec_path):
-    adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.benchmark_id = "3gpp-tsg"
-    assert adapter._resolve_task(adapter.job_spec, "standard", None) == "evals/three_gpp"
+    adapter.job_spec.benchmark_id = "inspect/docvqa"
+    assert adapter._resolve_task(adapter.job_spec, "standard", None) == "evalhub_docvqa.py@docvqa"
 
 
 def test_resolve_task_explicit_override(job_spec_path):
@@ -245,6 +229,108 @@ def test_standard_model_roles_injected(job_spec_path, tmp_path, monkeypatch):
     assert "INSPECT_EVAL_MODEL" in env
 
 
+@pytest.mark.parametrize("benchmark_id", ["inspect/hle", "inspect/cyberseceval-2-pi"])
+@pytest.mark.parametrize("separate", [False, True])
+def test_collection_judge_routes_to_grader(job_spec_path, tmp_path, monkeypatch, benchmark_id, separate):
+    monkeypatch.setattr(
+        _execution, "resolve_model_credentials", lambda: SimpleNamespace(api_key="api-key:ref")
+    )
+    projected = {"judge_api-key": "judge_api-key:ref", "judge_url": "http://localhost:8080/judge/v1"} if separate else {}
+    monkeypatch.setattr(_execution, "read_model_auth_key", projected.get)
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    config = adapter.job_spec
+    config.benchmark_id = benchmark_id
+    config.model.url = "http://localhost:8080/v1"
+    config.parameters = {
+        "judge_model": "deployed-judge",
+        "model_args": {"responses_api": False},
+        "task_args": (
+            {"judge_llm": "null"}
+            if benchmark_id.endswith("cyberseceval-2-pi")
+            else {"include_multi_modal": False, "scorer": {"scorer": "inspect_evals/hle/regex_judge"}}
+        ),
+    }
+
+    env = adapter._build_env(config, "standard")
+    cmd = adapter._build_command(config, "standard", "inspect_evals/task", tmp_path, None, env)
+    roles = _parse_model_roles(cmd)
+
+    if separate:
+        assert roles["grader"] == "openai-api/openai_judge/deployed-judge"
+        assert env["OPENAI_JUDGE_API_KEY"] == "judge_api-key:ref"
+        assert env["OPENAI_JUDGE_BASE_URL"] == "http://localhost:8080/judge/v1"
+    else:
+        assert roles["grader"] == {"model": "openai/deployed-judge", "model_args": {"responses_api": False}}
+        assert env["OPENAI_API_KEY"] == "api-key:ref"
+    if benchmark_id.endswith("cyberseceval-2-pi"):
+        assert "judge_llm=null" in cmd
+    else:
+        assert "include_multi_modal=false" in cmd
+        assert "scorer={'scorer': 'inspect_evals/hle/regex_judge'}" in cmd
+    assert "api-key:ref" not in " ".join(cmd)
+
+
+def test_collection_judge_key_without_projected_url_uses_target_proxy(job_spec_path, monkeypatch):
+    monkeypatch.setattr(
+        _execution, "read_model_auth_key", {"judge_api-key": "judge_api-key:ref"}.get
+    )
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    config = adapter.job_spec
+    config.benchmark_id = "inspect/hle"
+    config.model.url = "http://localhost:8080/v1"
+    config.parameters = {"judge_model": "deployed-judge"}
+
+    env = adapter._build_env(config, "standard")
+
+    assert env["OPENAI_JUDGE_BASE_URL"] == config.model.url
+    assert env["OPENAI_JUDGE_API_KEY"] == "judge_api-key:ref"
+
+
+def test_collection_judge_url_requires_projected_key(job_spec_path, monkeypatch):
+    monkeypatch.setattr(_execution, "read_model_auth_key", {"judge_url": "http://localhost:8080/judge/v1"}.get)
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    config = adapter.job_spec
+    config.benchmark_id = "inspect/hle"
+    config.parameters = {"judge_model": "deployed-judge"}
+
+    with pytest.raises(ValueError, match="judge_api-key"):
+        adapter._build_env(config, "standard")
+
+
+def test_cyberseceval_without_judge_model_keeps_legacy_task_defaults(job_spec_path, tmp_path):
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    config = adapter.job_spec
+    config.benchmark_id = "inspect/cyberseceval-2-pi"
+    config.parameters = {}
+
+    env = adapter._build_env(config, "standard")
+    cmd = adapter._build_command(
+        config, "standard", "inspect_evals/cyse2_prompt_injection", tmp_path, None, env
+    )
+
+    assert "--model-role" not in cmd
+    assert not any(arg.startswith("judge_llm=") for arg in cmd)
+
+
+@pytest.mark.parametrize("parameters, error", [
+    ({"judge_model": "  "}, "judge_model"),
+    ({"judge_model": "deployed-judge", "judge_url": "https://external.example/v1"}, "cannot be combined"),
+    ({"judge_model": "deployed-judge", "grader_model": "other"}, "parameters.grader_model"),
+    ({"judge_model": "deployed-judge", "task_args": {"judge_llm": "openai/other"}}, "task_args.judge_llm"),
+])
+def test_collection_judge_rejects_invalid_or_conflicting_inputs(
+    job_spec_path, tmp_path, parameters, error
+):
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    config = adapter.job_spec
+    config.benchmark_id = "inspect/cyberseceval-2-pi"
+    config.parameters = parameters
+
+    with pytest.raises(ValueError, match=error):
+        env = adapter._build_env(config, "standard")
+        adapter._build_command(config, "standard", "inspect_evals/cyse2_prompt_injection", tmp_path, None, env)
+
+
 def test_strong_reject_routes_judge_to_isolated_grader(job_spec_path, tmp_path, monkeypatch):
     """StrongREJECT uses a separate grader endpoint/key without putting the key in argv."""
     monkeypatch.setenv("OPENAI_API_KEY", "target-model-key")
@@ -327,6 +413,37 @@ def test_sample_limit_from_num_examples(job_spec_path, tmp_path, monkeypatch):
     assert cmd[cmd.index("--limit") + 1] == "7"
 
 
+def test_docvqa_passes_num_examples_to_task_before_cli_limit(job_spec_path, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/docvqa"
+    adapter.job_spec.num_examples = 1
+
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(
+        adapter.job_spec, "standard", "evalhub_docvqa.py@docvqa", tmp_path, None, env
+    )
+
+    assert cmd[cmd.index("--limit") + 1] == "1"
+    assert "num_examples=1" in cmd
+
+
+def test_docvqa_passes_legacy_sample_limit_to_task(job_spec_path, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "inspect/docvqa"
+    adapter.job_spec.num_examples = None
+    adapter.job_spec.parameters["max_samples"] = 2
+
+    env = adapter._build_env(adapter.job_spec, "standard")
+    cmd = adapter._build_command(
+        adapter.job_spec, "standard", "evalhub_docvqa.py@docvqa", tmp_path, None, env
+    )
+
+    assert cmd[cmd.index("--limit") + 1] == "2"
+    assert "num_examples=2" in cmd
+
+
 def _standard_cmd(job_spec_path, tmp_path, monkeypatch, *, num_examples, **params):
     """Build the standard-mode inspect command for inspect/gsm8k with the given limit inputs."""
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
@@ -384,127 +501,6 @@ def test_sample_limit_petri_default_cap(job_spec_path, tmp_path, monkeypatch):
     cmd = adapter._build_command(adapter.job_spec, "petri", "inspect_petri/audit", tmp_path, None, env)
     assert cmd[cmd.index("--limit") + 1] == "5"
 
-
-def test_telemath_full_parameter(job_spec_path, tmp_path, monkeypatch):
-    """TeleMath maps to evals/telemath; parameters.full becomes -T full=true."""
-    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
-    adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.benchmark_id = "telemath"
-    adapter.job_spec.num_examples = 50
-    adapter.job_spec.parameters.pop("task_args", None)
-    adapter.job_spec.parameters["full"] = True
-    env = adapter._build_env(adapter.job_spec, "standard")
-    task = adapter._resolve_task(adapter.job_spec, "standard", None)
-    assert task == "evals/telemath"
-    cmd = adapter._build_command(adapter.job_spec, "standard", task, tmp_path, None, env)
-    assert cmd[cmd.index("--limit") + 1] == "50"
-    assert "full=true" in cmd
-
-
-def test_telemath_full_not_injected_without_parameter(job_spec_path, tmp_path, monkeypatch):
-    """Without parameters.full, TeleMath does not add -T full=…."""
-    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
-    adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.benchmark_id = "telemath"
-    adapter.job_spec.num_examples = None
-    adapter.job_spec.parameters.pop("task_args", None)
-    adapter.job_spec.parameters.pop("full", None)
-    env = adapter._build_env(adapter.job_spec, "standard")
-    cmd = adapter._build_command(
-        adapter.job_spec, "standard", "evals/telemath", tmp_path, None, env
-    )
-    assert not any(a.startswith("full=") for a in cmd)
-
-
-def test_teleqna_subject_and_full_parameters(job_spec_path, tmp_path, monkeypatch):
-    """TeleQnA forwards flat parameters.full and parameters.subject as -T flags."""
-    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
-    adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.benchmark_id = "teleqna"
-    adapter.job_spec.num_examples = 25
-    adapter.job_spec.parameters.pop("task_args", None)
-    adapter.job_spec.parameters["full"] = True
-    adapter.job_spec.parameters["subject"] = "full"
-    env = adapter._build_env(adapter.job_spec, "standard")
-    task = adapter._resolve_task(adapter.job_spec, "standard", None)
-    assert task == "evals/teleqna"
-    cmd = adapter._build_command(adapter.job_spec, "standard", task, tmp_path, None, env)
-    assert cmd[cmd.index("--limit") + 1] == "25"
-    assert "full=true" in cmd
-    assert "subject=full" in cmd
-
-
-def test_telelogs_eval_type_and_full_parameters(job_spec_path, tmp_path, monkeypatch):
-    """TeleLogs forwards flat parameters.full and parameters.eval_type as -T flags."""
-    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
-    adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.benchmark_id = "telelogs"
-    adapter.job_spec.num_examples = 40
-    adapter.job_spec.parameters.pop("task_args", None)
-    adapter.job_spec.parameters["full"] = True
-    adapter.job_spec.parameters["eval_type"] = "soft"
-    env = adapter._build_env(adapter.job_spec, "standard")
-    task = adapter._resolve_task(adapter.job_spec, "standard", None)
-    assert task == "evals/telelogs"
-    cmd = adapter._build_command(adapter.job_spec, "standard", task, tmp_path, None, env)
-    assert cmd[cmd.index("--limit") + 1] == "40"
-    assert "full=true" in cmd
-    assert "eval_type=soft" in cmd
-
-
-def test_3gpp_tsg_full_parameter(job_spec_path, tmp_path, monkeypatch):
-    """3GPP-TSG maps to evals/three_gpp and forwards parameters.full."""
-    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
-    adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.benchmark_id = "3gpp-tsg"
-    adapter.job_spec.num_examples = 30
-    adapter.job_spec.parameters.pop("task_args", None)
-    adapter.job_spec.parameters["full"] = True
-    env = adapter._build_env(adapter.job_spec, "standard")
-    task = adapter._resolve_task(adapter.job_spec, "standard", None)
-    assert task == "evals/three_gpp"
-    cmd = adapter._build_command(adapter.job_spec, "standard", task, tmp_path, None, env)
-    assert cmd[cmd.index("--limit") + 1] == "30"
-    assert "full=true" in cmd
-
-
-def test_full_parameter_wins_over_task_args(job_spec_path, tmp_path, monkeypatch):
-    """parameters.full is the supported path; task_args.full is ignored if full is set."""
-    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
-    adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.benchmark_id = "telemath"
-    adapter.job_spec.num_examples = None
-    adapter.job_spec.parameters["full"] = True
-    adapter.job_spec.parameters["task_args"] = {"full": False, "dish_scaffold": "claude-code"}
-    env = adapter._build_env(adapter.job_spec, "standard")
-    cmd = adapter._build_command(
-        adapter.job_spec, "standard", "evals/telemath", tmp_path, None, env
-    )
-    assert "full=true" in cmd
-    assert "full=false" not in cmd
-    assert "dish_scaffold=claude-code" in cmd
-
-
-def test_none_first_class_params_omitted(job_spec_path, tmp_path, monkeypatch):
-    """None first-class params stay in input but are not forwarded as -T flags."""
-    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
-    adapter = InspectAdapter(job_spec_path=job_spec_path)
-    adapter.job_spec.benchmark_id = "teleqna"
-    adapter.job_spec.num_examples = 5
-    adapter.job_spec.parameters.pop("task_args", None)
-    adapter.job_spec.parameters["full"] = None
-    adapter.job_spec.parameters["subject"] = None
-    adapter.job_spec.parameters["eval_type"] = None
-    env = adapter._build_env(adapter.job_spec, "standard")
-    cmd = adapter._build_command(
-        adapter.job_spec, "standard", "evals/teleqna", tmp_path, None, env
-    )
-    assert "full" in adapter.job_spec.parameters
-    assert "subject" in adapter.job_spec.parameters
-    assert "eval_type" in adapter.job_spec.parameters
-    assert not any(a.startswith("full=") for a in cmd)
-    assert not any(a.startswith("subject=") for a in cmd)
-    assert not any(a.startswith("eval_type=") for a in cmd)
 
 def test_client_selection_url_beats_anthropic_key(job_spec_path):
     """endpoint_url present → OpenAI-compatible API selected even if Anthropic key is set."""
@@ -744,6 +740,41 @@ def test_standard_results_extracted_correctly(job_spec_path, standard_eval_log):
     assert num == 10
 
 
+def test_docvqa_accuracy_is_published_as_anls(job_spec_path):
+    """DocVQA's accuracy aggregate is ANLS; preserve its value under the canonical key."""
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    eval_log = {
+        "results": {
+            "scores": [
+                {
+                    "scorer": "docvqa_scorer",
+                    "name": "docvqa_scorer",
+                    "metrics": {
+                        "accuracy": {"value": 0.82},
+                        "stderr": {"value": 0.04},
+                    },
+                }
+            ],
+            "total_samples": 5,
+        },
+        "samples": [{"id": i} for i in range(5)],
+    }
+
+    results, capabilities, num = adapter._extract_results(
+        eval_log, "inspect/docvqa", "standard"
+    )
+
+    by_name = {result.metric_name: result for result in results}
+    assert by_name["anls"].metric_value == pytest.approx(0.82)
+    assert by_name["anls"].metadata["native_metric_name"] == "docvqa_scorer/accuracy"
+    assert by_name["docvqa_scorer/stderr"].metric_value == pytest.approx(0.04)
+    assert [(entry.metric, entry.zero_shot) for entry in capabilities] == [
+        ("anls", pytest.approx(0.82)),
+        ("docvqa_scorer/stderr", pytest.approx(0.04)),
+    ]
+    assert num == 5
+
+
 def _metric(name: str, value: float) -> EvaluationResult:
     """Build a float EvaluationResult for overall-score tests."""
     return EvaluationResult(metric_name=name, metric_value=value, metric_type="float", num_samples=10)
@@ -868,6 +899,18 @@ def test_oci_export_persists_artifacts(monkeypatch, job_spec_path, petri_eval_lo
     )
     callbacks.mlflow.save.return_value = None
 
+    def save_with_logs(results, config, *, artifacts):
+        from evalhub.adapter.mlflow import MlflowFileArtifact
+
+        artifact, = artifacts
+        assert isinstance(artifact, MlflowFileArtifact)
+        oci_dir = callbacks.create_oci_artifact.call_args.args[0].files_path
+        assert artifact.local_path == oci_dir / artifact.path
+        assert json.loads(artifact.local_path.read_text()) == petri_eval_log
+        return "inspect-run"
+
+    callbacks.mlflow.save.side_effect = save_with_logs
+
     # run_inspect must place the log file inside the adapter's log_dir
     def fake_run_inspect(cmd, env, log_dir):
         log_file = log_dir / "petri_sycophancy_001.json"
@@ -890,6 +933,8 @@ def test_oci_export_persists_artifacts(monkeypatch, job_spec_path, petri_eval_lo
     spec = call_args.args[0]
     # work_dir is cleaned up in a finally block, so we verify the path shape
     assert spec.files_path.name == "logs"
+    assert not spec.files_path.exists()
+    assert results.mlflow_run_id == "inspect-run"
 
     # OCI artifact is attached to results
     assert results.oci_artifact is not None
@@ -989,11 +1034,3 @@ def test_petri_primary_metric_is_defined():
     assert PETRI_PRIMARY_METRIC == "concerning"
 
 
-OPEN_TELCO_BENCHMARK_IDS = frozenset({"telemath", "teleqna", "telelogs", "3gpp-tsg"})
-
-
-def test_open_telco_benchmark_ids_are_k8s_label_safe():
-    """Open-Telco benchmark IDs must not contain '/' (used as Kubernetes label values)."""
-    for bid in OPEN_TELCO_BENCHMARK_IDS:
-        assert "/" not in bid, f"{bid} is not safe for Kubernetes label values"
-        assert bid in STANDARD_TASK_MAP, f"{bid} missing from STANDARD_TASK_MAP"

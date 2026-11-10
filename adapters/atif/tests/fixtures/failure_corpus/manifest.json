@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "description": "Fixed ATIF failure-categorization acceptance corpus",
+  "cases": [
+    {"file": "tool-selection-1.json", "category": "tool_selection_failure"},
+    {"file": "tool-selection-2.json", "category": "tool_selection_failure"},
+    {"file": "context-loss-1.json", "category": "context_loss"},
+    {"file": "context-loss-2.json", "category": "context_loss"},
+    {"file": "policy-boundary-1.json", "category": "policy_boundary_violation"},
+    {"file": "policy-boundary-2.json", "category": "policy_boundary_violation"},
+    {"file": "reasoning-1.json", "category": "reasoning_failure"},
+    {"file": "reasoning-2.json", "category": "reasoning_failure"}
+  ]
+}

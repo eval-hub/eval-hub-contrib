@@ -17,9 +17,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Install test dependencies
         working-directory: adapters/mteb
         run: |
@@ -36,9 +36,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Install all dependencies
         working-directory: adapters/mteb
         run: uv pip install --system -r requirements.txt -r requirements-test.txt

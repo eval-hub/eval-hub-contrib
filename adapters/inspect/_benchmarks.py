@@ -70,6 +70,8 @@ BLOOM_TEMPLATE_MAP: dict[str, str | None] = {
 # Standard inspect-evals benchmark → task spec mapping
 # ---------------------------------------------------------------------------
 
+DOCVQA_TASK_SPEC = "evalhub_docvqa.py@docvqa"
+
 STANDARD_TASK_MAP: dict[str, str | None] = {
     # Safety & alignment
     "inspect/agentharm":              "inspect_evals/agentharm",
@@ -100,11 +102,6 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     "inspect/math":                   "inspect_evals/math",
     "inspect/aime2024":               "inspect_evals/aime2024",
     "inspect/aime2025":               "inspect_evals/aime2025",
-    # Telecom (GSMA Open-Telco / gsma-labs/evals)
-    "telemath":                       "evals/telemath",
-    "teleqna":                        "evals/teleqna",
-    "telelogs":                       "evals/telelogs",
-    "3gpp-tsg":                       "evals/three_gpp",
     # Knowledge & reasoning
     "inspect/mmlu":                   "inspect_evals/mmlu",
     "inspect/mmlu-pro":               "inspect_evals/mmlu_pro",
@@ -121,7 +118,9 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     "inspect/agentdojo":              "inspect_evals/agentdojo",
     "inspect/theagentcompany":        "inspect_evals/theagentcompany",
     "inspect/bfcl":                   "inspect_evals/bfcl",
-    "inspect/docvqa":                 "inspect_evals/docvqa",
+    # EvalHub's wrapper applies the sample limit before materializing the
+    # image-heavy dataset; the upstream task converts the entire split first.
+    "inspect/docvqa":                 DOCVQA_TASK_SPEC,
     # Custom
     "inspect/custom":                 None,
 }
@@ -150,3 +149,45 @@ DIMENSION_ABILITY_MAP: dict[str, str] = {
 
 # Primary metric for overall_score in Petri/Bloom mode
 PETRI_PRIMARY_METRIC = "concerning"
+
+# ---------------------------------------------------------------------------
+# Fixed primary metrics shared by compute_overall_score / resolve_primary_score
+# ---------------------------------------------------------------------------
+# Catalog primary_score usually wins first; these entries keep overall_score and
+# the completed-event primary_score aligned when job/catalog keys drift from
+# runtime scorer names (or for Petri/Bloom custom IDs without a catalog entry).
+
+
+class PrimaryMetricSpec:
+    """Metric name + direction for a fixed / mode-based primary."""
+
+    __slots__ = ("metric", "lower_is_better")
+
+    def __init__(self, metric: str, *, lower_is_better: bool = False) -> None:
+        self.metric = metric
+        self.lower_is_better = lower_is_better
+
+
+FIXED_PRIMARY_METRICS: dict[str, PrimaryMetricSpec] = {
+    "inspect/hle": PrimaryMetricSpec("hle/regex_judge/hle/accuracy"),
+    "inspect/bfcl": PrimaryMetricSpec("bfcl_scorer/accuracy"),
+}
+
+PETRI_BLOOM_PRIMARY = PrimaryMetricSpec(
+    f"{PETRI_PRIMARY_METRIC}/mean",
+    lower_is_better=True,
+)
+
+
+def fixed_primary_for(
+    benchmark_id: str | None,
+    mode: str,
+) -> PrimaryMetricSpec | None:
+    """Return the fixed primary for a catalog id or Petri/Bloom mode, if any."""
+    if benchmark_id is not None:
+        spec = FIXED_PRIMARY_METRICS.get(benchmark_id)
+        if spec is not None:
+            return spec
+    if mode in ("petri", "bloom"):
+        return PETRI_BLOOM_PRIMARY
+    return None

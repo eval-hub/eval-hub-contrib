@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import random
+import re
 import shutil
 import signal
 import statistics
@@ -28,9 +29,6 @@ from datetime import UTC, datetime
 import jq
 import requests
 import yaml
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from tqdm import tqdm
-
 from evalhub.adapter import (
     EvaluationResult,
     FrameworkAdapter,
@@ -42,6 +40,8 @@ from evalhub.adapter import (
     JobStatusUpdate,
 )
 from evalhub.adapter.callbacks import DefaultCallbacks
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from tqdm import tqdm
 
 logging.basicConfig(
     level=logging.INFO,
@@ -216,15 +216,399 @@ def _balance_and_limit(samples: list[dict], eval_limit: int | None, seed: int | 
     return result
 
 
+#: Where eval-hub mounts ``test_data_ref`` material inside the adapter pod.
+_DEFAULT_TEST_DATA_DIR = "/test_data"
+
+
+def _test_data_root() -> str:
+    """Staged-data root: ``/test_data`` (EvalHub mount) unless overridden for tests/smokes."""
+    return (
+        os.environ.get("EVALHUB_TEST_DATA_DIR", _DEFAULT_TEST_DATA_DIR).rstrip("/")
+        or _DEFAULT_TEST_DATA_DIR
+    )
+
+
+_STAGED_EXTENSIONS = (".parquet", ".json", ".jsonl")
+
+#: Directories never descended into during staged-dataset discovery.
+_SKIPPED_DIRS = (".git", ".hg", ".svn", "__pycache__", ".ipynb_checkpoints")
+
+
+def _job_spec_requests_test_data() -> bool:
+    """True when the mounted job spec carries a test_data_ref (staged data)."""
+    path = os.environ.get("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            spec = json.load(f)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+    ref = spec.get("test_data_ref") if isinstance(spec, dict) else None
+    if not isinstance(ref, dict):
+        return False
+    return any(ref.get(key) for key in ("s3", "pvc", "git", "hf"))
+
+
+def _test_data_mount_present() -> bool:
+    """True when the configured staged root or the default mount exists.
+
+    Presence, not content, identifies a staged job: eval-hub mounts ``/test_data``
+    only for jobs that carry S3 or PVC test data, so the directory exists even
+    when staging produced nothing (a failed S3 download, an empty PVC). Such a
+    job must fail with a staging error instead of reaching for the Hub.
+
+    The default ``/test_data`` mount is deliberately checked as well as a custom
+    ``evalhub_test_data_dir``: if the override is mistyped while the real mount
+    is present, the job is still a staged job and must fail with a clear
+    "stage it under <dir>" error instead of silently reaching for the Hub on an
+    air-gapped cluster.
+    """
+    return any(
+        os.path.isdir(root) for root in {_test_data_root(), _DEFAULT_TEST_DATA_DIR}
+    )
+
+
+def _staged_data_requested() -> bool:
+    """Whether the job expects staged data (``test_data_ref``) rather than the Hub.
+
+    eval-hub mounts ``/test_data`` only for jobs that set ``test_data_ref`` and
+    does NOT copy that key into ``/meta/job.json`` (verified on-cluster), so the
+    job-spec check alone never fires there; the mount's presence is the reliable
+    signal, independent of whether it holds any dataset files.
+    """
+    return _job_spec_requests_test_data() or _test_data_mount_present()
+
+
+class _AmbiguousStagedDataset(RuntimeError):
+    """Raised when staged discovery matches more than one dataset file."""
+
+
+class _StagedDatasetUnavailable(RuntimeError):
+    """Raised when the requested staged dataset cannot be supplied.
+
+    Covers an explicit ``dataset_path`` that does not resolve and a requested
+    split whose only staged files belong to a different split.
+    """
+
+
+#: Split names grouped by the split they denote. A staged file whose name or
+#: parent directory names a split in one group belongs to that split.
+_SPLIT_FAMILIES: dict[str, frozenset[str]] = {
+    "train": frozenset({"train", "training"}),
+    "test": frozenset({"test", "testing"}),
+    "validation": frozenset({"validation", "valid", "val", "dev"}),
+}
+
+
+def _split_family(name: str | None) -> str | None:
+    """Canonical split family of a split name such as ``test`` or ``test[:100]``."""
+    if not name:
+        return None
+    base = name.lower().split("[", 1)[0].strip()
+    for family, names in _SPLIT_FAMILIES.items():
+        if base in names:
+            return family
+    return None
+
+
+def _claimed_splits(path: str) -> set[str]:
+    """Split families a staged file explicitly names (file-name tokens or parent dir).
+
+    Tokens are whole words, so ``train-00000-of-00001.parquet`` claims ``train``
+    while ``latest.jsonl`` and a ``test_data`` mount directory claim nothing.
+    """
+    claimed = {
+        family
+        for token in re.split(r"[^a-z0-9]+", os.path.basename(path).lower())
+        if (family := _split_family(token))
+    }
+    parent_family = _split_family(os.path.basename(os.path.dirname(path)))
+    if parent_family:
+        claimed.add(parent_family)
+    return claimed
+
+
+def _find_staged_rows_file(
+    root: str, split: str | None = None, *, all_matches: bool = False
+) -> list[str] | None:
+    """Return staged dataset file(s) under ``root`` (split-aware, hidden-safe).
+
+    Skips ``_SKIPPED_DIRS`` and dot-directories (never descends into them).
+    When ``split`` is set, files whose stem mentions the split (or whose parent
+    directory is named exactly like the split) rank first, and files that
+    explicitly name a *different* split (``train.jsonl`` for ``split="test"``)
+    are never candidates: substituting another split would score the wrong data
+    without any error. Split-neutral names (``data.jsonl``) remain eligible.
+    Raises ``_StagedDatasetUnavailable`` when every staged file belongs to a
+    different split, and ``_AmbiguousStagedDataset`` when more than one file
+    survives at the same rank and ``all_matches`` is False — silently picking
+    the first would make results depend on filesystem order. With
+    ``all_matches=True`` the ranked candidate list is returned instead of a
+    single path (or None when empty).
+    """
+    try:
+        candidates: list[str] = []
+        base = os.path.abspath(root)
+        for dirpath, dirnames, filenames in os.walk(base):
+            # Prune hidden / VCS dirs in place so os.walk never descends.
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if not d.startswith(".") and d not in _SKIPPED_DIRS
+            ]
+            for name in filenames:
+                if name.lower().endswith(_STAGED_EXTENSIONS):
+                    candidates.append(os.path.join(dirpath, name))
+    except OSError:
+        return None
+
+    if not candidates:
+        return None
+
+    if split:
+        # Compare against the split name without a slice suffix ("test[:100]").
+        split_name = split.lower().split("[", 1)[0].strip()
+        requested_family = _split_family(split_name)
+
+        if requested_family is not None:
+            compatible = []
+            for path in candidates:
+                claimed = _claimed_splits(path)
+                if not claimed or requested_family in claimed:
+                    compatible.append(path)
+            if not compatible:
+                names = ", ".join(
+                    os.path.relpath(p, base) for p in sorted(candidates)[:8]
+                )
+                raise _StagedDatasetUnavailable(
+                    f"No staged dataset for split={split!r} under {root}: every "
+                    f"staged file belongs to another split ({names}). Stage the "
+                    f"{split!r} split or set dataset_path to the exact file."
+                )
+            candidates = compatible
+
+        def _split_rank(path: str) -> int:
+            stem = os.path.basename(path).lower()
+            # The split word must appear in the file STEM (or the parent dir
+            # must be named exactly like the split). A substring match on the
+            # parent name is wrong: a "test_data" mount contains "test" and
+            # would rank every file 0, defeating split-aware disambiguation.
+            parent = os.path.basename(os.path.dirname(path)).lower()
+            named = split_name in stem or parent == split_name
+            claimed = requested_family is not None and (
+                requested_family in _claimed_splits(path)
+            )
+            return 0 if (named or claimed) else 1
+
+        candidates.sort(key=lambda p: (_split_rank(p), p.count(os.sep), p))
+    else:
+        candidates.sort(key=lambda p: (p.count(os.sep), p))
+
+    top_rank: tuple[int, ...] | None = None
+    same_rank: list[str] = []
+    for path in candidates:
+        if split:
+            rank = (
+                _split_rank(path),
+                path.count(os.sep),
+            )
+        else:
+            rank = (path.count(os.sep),)
+        if top_rank is None:
+            top_rank = rank
+            same_rank.append(path)
+        elif rank == top_rank:
+            same_rank.append(path)
+        else:
+            break
+
+    if all_matches:
+        return same_rank
+    if len(same_rank) > 1:
+        names = ", ".join(os.path.relpath(p, base) for p in same_rank[:8])
+        raise _AmbiguousStagedDataset(
+            f"Ambiguous staged dataset under {root} (split={split!r}): {names}. "
+            "Set dataset_path in the dataset config to the exact file."
+        )
+    return same_rank
+
+
+def _read_staged_file(path: str) -> list[dict]:
+    """Read dataset rows from a staged parquet/json/jsonl file.
+
+    Unparseable JSONL lines are skipped with a warning; the total skipped count
+    is logged so silent data loss is visible in job logs. An empty or
+    all-malformed file raises instead of returning zero rows — a silent
+    empty-dataset continuation would produce a zero-sample evaluation with no
+    error.
+    """
+    if path.endswith(".parquet"):
+        try:
+            import pyarrow.parquet
+        except ImportError as exc:
+            raise RuntimeError(
+                "pyarrow is required to read staged parquet datasets"
+            ) from exc
+        rows = pyarrow.parquet.read_table(path).to_pylist()
+    else:
+        with open(path, encoding="utf-8") as f:
+            if path.endswith(".jsonl"):
+                rows = []
+                skipped = 0
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        skipped += 1
+                        logger.warning("Skipping unparseable JSONL line in %s", path)
+                        continue
+                    # JSONL is one object per line, but tolerate a single JSON
+                    # array dumped onto one line (a common dataset export shape).
+                    if isinstance(obj, dict):
+                        rows.append(obj)
+                    elif isinstance(obj, list):
+                        rows.extend(r for r in obj if isinstance(r, dict))
+                if skipped:
+                    logger.warning("Skipped %d unparseable JSONL lines in %s", skipped, path)
+            else:
+                data = json.load(f)
+                if isinstance(data, list):
+                    rows = [r for r in data if isinstance(r, dict)]
+                elif isinstance(data, dict) and isinstance(data.get("data"), list):
+                    rows = [r for r in data["data"] if isinstance(r, dict)]
+                else:
+                    raise ValueError(
+                        f"Staged JSON dataset must be a list or {{'data': list}}: {path}"
+                    )
+    if not rows:
+        raise RuntimeError(f"Staged dataset at {path} contains no rows")
+    return rows
+
+
+def _load_staged_rows(config: dict, split: str) -> list[dict] | None:
+    """Load rows from /test_data-staged data (airgap path), or None when absent.
+
+    Resolution order: ``dataset_path`` in the dataset config, a staged directory
+    named after the dataset (``<hf_name>`` basename), then split-aware discovery
+    over the whole root. An explicit ``dataset_path`` is authoritative: when it
+    is missing or holds no dataset files this raises instead of falling through
+    to discovery. Root-wide discovery is skipped for multi-dataset
+    benchmarks (``_multi_dataset``): with several datasets sharing one staged
+    root it would hand every dataset without its own directory the same rows
+    (wrong data, no error). For a single-dataset benchmark it is split-aware and
+    raises when several files tie at the top rank.
+    Returns None only when the job did NOT request staged data and nothing
+    matches; a test_data_ref job with no matching material raises a clear error
+    instead of silently falling back to the Hub.
+    """
+    explicit = config.get("dataset_path")
+    if isinstance(explicit, str) and explicit.strip():
+        # The caller named this path, so it is authoritative: when it cannot be
+        # loaded the job fails. Falling through to discovery would evaluate a
+        # dataset nobody selected.
+        p = explicit.strip()
+        if not os.path.isabs(p):
+            p = os.path.join(_test_data_root(), p)
+        if os.path.isfile(p):
+            return _read_staged_file(p)
+        if os.path.isdir(p):
+            found = _find_staged_rows_file(p, split)
+            if found:
+                return _read_staged_file(found[0])
+            raise _StagedDatasetUnavailable(
+                f"dataset_path {p!r} contains no staged dataset files "
+                f"({', '.join(_STAGED_EXTENSIONS)}) for "
+                f"{config.get('hf_name', 'unknown')!r}."
+            )
+        raise _StagedDatasetUnavailable(
+            f"dataset_path {p!r} does not exist for "
+            f"{config.get('hf_name', 'unknown')!r}. Stage the file there or fix "
+            "dataset_path."
+        )
+
+    hf_name = str(config.get("hf_name", "")).split("/")[-1]
+    if hf_name:
+        candidate = os.path.join(_test_data_root(), hf_name)
+        if os.path.isfile(candidate):
+            return _read_staged_file(candidate)
+        if os.path.isdir(candidate):
+            found = _find_staged_rows_file(candidate, split)
+            if found:
+                return _read_staged_file(found[0])
+
+    # Root-wide discovery is only safe for a benchmark with a single dataset
+    # (split-aware: the file matching the requested split wins, several
+    # same-rank files raise). A multi-dataset benchmark shares one staged root,
+    # so a dataset without its own directory would silently be handed another
+    # dataset's rows: those must be staged under ``<root>/<hf_name basename>/``.
+    if not config.get("_multi_dataset"):
+        root_files = _find_staged_rows_file(_test_data_root(), split, all_matches=True)
+        if root_files and len(root_files) == 1:
+            return _read_staged_file(root_files[0])
+        if root_files and len(root_files) > 1:
+            names = ", ".join(
+                os.path.relpath(p, _test_data_root()) for p in root_files[:8]
+            )
+            raise _AmbiguousStagedDataset(
+                f"Ambiguous staged dataset under {_test_data_root()} "
+                f"(split={split!r}) for {config.get('hf_name', 'unknown')!r}: {names}. "
+                "Set dataset_path in the dataset config to the exact file."
+            )
+
+    if _staged_data_requested():
+        hf_name = str(config.get("hf_name", "unknown"))
+        raise RuntimeError(
+            f"Job requests staged data (test_data_ref) but no usable dataset "
+            f"material was found under {_test_data_root()} (split={split!r}) for "
+            f"{hf_name!r}. Stage it under "
+            f"{os.path.join(_test_data_root(), hf_name.split('/')[-1])}/ or set "
+            "dataset_path in the dataset config."
+        )
+    return None
+
+
 def _load_huggingface(config: dict) -> list[dict]:
+    # Airgap path first: a job submitted with test_data_ref stages the dataset
+    # under /test_data — use it and never contact huggingface.co. When a staged
+    # job's material cannot be resolved, _load_staged_rows raises a clear error
+    # instead of silently falling through to the Hub.
+    split = config.get("split", "test")
+    staged = _load_staged_rows(config, split)
+    if staged is not None:
+        logger.info(
+            "Using staged dataset rows from %s (offline/airgap path)", _test_data_root()
+        )
+        # Mirror the Hub path's download_limit semantics so a staged job is
+        # capped the same way a Hub job would be.
+        download_limit = config.get("download_limit")
+        if download_limit is not None:
+            staged = staged[:download_limit]
+        return _huggingface_rows_to_samples(config, staged)
+
     from datasets import load_dataset
 
-    split = config.get("split", "test")
     download_limit = config.get("download_limit")
     if download_limit and ":" not in split:
         split = f"{split}[:{download_limit}]"
 
-    ds = load_dataset(config["hf_name"], name=config.get("subset"), split=split)
+    # Pin the Hub download to a dataset revision (commit SHA or tag) so the
+    # download is reproducible and auditable. Bandit B615.
+    revision = config.get("hf_revision")
+    logger.info(
+        "Loading dataset %s split=%s revision=%s from the HuggingFace Hub",
+        config["hf_name"],
+        split,
+        revision or "<default-branch>",
+    )
+    ds = load_dataset(
+        config["hf_name"], name=config.get("subset"), split=split, revision=revision
+    )
+    return _huggingface_rows_to_samples(config, ds)
+
+
+def _huggingface_rows_to_samples(config: dict, ds) -> list[dict]:
     prompt_col = config["prompt_column"]
     row_filters = _compile_row_filters(config.get("row_filters"))
 
@@ -241,7 +625,7 @@ def _load_huggingface(config: dict) -> list[dict]:
                 values = [str(values)]
             else:
                 values = [str(v) for v in values]
-            sample = {"prompt": str(row[prompt_col]), "dataset_type": "masking"}
+            sample: dict = {"prompt": str(row[prompt_col]), "dataset_type": "masking"}
             sample["mask_forbidden" if mask_mode == "forbidden" else "mask_required"] = values
             samples.append(sample)
         return samples
@@ -804,14 +1188,14 @@ def _print_result(i: int, total: int, sample: dict, result: dict, no_color: bool
         line = (
             f"  {idx:>10s} {marker} mode={mode} masking_accuracy={masking_accuracy:.4f}"
             f" | {result['response_time_ms']:>5.0f}ms ({per_char_str})"
-            f" | {repr(sample['prompt'])}"
-            f"\n{'':>20s}content: {repr(content)}"
+            f" | {sample['prompt']!r}"
+            f"\n{'':>20s}content: {content!r}"
         )
         if not is_error:
             partial = [(vr["value"], vr["score"]) for vr in result.get("value_results", []) if vr["score"] < 1.0]
             if partial:
                 label = "leaked" if mode == "forbidden" else "missing"
-                line += f"\n{'':>20s}{label}: " + ", ".join(f"{repr(v)}={s:.2f}" for v, s in partial)
+                line += f"\n{'':>20s}{label}: " + ", ".join(f"{v!r}={s:.2f}" for v, s in partial)
     else:
         expected_blocked = sample["expected_blocked"]
         predicted = result["predicted_blocked"]
@@ -836,7 +1220,7 @@ def _print_result(i: int, total: int, sample: dict, result: dict, no_color: bool
         line = (
             f"  {idx:>10s} {marker} expected={expected_str:5s} got={predicted_str:8s}"
             f" | {result['response_time_ms']:>5.0f}ms ({per_char_str})"
-            f" | {repr(sample['prompt'])}"
+            f" | {sample['prompt']!r}"
         )
 
     if result["error"]:
@@ -958,6 +1342,32 @@ def _load_benchmark_datasets(benchmark_id: str) -> list[dict]:
     raise ValueError(f"Benchmark '{benchmark_id}' not found. Available: {available}")
 
 
+def _prepare_dataset_configs(dataset_configs: list[dict], params: dict) -> list[dict]:
+    """Copy dataset configs, forwarding the provider-declared job parameters.
+
+    ``evalhub_test_data_dir`` is exported as ``EVALHUB_TEST_DATA_DIR`` (read by
+    ``_test_data_root``) and takes precedence over an inherited env value.
+    ``hf_revision`` is applied to every dataset entry that does not set its own.
+    With several datasets sharing one staged root, each entry is flagged
+    ``_multi_dataset`` so staged discovery never guesses a root-wide file.
+    """
+    test_data_dir = params.get("evalhub_test_data_dir")
+    if test_data_dir:
+        os.environ["EVALHUB_TEST_DATA_DIR"] = str(test_data_dir)
+    hf_revision = params.get("hf_revision")
+    multi_dataset = len(dataset_configs) > 1
+
+    prepared = []
+    for dataset_config in dataset_configs:
+        dc = dict(dataset_config)
+        if hf_revision and not dc.get("hf_revision"):
+            dc["hf_revision"] = str(hf_revision)
+        if multi_dataset:
+            dc["_multi_dataset"] = True
+        prepared.append(dc)
+    return prepared
+
+
 # ---------------------------------------------------------------------------
 # Adapter
 # ---------------------------------------------------------------------------
@@ -1007,7 +1417,9 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
             JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
         )
 
-        dataset_configs = _load_benchmark_datasets(config.benchmark_id)
+        dataset_configs = _prepare_dataset_configs(
+            _load_benchmark_datasets(config.benchmark_id), params
+        )
         samples = []
         for dc in dataset_configs:
             logger.info("Loading dataset: %s (%s)", dc.get("name", "unnamed"), dc["source"])
@@ -1144,10 +1556,30 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
 # Entrypoint
 # ---------------------------------------------------------------------------
 
+#: Where eval-hub mounts the job spec inside the adapter pod.
+_K8S_JOB_SPEC_PATH = "/meta/job.json"
+
+
+def _default_job_spec_path() -> str:
+    """Resolve the job spec path.
+
+    ``EVALHUB_JOB_SPEC_PATH`` wins; otherwise the eval-hub mount (``/meta/job.json``)
+    when present, so the adapter starts on a cluster without extra provider env
+    (every other adapter defaults to that path); otherwise the sample
+    ``meta/job.json`` next to this file for local runs.
+    """
+    explicit = os.environ.get("EVALHUB_JOB_SPEC_PATH")
+    if explicit:
+        return explicit
+    if os.path.isfile(_K8S_JOB_SPEC_PATH):
+        return _K8S_JOB_SPEC_PATH
+    return os.path.join(ADAPTER_DIR, "meta", "job.json")
+
+
 def main() -> None:
     logger.info("Starting NeMo Guardrails adapter")
     try:
-        job_spec_path = os.environ.get("EVALHUB_JOB_SPEC_PATH", os.path.join(ADAPTER_DIR, "meta", "job.json"))
+        job_spec_path = _default_job_spec_path()
         adapter = NemoGuardrailsAdapter(job_spec_path=job_spec_path)
         callbacks = DefaultCallbacks.from_adapter(adapter)
         callbacks.report_status(

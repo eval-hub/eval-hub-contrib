@@ -53,6 +53,7 @@ from evalhub.adapter import (
     OCIArtifactSpec,
     configure_telemetry,
 )
+from evalhub.adapter.mlflow import MlflowFileArtifact
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -230,6 +231,13 @@ class MTEBAdapter(FrameworkAdapter):
                 mteb_results=mteb_results,
                 evaluation_results=evaluation_results,
             )
+            self.mlflow_artifacts = [
+                MlflowFileArtifact(
+                    file.name, file,
+                    "application/json" if file.suffix == ".json" else "text/plain",
+                )
+                for file in output_files
+            ]
 
             oci_artifact = None
             oci_exports = config.exports.oci if config.exports else None
@@ -971,6 +979,12 @@ def main() -> None:
 
         # Run benchmark job
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+        run_id = callbacks.mlflow.save(
+            results, adapter.job_spec, artifacts=adapter.mlflow_artifacts
+        )
+        if run_id:
+            results.mlflow_run_id = run_id
 
         # Report results to service
         callbacks.report_results(results)

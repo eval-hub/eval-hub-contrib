@@ -6,10 +6,40 @@ import copy
 import re
 from unittest.mock import MagicMock, create_autospec
 
+import pytest
 from evalhub.adapter import JobCallbacks, JobPhase
 
 import main as main_module
 from _evaluation import FollowBenchExample
+
+
+@pytest.mark.parametrize("job_spec_path", [None, "/custom/job.json"])
+def test_main_loads_job_and_reports_results(monkeypatch, job_spec_path):
+    if job_spec_path is None:
+        monkeypatch.delenv("EVALHUB_JOB_SPEC_PATH", raising=False)
+    else:
+        monkeypatch.setenv("EVALHUB_JOB_SPEC_PATH", job_spec_path)
+
+    monkeypatch.setattr(main_module, "configure_telemetry", lambda: None)
+    adapter = MagicMock()
+    adapter_factory = MagicMock(return_value=adapter)
+    monkeypatch.setattr(main_module, "FollowBenchAdapter", adapter_factory)
+    callbacks = MagicMock()
+    monkeypatch.setattr(
+        main_module.DefaultCallbacks, "from_adapter", MagicMock(return_value=callbacks)
+    )
+
+    main_module.main()
+
+    adapter_factory.assert_called_once_with(
+        job_spec_path=job_spec_path or "/meta/job.json"
+    )
+    main_module.DefaultCallbacks.from_adapter.assert_called_once_with(adapter)
+    callbacks.tracer.evaluation_run.assert_called_once_with()
+    adapter.run_benchmark_job.assert_called_once_with(adapter.job_spec, callbacks)
+    callbacks.report_results.assert_called_once_with(
+        adapter.run_benchmark_job.return_value
+    )
 
 
 def test_build_judge_prompt_uses_requested_level():
@@ -82,6 +112,70 @@ def test_build_judge_client_does_not_reuse_model_credential_for_other_endpoint(
 
     assert openai_constructor.call_args.kwargs["api_key"] == "DUMMY"
     resolve_model_api_key.assert_not_called()
+
+
+def test_collection_without_judge_secret_fields_reuses_target_connection(monkeypatch):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+    monkeypatch.setenv("FOLLOWBENCH_JUDGE_API_KEY", "unrelated-key")
+    monkeypatch.setattr(main_module, "read_model_auth_key", lambda key: None)
+    monkeypatch.setattr(main_module, "_resolve_model_api_key", lambda _: "api-key:ref")
+    constructor = MagicMock()
+    monkeypatch.setattr(main_module.openai, "OpenAI", constructor)
+
+    _, name = main_module._build_judge_client(
+        config, {"judge_model": "deployed-judge"}, 30
+    )
+
+    assert name == "deployed-judge"
+    assert constructor.call_args.kwargs["base_url"] == config.model.url
+    assert constructor.call_args.kwargs["api_key"] == "api-key:ref"
+
+
+@pytest.mark.parametrize("projected_url", [None, "http://localhost:8080/judge/v1"])
+def test_collection_judge_secret_fields_select_connection(monkeypatch, projected_url):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+    projected = {"judge_api-key": "judge_api-key:ref", "judge_url": projected_url}
+    monkeypatch.setattr(main_module, "read_model_auth_key", projected.get)
+    constructor = MagicMock()
+    monkeypatch.setattr(main_module.openai, "OpenAI", constructor)
+
+    _, name = main_module._build_judge_client(
+        config, {"judge_model": "deployed-judge"}, 30
+    )
+
+    assert name == "deployed-judge"
+    assert constructor.call_args.kwargs["base_url"] == (projected_url or config.model.url)
+    assert constructor.call_args.kwargs["api_key"] == "judge_api-key:ref"
+
+
+@pytest.mark.parametrize("invalid_model", [None, "", "  ", 123])
+def test_collection_judge_rejects_invalid_model(monkeypatch, invalid_model):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+
+    with pytest.raises(ValueError, match="judge_model"):
+        main_module._build_judge_client(config, {"judge_model": invalid_model}, 30)
+
+
+def test_collection_judge_url_requires_projected_key(monkeypatch):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+    monkeypatch.setattr(main_module, "read_model_auth_key", {"judge_url": "http://localhost:8080/judge/v1"}.get)
+
+    with pytest.raises(ValueError, match="judge_api-key"):
+        main_module._build_judge_client(
+            config, {"judge_model": "deployed-judge"}, 30
+        )
+
+
+@pytest.mark.parametrize("legacy_parameter", ["judge_url", "judge_api_key"])
+def test_collection_judge_rejects_legacy_connection_parameters(legacy_parameter):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+
+    with pytest.raises(ValueError, match="judge_model cannot be combined with the legacy"):
+        main_module._build_judge_client(
+            config,
+            {"judge_model": "deployed-judge", legacy_parameter: "legacy-value"},
+            30,
+        )
 
 
 def test_malformed_judge_response_is_scored_as_no(monkeypatch):

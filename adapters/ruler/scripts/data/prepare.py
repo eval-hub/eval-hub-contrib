@@ -39,13 +39,10 @@ import time
 import yaml
 from pathlib import Path
 from template import Templates
+from offline import ensure_nltk_resources, is_offline
 import nltk
-try:
-    nltk.data.find('tokenizers/punkt')
-    # nltk.data.find('tokenizers/punkt_tab')
-except LookupError:
-    nltk.download('punkt')
-    nltk.download('punkt_tab')
+
+ensure_nltk_resources(nltk, offline=is_offline())
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--save_dir", type=Path, required=True, help='dataset folder to save dataset')

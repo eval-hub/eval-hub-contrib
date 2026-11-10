@@ -54,6 +54,77 @@ CANNED_CLEAR_RESULTS = {
 # Unit tests for _normalize_clear_agent_entry
 # ---------------------------------------------------------------------------
 
+
+@pytest.mark.parametrize("experiment_source", ["job", "parameter", "missing"])
+@pytest.mark.parametrize("oci_enabled", [False, True])
+def test_mlflow_streams_framework_artifacts_independently_of_oci(
+    tmp_path, experiment_source, oci_enabled
+):
+    from evalhub.adapter import JobResults
+    from evalhub.adapter.mlflow import MlflowArtifact, MlflowFileArtifact
+    from evalhub.models.api import OCICoordinates
+    from unittest.mock import MagicMock
+
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    job_path = meta_dir / "job.json"
+    job_path.write_text(Path("meta/job.json").read_text())
+    adapter = ClearAdapter(job_spec_path=str(job_path))
+    config = copy.deepcopy(adapter.job_spec)
+    config.experiment_name = "clear-stream" if experiment_source == "job" else None
+    config.parameters.pop("mlflow_experiment_name", None)
+    if experiment_source == "parameter":
+        config.parameters["mlflow_experiment_name"] = "clear-stream"
+    config.exports = MagicMock()
+    config.exports.oci.coordinates = OCICoordinates(
+        oci_host="quay.io", oci_repository="test/clear"
+    )
+    if not oci_enabled:
+        config.exports = None
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    clear_file = output_dir / "clear_results.json"
+    clear_file.write_text(json.dumps(CANNED_CLEAR_RESULTS))
+    html_file = output_dir / "clear_results.html"
+    html_file.write_text("<html>report</html>")
+    results = JobResults(
+        id=config.id, benchmark_id=config.benchmark_id, benchmark_index=0,
+        model_name=config.model.name, results=[], num_examples_evaluated=0,
+        duration_seconds=0,
+    )
+    callbacks = create_autospec(JobCallbacks)
+    callbacks.mlflow = MagicMock()
+    callbacks.mlflow.save.return_value = "clear-run"
+    run_id = adapter._save_results_to_mlflow(
+        callbacks, config, results, output_dir,
+        adapter._metrics_summary_dict(config, [], None, 0), [html_file],
+    )
+    callbacks.create_oci_artifact.assert_not_called()
+    assert not (tmp_path / "results").exists()
+    if experiment_source == "missing":
+        assert run_id is None
+        callbacks.mlflow.save.assert_not_called()
+        return
+    assert run_id == "clear-run"
+    assert callbacks.mlflow.save.call_args.args[1].experiment_name == "clear-stream"
+    artifacts = callbacks.mlflow.save.call_args.kwargs["artifacts"]
+    assert {artifact.path for artifact in artifacts} == {
+        "clear_results.json", "metrics_summary.json", "clear_results.html"
+    }
+    for artifact in artifacts:
+        if artifact.path == "metrics_summary.json":
+            assert isinstance(artifact, MlflowArtifact)
+            assert json.loads(artifact.content) == adapter._metrics_summary_dict(
+                config, [], None, 0
+            )
+            continue
+        assert isinstance(artifact, MlflowFileArtifact)
+        assert artifact.local_path == output_dir / artifact.path
+        assert artifact.local_path.is_file()
+    assert not (output_dir / "metrics_summary.json").exists()
+    assert json.loads(clear_file.read_text()) == CANNED_CLEAR_RESULTS
+
+
 def test_normalize_clear_agent_entry_2x_reasoning_eval():
     """CLEAR 2.x: returns the reasoning_eval block when it contains agent_summary."""
     agent = {

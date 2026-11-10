@@ -187,6 +187,267 @@ def test_separate_judge_is_used_for_llm_metrics(monkeypatch, tmp_path):
     assert results.evaluation_metadata["judge_url"] == "https://api.openai.com/v1"
 
 
+@pytest.mark.parametrize(
+    "embedding_url, expected_url, use_model_credentials",
+    [
+        ("http://granite-embedding:8080/v1/", "http://granite-embedding:8080/v1", False),
+        ("http://127.0.0.1:8001/v1", "http://127.0.0.1:8001/v1", False),
+        ("http://localhost:8082/v1/", "http://localhost:8082/v1", True),
+        (None, "http://localhost:8082/v1", True),
+    ],
+)
+def test_standalone_embedding_endpoint_routing(
+    monkeypatch, tmp_path, embedding_url, expected_url, use_model_credentials
+):
+    monkeypatch.setenv("EVALHUB_MODE", "local")
+    adapter = RagasAdapter(job_spec_path="meta/job.json")
+    adapter.job_spec.model.url = "http://localhost:8082/v1"
+    adapter.job_spec.parameters["embedding_model"] = "granite-embedding"
+    adapter.job_spec.parameters["embedding_url"] = embedding_url
+    callbacks = create_autospec(JobCallbacks)
+    create_embeddings = MagicMock(return_value=object())
+    monkeypatch.setattr("main._create_ragas_llm", lambda *args, **kwargs: object())
+    monkeypatch.setattr("main._create_ragas_embeddings", create_embeddings)
+    monkeypatch.setattr(
+        adapter,
+        "_run_ragas",
+        lambda **kwargs: _make_mock_ragas_result(["answer_relevancy"], n_rows=1),
+    )
+    dataset_file = tmp_path / "dataset.jsonl"
+    dataset_file.write_text(
+        '{"user_input":"What is AI?","response":"Artificial Intelligence",'
+        '"retrieved_contexts":["AI is..."],"reference":"AI stands for..."}\n'
+    )
+    monkeypatch.setattr("main._resolve_data_path", lambda config: dataset_file)
+
+    adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    assert create_embeddings.call_args.args == (expected_url, "granite-embedding")
+    assert create_embeddings.call_args.kwargs["use_model_credentials"] is use_model_credentials
+
+
+def test_standalone_embeddings_do_not_use_model_credentials(monkeypatch):
+    from main import _create_ragas_embeddings
+
+    monkeypatch.setenv("OPENAI_API_KEY", "embedding-key")
+
+    def fail_if_called():
+        raise AssertionError("embedding endpoint must not receive chat credentials")
+
+    monkeypatch.setattr("main.resolve_model_credentials", fail_if_called)
+    factory = MagicMock()
+    monkeypatch.setattr("ragas.embeddings.base.embedding_factory", factory)
+
+    _create_ragas_embeddings(
+        "http://granite-embedding:8080/v1",
+        "granite-embedding",
+        use_model_credentials=False,
+    )
+
+    client = factory.call_args.kwargs["client"]
+    assert str(client.base_url) == "http://granite-embedding:8080/v1/"
+    assert client.api_key == "embedding-key"
+
+
+def test_k8s_judge_and_embeddings_use_projected_reference_tokens(monkeypatch, tmp_path):
+    from main import _async_openai_client
+
+    auth_dir = tmp_path / "model-auth"
+    auth_dir.mkdir()
+    sidecar_url = "http://localhost:8082/v1"
+    for name, value in {
+        "api-key": "api-key:ref",
+        "judge_api-key": "judge_api-key:ref",
+        "judge_url": sidecar_url,
+        "embedding_api-key": "embedding_api-key:ref",
+        "embedding_url": sidecar_url,
+    }.items():
+        (auth_dir / name).write_text(value)
+    monkeypatch.setattr("evalhub.adapter.auth._MODEL_AUTH_DIR", auth_dir)
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    monkeypatch.setenv("EVALHUB_JOB_SPEC_PATH", str(tmp_path / "absent.json"))
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-env-key")
+
+    adapter = RagasAdapter(job_spec_path="meta/job.json")
+    adapter.job_spec.model.url = sidecar_url
+    adapter.job_spec.parameters = {
+        "judge_model": "judge-model",
+        "embedding_model": "granite-embedding",
+        "metrics": ["answer_relevancy"],
+    }
+    llm_factory = MagicMock(return_value=object())
+    embedding_factory = MagicMock(return_value=object())
+    monkeypatch.setattr("ragas.llms.llm_factory", llm_factory)
+    monkeypatch.setattr("ragas.embeddings.base.embedding_factory", embedding_factory)
+    monkeypatch.setattr(
+        adapter, "_run_ragas",
+        lambda **kwargs: _make_mock_ragas_result(["answer_relevancy"], n_rows=1),
+    )
+    dataset_file = tmp_path / "dataset.jsonl"
+    dataset_file.write_text(
+        '{"user_input":"What is AI?","response":"Artificial Intelligence",'
+        '"retrieved_contexts":["AI is..."],"reference":"AI stands for..."}\n'
+    )
+    monkeypatch.setattr("main._resolve_data_path", lambda config: dataset_file)
+
+    adapter.run_benchmark_job(adapter.job_spec, create_autospec(JobCallbacks))
+
+    primary_client = _async_openai_client(sidecar_url)
+    judge_client = llm_factory.call_args.kwargs["client"]
+    embedding_client = embedding_factory.call_args.kwargs["client"]
+    assert llm_factory.call_args.args == ("judge-model",)
+    assert embedding_factory.call_args.kwargs["model"] == "granite-embedding"
+    # All three destinations have the same localhost URL. Only the reference
+    # token selects the upstream and its credential in the sidecar.
+    for client, ref in [
+        (primary_client, "api-key:ref"),
+        (judge_client, "judge_api-key:ref"),
+        (embedding_client, "embedding_api-key:ref"),
+    ]:
+        assert str(client.base_url) == sidecar_url + "/"
+        assert client.api_key == ref
+        assert client.auth_headers["Authorization"] == f"Bearer {ref}"
+
+
+@pytest.mark.parametrize("role", ["judge", "embedding"])
+@pytest.mark.parametrize("separate_path", [False, True])
+def test_role_connection_reads_projected_credentials(monkeypatch, role, separate_path):
+    from main import _resolve_role_connection
+
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    model_url = "http://localhost:8082/v1"
+    role_url = f"http://localhost:8082/{role}/v1" if separate_path else model_url
+    projected = {f"{role}_api-key": f"{role}_api-key:ref", f"{role}_url": role_url}
+    monkeypatch.setattr("main.read_model_auth_key", projected.get)
+
+    url, key, _ = _resolve_role_connection(role, model_url)
+
+    assert url == role_url
+    assert key == f"{role}_api-key:ref"
+
+
+@pytest.mark.parametrize("role", ["judge", "embedding"])
+def test_role_url_requires_matching_credential(monkeypatch, role):
+    from main import _resolve_role_connection
+
+    monkeypatch.setattr(
+        "main.read_model_auth_key", {f"{role}_url": "http://localhost:8082/v1"}.get
+    )
+
+    with pytest.raises(ValueError, match=f"{role}_url.*{role}_api-key"):
+        _resolve_role_connection(role, "http://localhost:8082/v1")
+
+
+@pytest.mark.parametrize("role", ["judge", "embedding"])
+def test_role_credential_without_url_uses_model_endpoint(monkeypatch, role):
+    from main import _resolve_role_connection
+
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    monkeypatch.setattr(
+        "main.read_model_auth_key", {f"{role}_api-key": f"{role}_api-key:ref"}.get
+    )
+
+    url, key, _ = _resolve_role_connection(role, "http://localhost:8082/v1")
+
+    assert url == "http://localhost:8082/v1"
+    assert key == f"{role}_api-key:ref"
+
+
+@pytest.mark.parametrize("role", ["judge", "embedding"])
+def test_k8s_role_cannot_bypass_sidecar(monkeypatch, role):
+    from main import _resolve_role_connection
+
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    monkeypatch.setattr("main.read_model_auth_key", lambda key: None)
+
+    with pytest.raises(ValueError, match=f"{role}_url.*model.auth.secret_ref"):
+        _resolve_role_connection(
+            role, "http://localhost:8082/v1", url_override="https://external.example/v1"
+        )
+
+
+def test_k8s_explicit_judge_reference_remains_supported(monkeypatch):
+    from main import _resolve_role_connection
+
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    monkeypatch.setattr("main.read_model_auth_key", lambda key: None)
+
+    url, key, _ = _resolve_role_connection(
+        "judge", "http://localhost:8082/v1", api_key_override="custom_api-key:ref"
+    )
+
+    assert url == "http://localhost:8082/v1"
+    assert key == "custom_api-key:ref"
+
+
+def test_k8s_judge_rejects_literal_key(monkeypatch):
+    from main import _resolve_role_connection
+
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    monkeypatch.setattr("main.read_model_auth_key", lambda key: None)
+
+    with pytest.raises(ValueError, match="judge_api-key.*model.auth.secret_ref"):
+        _resolve_role_connection(
+            "judge", "http://localhost:8082/v1", api_key_override="literal-key"
+        )
+
+
+@pytest.mark.parametrize("role", ["judge", "embedding"])
+def test_k8s_role_without_projected_entries_uses_primary_reference(monkeypatch, role):
+    from main import _openai_credentials, _resolve_role_connection
+
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-env-key")
+    monkeypatch.setattr("main.read_model_auth_key", lambda key: None)
+    monkeypatch.setattr(
+        "main.resolve_model_credentials",
+        lambda: type("Credentials", (), {"api_key": "api-key:ref"})(),
+    )
+    url, key, use_model_credentials = _resolve_role_connection(
+        role, "http://localhost:8082/v1",
+        url_override="http://localhost:8082/alternate/v1",
+    )
+
+    assert _openai_credentials(url, key, use_model_credentials=use_model_credentials) == (
+        "http://localhost:8082/alternate/v1", "api-key:ref"
+    )
+
+
+def test_http_failure_reports_request_url_without_credentials(monkeypatch, tmp_path):
+    import httpx
+    from openai import NotFoundError
+    from evalhub.adapter import JobStatus
+
+    adapter = RagasAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+    monkeypatch.setattr("main._create_ragas_llm", lambda *args, **kwargs: object())
+    monkeypatch.setattr("main._create_ragas_embeddings", lambda *args, **kwargs: object())
+    dataset_file = tmp_path / "dataset.jsonl"
+    dataset_file.write_text('{"user_input":"hello"}\n')
+    monkeypatch.setattr("main._resolve_data_path", lambda config: dataset_file)
+    error = NotFoundError(
+        "Not Found",
+        response=httpx.Response(
+            404,
+            request=httpx.Request(
+                "POST", "https://user:password@chat.example/v1/embeddings?api_key=secret#fragment"
+            ),
+        ),
+        body={"detail": "Not Found"},
+    )
+    monkeypatch.setattr(adapter, "_run_ragas", MagicMock(side_effect=error))
+
+    with pytest.raises(NotFoundError) as raised:
+        adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    assert raised.value is error
+    status = callbacks.report_status.call_args.args[0]
+    assert status.status == JobStatus.FAILED
+    assert "POST https://chat.example/v1/embeddings" in status.error_message.message
+    for sensitive in ("user", "password", "api_key", "secret", "fragment"):
+        assert sensitive not in status.error_message.message
+
+
 @pytest.mark.integration
 def test_run_collections_evaluation_builds_metric_columns():
     """Collections evaluation should score each row via abatch_score()."""

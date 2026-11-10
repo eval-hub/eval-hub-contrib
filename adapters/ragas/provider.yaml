@@ -88,7 +88,10 @@ parameters:
   - name: embedding_url
     type: string
     default: null
-    description: Base URL for embeddings endpoint (defaults to model URL)
+    description: >
+      Standalone embedding endpoint override. In Kubernetes, put embedding_url
+      and embedding_api-key in model.auth.secret_ref; the adapter uses the
+      projected sidecar URL and credential reference.
 
   - name: judge_model
     type: string
@@ -102,16 +105,17 @@ parameters:
     type: string
     default: null
     description: >
-      OpenAI-compatible base URL for the judge model (defaults to the evaluated
-      model URL). For OpenAI, use https://api.openai.com/v1.
+      Standalone judge endpoint override. In Kubernetes, put judge_url and
+      judge_api-key in model.auth.secret_ref; the adapter uses the projected
+      sidecar URL and credential reference.
 
   - name: judge_api_key
     type: string
     default: null
     description: >
-      Optional API key for the judge endpoint. Prefer injecting OPENAI_API_KEY
-      from a Kubernetes Secret or runtime environment; do not commit keys in
-      benchmark or job configuration.
+      Standalone judge key override or explicit sidecar credential reference.
+      In Kubernetes, use judge_api-key in model.auth.secret_ref. Real keys must
+      not be placed in benchmark or job configuration.
 
   - name: max_tokens
     type: integer

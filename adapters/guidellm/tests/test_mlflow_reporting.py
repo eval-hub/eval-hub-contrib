@@ -30,14 +30,15 @@ def test_main_reports_mlflow_run_id_before_completion(
         num_examples_evaluated=2,
         duration_seconds=0.1,
     )
-    adapter = SimpleNamespace(job_spec=job_spec)
+    adapter = SimpleNamespace(job_spec=job_spec, mlflow_artifacts=[])
     adapter.run_benchmark_job = Mock(return_value=results)
     callbacks = SimpleNamespace()
     events = []
 
-    def save(actual_results, actual_spec):
+    def save(actual_results, actual_spec, *, artifacts):
         assert actual_results is results
         assert actual_spec is job_spec
+        assert artifacts is adapter.mlflow_artifacts
         events.append("save")
         return run_id
 

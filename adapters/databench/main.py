@@ -26,6 +26,7 @@ from evalhub.adapter import (
     configure_telemetry,
 )
 from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
+from evalhub.adapter.mlflow import MlflowFileArtifact
 from evalhub.models import MetricSchema, ResultType
 
 from _evaluation import (
@@ -185,6 +186,10 @@ class DataBenchAdapter(FrameworkAdapter):
                 {"accuracy": accuracy, "num_examples": len(qa), **metadata}, indent=2
             )
         )
+        self.mlflow_artifacts = [
+            MlflowFileArtifact(file.relative_to(directory).as_posix(), file)
+            for file in sorted(directory.rglob("*")) if file.is_file()
+        ]
         callbacks.report_status(
             JobStatusUpdate(
                 status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS
@@ -230,6 +235,11 @@ def main() -> None:
     callbacks = DefaultCallbacks.from_adapter(adapter)
     try:
         result = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+        run_id = callbacks.mlflow.save(
+            result, adapter.job_spec, artifacts=adapter.mlflow_artifacts
+        )
+        if run_id:
+            result.mlflow_run_id = run_id
         callbacks.report_results(result)
     except Exception:
         callbacks.report_status(JobStatusUpdate(status=JobStatus.FAILED))
