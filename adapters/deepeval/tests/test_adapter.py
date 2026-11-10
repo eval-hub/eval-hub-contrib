@@ -15,6 +15,7 @@ import pytest
 from evalhub.adapter import JobCallbacks, JobPhase, OCIArtifactResult
 
 from main import (
+    _PRIMARY_METRIC,
     CONVERSATIONAL_BENCHMARKS,
     SINGLE_TURN_BENCHMARKS,
     DeepEvalAdapter,
@@ -711,11 +712,42 @@ def test_build_single_turn_test_cases_with_tools_called():
                     },
                 ]
             ),
+            "expected_tools": json.dumps(
+                [
+                    {
+                        "name": "search_flights",
+                        "input_parameters": {"origin": "JFK", "destination": "LAX"},
+                    },
+                ]
+            ),
         }
     ]
     cases = _build_single_turn_test_cases(records, "tool-correctness")
     assert len(cases) == 1
     assert cases[0].tools_called is not None
+    assert cases[0].expected_tools is not None
+
+
+@pytest.mark.integration
+def test_tool_correctness_requires_expected_tools():
+    """A record without expected_tools is skipped instead of failing the job.
+
+    ToolCorrectnessMetric raises MissingTestCaseParamsError for a case without
+    expected_tools, so the column is required rather than optional.
+    """
+    assert "expected_tools" in SINGLE_TURN_BENCHMARKS["tool-correctness"][
+        "required_columns"
+    ]
+    record = {
+        "input": "search for flights",
+        "actual_output": "Calling search_flights",
+        "tools_called": json.dumps([{"name": "search_flights"}]),
+    }
+    with pytest.raises(ValueError, match="No valid test cases"):
+        _build_single_turn_test_cases([record], "tool-correctness")
+    complete = {**record, "expected_tools": json.dumps([{"name": "search_flights"}])}
+    cases = _build_single_turn_test_cases([record, complete], "tool-correctness")
+    assert len(cases) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1065,11 +1097,11 @@ def test_json_correctness_enforces_format_keywords():
 
 @pytest.mark.integration
 def test_extract_results_hallucination_detected_flag():
-    """hallucination_detected=1 when score > 0.5."""
+    """hallucination_detected=1 when score < 0.5 (1.0 means fully grounded)."""
     from types import SimpleNamespace
 
     md = SimpleNamespace(
-        score=0.8, success=False, reason="Hallucinated", name="Hallucination"
+        score=0.2, success=False, reason="Hallucinated", name="Hallucination"
     )
     raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
     results, _ = _extract_results(raw, "hallucination")
@@ -1079,11 +1111,11 @@ def test_extract_results_hallucination_detected_flag():
 
 @pytest.mark.integration
 def test_extract_results_hallucination_not_detected_flag():
-    """hallucination_detected=0 when score <= 0.5."""
+    """hallucination_detected=0 when score >= 0.5."""
     from types import SimpleNamespace
 
     md = SimpleNamespace(
-        score=0.2, success=True, reason="Grounded", name="Hallucination"
+        score=0.8, success=True, reason="Grounded", name="Hallucination"
     )
     raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
     results, _ = _extract_results(raw, "hallucination")
@@ -1093,16 +1125,28 @@ def test_extract_results_hallucination_not_detected_flag():
 
 @pytest.mark.integration
 def test_extract_results_pii_detected_flag():
-    """pii_detected=1 when score > 0.5."""
+    """pii_detected=1 when score < 0.5 (1.0 means no PII found)."""
     from types import SimpleNamespace
 
     md = SimpleNamespace(
-        score=0.9, success=False, reason="SSN detected", name="PIILeakage"
+        score=0.1, success=False, reason="SSN detected", name="PIILeakage"
     )
     raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
     results, _ = _extract_results(raw, "pii-leakage")
     by_name = {r.metric_name: r.metric_value for r in results}
     assert by_name["pii_detected"] == 1
+
+
+@pytest.mark.integration
+def test_extract_results_pii_not_detected_flag():
+    """pii_detected=0 when score >= 0.5."""
+    from types import SimpleNamespace
+
+    md = SimpleNamespace(score=0.9, success=True, reason="clean", name="PIILeakage")
+    raw = SimpleNamespace(test_results=[SimpleNamespace(metrics_data=[md])])
+    results, _ = _extract_results(raw, "pii-leakage")
+    by_name = {r.metric_name: r.metric_value for r in results}
+    assert by_name["pii_detected"] == 0
 
 
 @pytest.mark.integration
@@ -1154,3 +1198,67 @@ def test_extract_results_capability_entry_for_rag():
     _, entries = _extract_results(raw, "faithfulness")
     assert any(isinstance(e, CapabilityEvalEntry) for e in entries)
     assert not any(isinstance(e, SafetyEvalEntry) for e in entries)
+
+
+# ---------------------------------------------------------------------------
+# provider.yaml contract and score direction
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_provider_declares_primary_score_for_every_benchmark():
+    """Each benchmark names its primary metric and a direction.
+
+    The server reads primary_score.lower_is_better to decide whether a value
+    passes its threshold, so a missing entry makes a bad run look good.
+    """
+    import yaml
+
+    provider_path = Path(__file__).parent.parent / "provider.yaml"
+    provider = yaml.safe_load(provider_path.read_text())
+    benchmarks = {b["id"]: b for b in provider["benchmarks"]}
+    assert set(benchmarks) == set(_PRIMARY_METRIC)
+    for benchmark_id, entry in benchmarks.items():
+        primary = entry["primary_score"]
+        assert primary["metric"] == _PRIMARY_METRIC[benchmark_id], benchmark_id
+        assert primary["lower_is_better"] is False, benchmark_id
+        assert entry["metrics"][0] == primary["metric"], benchmark_id
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "metric_name",
+    ["BiasMetric", "ToxicityMetric", "MisuseMetric", "PIILeakageMetric"],
+)
+def test_deepeval_safety_scores_are_higher_is_better(metric_name):
+    """Canary for the deepeval pin: no verdict flagged means score 1.0 and a pass.
+
+    deepeval 4.2.0 reversed bias, toxicity and misuse (and hallucination) from
+    lower-is-better. provider.yaml declares lower_is_better: false, so a bump
+    that flips the direction back must fail here first.
+    """
+    from deepeval import metrics
+    from deepeval.models import DeepEvalBaseLLM
+
+    class _Stub(DeepEvalBaseLLM):
+        def load_model(self):
+            return None
+
+        def generate(self, *args, **kwargs):
+            raise AssertionError("no judge call expected")
+
+        async def a_generate(self, *args, **kwargs):
+            raise AssertionError("no judge call expected")
+
+        def get_model_name(self):
+            return "stub"
+
+    extra = {"domain": "general"} if metric_name == "MisuseMetric" else {}
+    metric = getattr(metrics, metric_name)(model=_Stub(), threshold=0.5, **extra)
+    verdict = SimpleNamespace(verdict="no")
+    metric.verdicts = [verdict, verdict]
+    metric.score = metric._calculate_score()
+    metric.error = None
+    assert metric.score == 1.0
+    assert metric.is_successful() is True
+

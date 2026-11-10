@@ -169,7 +169,14 @@ SINGLE_TURN_BENCHMARKS: dict[str, dict[str, Any]] = {
     },
     "tool-correctness": {
         "class": ToolCorrectnessMetric,
-        "required_columns": ["input", "actual_output", "tools_called"],
+        # ToolCorrectnessMetric lists expected_tools in its required params; a
+        # record without it raises MissingTestCaseParamsError and fails the job.
+        "required_columns": [
+            "input",
+            "actual_output",
+            "tools_called",
+            "expected_tools",
+        ],
         "category": "agent",
         "ability": "agent",
     },
@@ -867,10 +874,11 @@ def _extract_results(
             )
         )
     elif benchmark_id == "hallucination":
+        # deepeval >= 4.2 scores these metrics higher-is-better (1.0 = no issue).
         results.append(
             EvaluationResult(
                 metric_name="hallucination_detected",
-                metric_value=1 if mean_score > 0.5 else 0,
+                metric_value=1 if mean_score < 0.5 else 0,
                 metric_type="int",
             )
         )
@@ -878,7 +886,7 @@ def _extract_results(
         results.append(
             EvaluationResult(
                 metric_name="pii_detected",
-                metric_value=1 if mean_score > 0.5 else 0,
+                metric_value=1 if mean_score < 0.5 else 0,
                 metric_type="int",
             )
         )
