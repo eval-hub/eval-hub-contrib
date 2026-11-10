@@ -1,0 +1,59 @@
+# RAGAS RAG Evaluation Collection
+#
+# ⚠️  RAGAS library in community-ragas:latest uses newer InstructorLLM API.
+#     The adapter calls AnswerRelevancy(llm=llm, embeddings=emb) which raises
+#     ValueError: "Collections metrics only support modern InstructorLLM."
+#     Fix: update /app/main.py in community-ragas to use the InstructorLLM factory.
+#     Dataset path /bundled-data/dataset.jsonl is confirmed correct (3 Q&A triples).
+#
+# ── Threshold Justification ──────────────────────────────────────────────────
+# RAGAS Faithfulness: measures whether the generated answer is grounded in the
+#   retrieved contexts. Score 0–1; 1.0 = fully grounded.
+#   Industry standard: faithfulness ≥ 0.50 for production RAG deployment.
+#   High-quality RAG pipelines: 0.75–0.95. Minimum viable: 0.50.
+#   Threshold 0.50 is the standard RAGAS deployment gate (RAGAS documentation).
+#
+# RAGAS Answer Relevancy: measures whether the answer addresses the question.
+#   Included in ragas_rag_default and ragas_rag_full; used as secondary signal.
+#
+# ── Weight Rationale ─────────────────────────────────────────────────────────
+# Weight 1.0 → ragas_rag_default: Core 5-metric suite; starting point.
+# Weight 2.0 → ragas_rag_full: Comprehensive 11-metric suite; primary signal.
+#
+# ── Global Pass Criteria ─────────────────────────────────────────────────────
+# faithfulness ≥ 0.50 from ragas_rag_full (when InstructorLLM fix is applied).
+
+name: ragas-rag
+description: >
+  RAGAS RAG evaluation collection. ragas_rag_default (5 metrics: faithfulness,
+  answer_relevancy, context_precision, context_recall, answer_correctness; threshold
+  faithfulness>=0.50 per RAGAS standard deployment gate, weight 1.0), ragas_rag_full
+  (11 metrics adding semantic_similarity, factual_correctness, noise_sensitivity, etc.;
+  same threshold, weight 2.0 — primary signal). Dataset: /bundled-data/dataset.jsonl
+  (3 Q&A triples, confirmed loading). WARNING: InstructorLLM API mismatch in
+  community-ragas:latest — both benchmarks fail until adapter is fixed.
+category: rag_evaluation
+tags: [ragas, rag, faithfulness, relevancy]
+
+benchmarks:
+  # RAG Default: 5 core metrics. Starting point for RAG quality assessment.
+  # faithfulness >= 0.50 per RAGAS deployment gate recommendation.
+  - id: ragas_rag_default
+    provider_id: ragas
+    weight: 1.0
+    parameters:
+      max_workers: 1
+      data_path: /bundled-data/dataset.jsonl
+    primary_score: {metric: faithfulness, lower_is_better: false}
+    pass_criteria: {threshold: 0.50}
+
+  # RAG Full: 11 comprehensive metrics. Primary quality gate.
+  # Adds semantic_similarity, factual_correctness, noise_sensitivity, response_groundedness.
+  - id: ragas_rag_full
+    provider_id: ragas
+    weight: 2.0
+    parameters:
+      max_workers: 1
+      data_path: /bundled-data/dataset.jsonl
+    primary_score: {metric: faithfulness, lower_is_better: false}
+    pass_criteria: {threshold: 0.50}

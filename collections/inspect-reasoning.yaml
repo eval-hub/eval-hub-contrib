@@ -1,0 +1,67 @@
+# Inspect AI — Reasoning Collection
+#
+# ⚠️  G9: community-inspect:latest uses Responses API for inspect-evals — all benchmarks
+# below currently fail on vLLM with BadRequestError. Thresholds are correct for when the
+# adapter is fixed (add responses_api: false to _routing.py for non-Petri benchmarks).
+# Petri benchmarks in inspect-alignment/inspect-safety are unaffected.
+#
+# ── Threshold Justification ──────────────────────────────────────────────────
+# GSM8K (Cobbe et al. 2021): Top-10 <80B: 90–96%. Typical 8B: 77–91%.
+#   Threshold 0.70 = lower bound competitive 8B per Open LLM Leaderboard v2.
+# BBH (Suzgun et al. 2023): Top-10 <80B: 75–87%. Typical 8B: 52–68%.
+#   Threshold 0.50 = bottom competitive 8B range. CoT not forced → scores below leaderboard.
+# HellaSwag (Zellers et al. 2019): Near-saturated. Top-10 <80B: 87–95%.
+#   Threshold 0.80 = sanity floor only.
+# WinoGrande (Sakaguchi et al. 2021): Top-10 <80B: 80–90%. Typical 8B: 73–82%.
+#   Threshold 0.65 per llm-stats.com lower bound. Random baseline = 50%.
+#
+# ── Weight Rationale ─────────────────────────────────────────────────────────
+# Weight 2.0 → gsm8k, bbh: Primary reasoning signals; mandatory gates.
+# Weight 1.0 → hellaswag, winogrande: Near-saturated; sanity floor only.
+#
+# ── Global Pass Criteria ─────────────────────────────────────────────────────
+# gsm8k ≥ 0.70 AND bbh ≥ 0.50 (both mandatory). Applies when G9 is fixed.
+
+name: inspect-reasoning
+description: >
+  Reasoning suite via Inspect AI (pending G9 fix — currently fails on vLLM).
+  GSM8K (Cobbe et al. 2021, threshold 0.70 = leaderboard lower bound, weight 2.0),
+  BBH (Suzgun et al. 2023, threshold 0.50 = bottom competitive 8B, weight 2.0),
+  HellaSwag (Zellers et al. 2019, threshold 0.80 = sanity floor, weight 1.0 —
+  near-saturated), WinoGrande (Sakaguchi et al. 2021, threshold 0.65 per leaderboard,
+  weight 1.0). Global PASS when fixed: gsm8k>=0.70 AND bbh>=0.50.
+category: reasoning
+tags: [reasoning, math, commonsense, inspect]
+
+benchmarks:
+  # GSM8K: grade-school math. Top-10 <80B: 90–96%. Threshold 0.70. Mandatory gate.
+  - id: inspect/gsm8k
+    provider_id: inspect
+    weight: 2.0
+    parameters: {max_samples: 50}
+    primary_score: {metric: match/accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.70}
+
+  # BBH: 23 hard multi-step reasoning tasks. Top-10 <80B: 75–87%. Threshold 0.50. Mandatory gate.
+  - id: inspect/bbh
+    provider_id: inspect
+    weight: 2.0
+    parameters: {max_samples: 50}
+    primary_score: {metric: bbh_scorer/all, lower_is_better: false}
+    pass_criteria: {threshold: 0.50}
+
+  # HellaSwag: commonsense NLI. Near-saturated. Threshold 0.80 = sanity floor.
+  - id: inspect/hellaswag
+    provider_id: inspect
+    weight: 1.0
+    parameters: {max_samples: 50}
+    primary_score: {metric: choice/accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.80}
+
+  # WinoGrande: Winograd schema. Top-10 <80B: 80–90%. Threshold 0.65.
+  - id: inspect/winogrande
+    provider_id: inspect
+    weight: 1.0
+    parameters: {max_samples: 50}
+    primary_score: {metric: choice/accuracy, lower_is_better: false}
+    pass_criteria: {threshold: 0.65}

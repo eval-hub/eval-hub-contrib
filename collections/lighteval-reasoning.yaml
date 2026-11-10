@@ -1,0 +1,52 @@
+# Lighteval — Reasoning Collection
+#
+# AIME competition math — generative scoring, confirmed working in standard image.
+# Only confirmed-working benchmarks included. Logprob benchmarks (hellaswag,
+# winogrande, arc:*) excluded — fail without PR #115 patched image.
+#
+# ── Threshold Justification ──────────────────────────────────────────────────
+# AIME 2024/2025: AMC/AIME competition math (15 problems each, pass@1).
+#   Top-10 <80B reasoning models: 30–70% (AIME24), 15–55% (AIME25).
+#   Standard instruction models <80B: 3–25%.
+#   Reasoning-tuned 8B (DeepSeek-R1-distill): up to 25–43% on AIME24.
+#   Contamination note: AIME24 scores may be inflated 10–20 pts vs. AIME25.
+#   Threshold 0.10 (~1.5 problems) = attainable floor for any model with
+#   basic competition-math capability; models scoring 0 lack this capability.
+#   score=0 expected for Qwen3-8B-FP8 without thinking mode.
+#
+# ── Weight Rationale ─────────────────────────────────────────────────────────
+# Both AIME benchmarks weighted 1.5 — high discriminating power; hardest included.
+#
+# ── Global Pass Criteria ─────────────────────────────────────────────────────
+# At least one of {aime24, aime25} ≥ 0.07 (≈ 1 problem correct).
+
+name: lighteval-reasoning
+description: >
+  Competition math via Lighteval — AIME 2024 and AIME 2025 (30 problems each,
+  generative pass@1 scoring, confirmed working in standard lighteval image). Both
+  threshold 0.10 = attainable floor for models with competition-math capability.
+  score=0 expected for Qwen3-8B-FP8 without thinking mode (AIME is very hard).
+  Contamination note: AIME24 may be inflated; prefer AIME25 for cleaner signal.
+  Logprob-based reasoning benchmarks (hellaswag, winogrande, arc) excluded —
+  require PR #115 patched image.
+category: reasoning
+tags: [reasoning, math, competition, lighteval]
+
+benchmarks:
+  # AIME 2024: 15 AMC competition problems. Top reasoning <80B: 30–70%.
+  # Standard instruction <80B: 3–25%. Threshold 0.10. Contamination risk noted.
+  - id: aime24
+    provider_id: lighteval
+    weight: 1.5
+    parameters: {max_samples: 30}
+    primary_score: {metric: "aime24|0.pass@k:k=1", lower_is_better: false}
+    pass_criteria: {threshold: 0.10}
+
+  # AIME 2025: Post-cutoff problems — lower contamination risk than AIME24.
+  # Top reasoning <80B: 15–55%. Threshold 0.10.
+  - id: aime25
+    provider_id: lighteval
+    weight: 1.5
+    parameters: {max_samples: 30}
+    primary_score: {metric: "aime25|0.pass@k:k=1&n=1", lower_is_better: false}
+    pass_criteria: {threshold: 0.10}

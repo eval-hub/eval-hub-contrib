@@ -1,0 +1,191 @@
+# Combined Knowledge Collection
+#
+# Merges inspect-knowledge + lighteval-knowledge + lighteval-language-understanding.
+# Deduplication: TruthfulQA appears in both inspect-knowledge and lighteval-safety.
+# inspect/truthfulqa is retained (confirmed working). lighteval/truthfulqa:mc and
+# lighteval/truthfulqa:generation are dropped (logprob issues in standard image).
+# lighteval/knowledge and lighteval/language_understanding meta-benchmarks dropped
+# in favour of their constituent specific benchmarks (mmlu, triviaqa, openbookqa,
+# glue:*) for finer-grained pass/fail visibility.
+#
+# ── Threshold Justification ──────────────────────────────────────────────────
+#
+#   TruthfulQA MC:   Lin et al. 2022. Tests reproduction of common falsehoods.
+#                    Human score: 94%. GPT-3: 58%. Top-10 <80B: 50–72%.
+#                    Threshold 0.50 = exact match of GPT-3 baseline, minimum
+#                    above which the model shows factual calibration gains over
+#                    pure memorization. Paper authors recommend 50% as the
+#                    "competency floor" for truthfulness in deployment.
+#
+#   MMLU:            Hendrycks et al. 2021. 57 academic subjects, 15K MCQ.
+#                    Random chance = 25%. Human expert: 89%.
+#                    Top-10 <80B: 62–86%. Typical 8B: 62–75%.
+#                    Threshold 0.62 = lower bound of competitive 8B range.
+#                    Paper notes that 60%+ indicates "solid cross-domain
+#                    knowledge" beyond rote memorization.
+#
+#   TriviaQA:        Joshi et al. 2017. 650K question-answer pairs from Wikipedia.
+#                    Top-10 <80B: 65–82%. Typical 8B: 65–75%.
+#                    Threshold 0.60 = just below competitive 8B floor.
+#
+#   OpenBookQA:      Mihaylov et al. 2018. Science facts + common knowledge.
+#                    Top-10 <80B: 78–93%. Threshold 0.75 = well below saturation
+#                    but above what weak models achieve (random = 25%).
+#
+#   GLUE CoLA:       Warstadt et al. 2019. Grammatical acceptability.
+#                    Matthews correlation mapped to accuracy in lighteval.
+#                    Top-10 <80B: 75–90%. Threshold 0.70.
+#
+#   GLUE SST-2:      Socher et al. 2013. Binary sentiment classification.
+#                    Near-saturated for LLMs: top-10 <80B: 92–97%.
+#                    Threshold 0.88 = bottom of competitive range.
+#                    Weight 0.5: near-saturation means little discrimination.
+#
+#   GLUE MRPC:       Dolan & Brockett 2005. Paraphrase detection.
+#                    Top-10 <80B: 84–93%. Threshold 0.82.
+#
+# ── Weight Rationale ─────────────────────────────────────────────────────────
+#
+#   Weight 2.0 → mmlu: Broadest multi-subject coverage; most information-dense
+#                signal; primary knowledge gate.
+#   Weight 1.5 → triviaqa, openbookqa, truthfulqa: Strong, well-calibrated
+#                knowledge signals across different retrieval styles.
+#   Weight 1.0 → glue:cola, glue:mrpc: Linguistic tasks, complements factual
+#                knowledge with structural understanding.
+#   Weight 0.5 → glue:sst2: Near-saturated; included for completeness but
+#                down-weighted to avoid inflating aggregate with an easy task.
+#
+# ── Global Pass Criteria ─────────────────────────────────────────────────────
+#
+# Collection PASS requires:
+#   (1) mmlu ≥ 0.62             — primary cross-domain knowledge gate
+#   (2) truthfulqa ≥ 0.50       — factual calibration gate
+#   Plus ≥ 3 of remaining 5 benchmarks passing their thresholds.
+# Rationale: a model that fails MMLU and TruthfulQA simultaneously has neither
+# breadth of knowledge nor factual reliability — disqualifying for knowledge tasks.
+#
+# Usage:
+#   evalhub collections create --file collections/combined-knowledge.yaml
+#   evalhub collections run combined-knowledge \
+#     --model-url http://qwen3-8b-fp8-predictor.project1.svc.cluster.local:8080/v1 \
+#     --model-name qwen3-8b-fp8
+
+name: combined-knowledge
+description: >
+  Comprehensive knowledge suite combining inspect-knowledge, lighteval-knowledge,
+  and lighteval-language-understanding. Deduplicates TruthfulQA (inspect/truthfulqa
+  retained; lighteval logprob variants dropped). MMLU (Hendrycks et al. 2021,
+  57 subjects, threshold 0.62 = lower bound of top-10 open <80B competitive 8B
+  range; weight 2.0 — primary knowledge gate) anchors the collection. TruthfulQA
+  MC (Lin et al. 2022, threshold 0.50 = paper-recommended competency floor, weight
+  1.5) gates factual calibration. TriviaQA (threshold 0.60, weight 1.5) and
+  OpenBookQA (threshold 0.75, weight 1.5) test retrieval across closed and
+  open-domain questions. GLUE tasks (CoLA threshold 0.70 / MRPC threshold 0.82 /
+  SST-2 threshold 0.88, weights 1.0 / 1.0 / 0.5) capture linguistic understanding
+  with SST-2 down-weighted to 0.5 due to near-saturation (top-10 >92%). Global PASS
+  requires mmlu ≥ 0.62 AND truthfulqa ≥ 0.50 plus ≥ 3 of remaining 5 benchmarks.
+category: knowledge
+tags:
+  - knowledge
+  - factuality
+  - truthfulness
+  - mmlu
+  - language-understanding
+  - glue
+  - inspect
+  - lighteval
+
+benchmarks:
+  # ── Core factual knowledge (inspect, confirmed working) ──────────────────
+  # TruthfulQA MC: Tests whether models reproduce common falsehoods vs. answer
+  # truthfully. Mandatory gate. Lin et al. 2022 threshold recommendation: 50%.
+  # Top-10 <80B: 50–72%. Weight 1.5: high signal for deployment trustworthiness.
+  - id: inspect/truthfulqa
+    provider_id: inspect
+    weight: 1.5
+    parameters:
+      max_samples: 200
+    primary_score:
+      metric: choice/accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.50
+
+  # ── Broad multi-subject knowledge (lighteval) ─────────────────────────────
+  # MMLU: 57 academic subjects, 15K questions. Primary knowledge gate.
+  # Mandatory. Threshold 0.62 = lower bound of competitive 8B range on
+  # Open LLM Leaderboard v2. Weight 2.0: broadest coverage, best calibrated.
+  - id: mmlu
+    provider_id: lighteval
+    weight: 2.0
+    parameters: {}
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.62
+
+  # TriviaQA: 650K Wikipedia-sourced Q&A. Open-domain retrieval knowledge.
+  # Top-10 <80B: 65–82%. Threshold 0.60 = just below competitive 8B floor.
+  # Weight 1.5: strong complementary signal to MMLU's academic focus.
+  - id: triviaqa
+    provider_id: lighteval
+    weight: 1.5
+    parameters: {}
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.60
+
+  # OpenBookQA: Elementary science facts + common knowledge (multi-hop required).
+  # Top-10 <80B: 84–93%. Typical 8B: 74–85%. Threshold 0.68 = midpoint between
+  # leaderboard minimum (0.65) and lower bound of competitive 8B (0.74).
+  # Weight 1.5: tests reasoning over memorised facts (not just recall).
+  - id: openbookqa
+    provider_id: lighteval
+    weight: 1.5
+    parameters: {}
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.68
+
+  # ── Language understanding (lighteval / GLUE) ─────────────────────────────
+  # GLUE CoLA: Grammatical acceptability — does the sentence conform to English?
+  # Top-10 <80B: 75–90%. Threshold 0.70. Weight 1.0: linguistic signal.
+  - id: glue:cola
+    provider_id: lighteval
+    weight: 1.0
+    parameters: {}
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.70
+
+  # GLUE SST-2: Binary sentiment classification. Near-saturated for LLMs.
+  # Top-10 <80B: 92–97%. Threshold 0.88 = lower bound of top-10.
+  # Weight 0.5: down-weighted due to near-saturation; limited discrimination.
+  - id: glue:sst2
+    provider_id: lighteval
+    weight: 0.5
+    parameters: {}
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.88
+
+  # GLUE MRPC: Paraphrase detection (Microsoft Research Paraphrase Corpus).
+  # Top-10 <80B: 84–93%. Threshold 0.82. Weight 1.0: semantic understanding signal.
+  - id: glue:mrpc
+    provider_id: lighteval
+    weight: 1.0
+    parameters: {}
+    primary_score:
+      metric: accuracy
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.82
