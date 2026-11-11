@@ -6,10 +6,21 @@
 [allowlist]
   description = "Synthetic model-auth credential references used by routing tests"
 
-  # These are lookup references resolved by the sidecar, with no credentials in
-  # their values. Match the exact references, either extracted or quoted in a
-  # source line, without excluding test files or entire commits.
+  # These lookup references contain no credentials. Match only the complete
+  # extracted values when the scanner checks secrets (the Gitleaks v8 default).
+  # Gitleaks v7 checks whole source lines, so allow only the known fixture
+  # statements below, with optional indentation and trailing horizontal space.
+  # Keep every expression anchored: another credential before or after a
+  # reference, including in a comment, must not make that line allowlisted.
+  # Do not exclude entire files or commits.
   regexes = [
-    '''(^|["'])judge_api-key:ref(["']|$)''',
-    '''(^|["'])embedding_api-key:ref(["']|$)''',
+    '''^judge_api-key:ref$''',
+    '''^embedding_api-key:ref$''',
+    '''^[ \t]*secret_key = "judge_api-key:ref"[ \t]*$''',
+    '''^[ \t]*monkeypatch\.setattr\(main_module, "read_model_auth_key", \{"judge_api-key": "judge_api-key:ref"\}\.get\)[ \t]*$''',
+    '''^[ \t]*projected\.update\(\{"judge_api-key": "judge_api-key:ref", "judge_url": "http://localhost:8080/judge/v1"\}\)[ \t]*$''',
+    '''^[ \t]*"_model_auth\.read_model_auth_key", \{"judge_api-key": "judge_api-key:ref"\}\.get[ \t]*$''',
+    '''^[ \t]*monkeypatch\.setattr\("_model_auth\.read_model_auth_key", \{"judge_api-key": "judge_api-key:ref", "judge_url": "http://localhost:8080/judge/v1"\}\.get\)[ \t]*$''',
+    '''^[ \t]*"judge_api-key": "judge_api-key:ref",[ \t]*$''',
+    '''^[ \t]*"embedding_api-key": "embedding_api-key:ref",[ \t]*$''',
   ]
