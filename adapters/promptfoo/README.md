@@ -190,3 +190,22 @@ To exercise the real CLI locally (requires Node.js and a reachable model endpoin
 npm install -g promptfoo@0.123.1
 EVALHUB_MODE=local EVALHUB_JOB_SPEC_PATH=meta/job.json .venv/bin/python main.py
 ```
+
+## Model-role authentication
+
+All auxiliary model credentials and endpoints come from `model.auth.secret_ref`.
+Use `<role>_api-key` and optional `<role>_url` entries in that Secret; model IDs
+remain benchmark parameters. When a role has no entries, it reuses `model.url`
+and the primary `api-key` from the same Secret. A role URL requires its matching
+role key, even when the real key equals the primary key. Kubernetes adapters see
+only projected references and localhost URLs; the sidecar selects the upstream
+and injects its credential. Local jobs use the SDK's `file:///` auth directory.
+
+Inline role URLs/keys are ignored. Role credentials and endpoints are not read
+from environment variables. See [model-role authentication](../../docs/model-role-auth.md)
+for the Secret layout, supported roles, migration, and sidecar limitations.
+Connection overrides in passthrough YAML, test grader options, and red-team
+strategy settings are removed before invoking Promptfoo. Test variables and
+prompt content remain unchanged.
+
+Generation uses `generation_provider_api-key`/`generation_provider_url`; grading uses `judge_api-key`/`judge_url`. Model selection stays in `generation_provider` and optional `judge_model` as `openai:chat:<model>` IDs. Red-team generation defaults to the target model; grading defaults to the generation model, using its own Secret connection.

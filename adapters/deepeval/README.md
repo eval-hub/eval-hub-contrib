@@ -139,7 +139,6 @@ make push-deepeval REGISTRY=quay.io/your-org VERSION=v1.0.0
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `eval_model_name` | string | No | model.name | Judge model name (e.g. `microsoft-phi-4`, `gpt-4o`). Defaults to the evaluated model. |
-| `eval_model_url` | string | No | model.url | Judge model base URL. Defaults to the evaluated model's URL. |
 | `threshold` | float | No | `0.5` | Minimum pass threshold for metric scores |
 | `dataset_format` | string | No | `csv` | Input dataset format: `csv`, `jsonl`, or `json`. Use `jsonl` for multi-turn benchmarks. |
 | `data_dir` | string | No | - | Path to dataset directory (overridden by `/test_data` or `/data` mounts) |
@@ -167,3 +166,25 @@ make push-deepeval REGISTRY=quay.io/your-org VERSION=v1.0.0
 - [DeepEval](https://github.com/confident-ai/deepeval)
 - [DeepEval Documentation](https://docs.confident-ai.com)
 - [eval-hub](https://github.com/eval-hub/eval-hub) / [eval-hub-sdk](https://github.com/eval-hub/eval-hub-sdk)
+
+## Model-role authentication
+
+All auxiliary model credentials and endpoints come from `model.auth.secret_ref`.
+Use `<role>_api-key` and optional `<role>_url` entries in that Secret; model IDs
+remain benchmark parameters. When a role has no entries, it reuses `model.url`
+and the primary `api-key` from the same Secret. A role URL requires its matching
+role key, even when the real key equals the primary key. Kubernetes adapters see
+only projected references and localhost URLs; the sidecar selects the upstream
+and injects its credential. Local jobs use the SDK's `file:///` auth directory.
+
+Legacy inline role URLs/keys are ignored, whether or not role entries exist in
+the Secret. They never override or fill in missing Secret values. With no role
+entries, the primary Secret connection is reused as described above.
+Role credentials and endpoints are not read from environment variables.
+See [model-role authentication](../../docs/model-role-auth.md)
+for the Secret layout, supported roles, migration, and sidecar limitations.
+
+Select the judge model with `eval_model_name`. Its connection uses
+`judge_api-key`/`judge_url`. Legacy `eval_model_url`, `judge_url`,
+`judge_base_url`, and `judge_api_key` parameters are ignored. Only the Secret
+values configure the auxiliary connection.
