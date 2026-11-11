@@ -607,13 +607,20 @@ def test_compute_overall_score_empty_returns_none():
 import yaml  # noqa: E402
 
 from _execution import build_cmd, build_env  # noqa: E402
-from _tasks import is_code_execution, requires_completions_endpoint  # noqa: E402
+from _tasks import (  # noqa: E402
+    UNSUPPORTED_BENCHMARKS,
+    is_code_execution,
+    requires_completions_endpoint,
+)
 
 _TESTS_DIR = Path(__file__).resolve().parent
 _ADAPTER_DIR = _TESTS_DIR.parent
 # Snapshot of benchmark IDs in the lm_evaluation_harness (LMEvalJob) provider: the
 # RHOAI 3.5 live list (188) unioned with eval-hub server main (167).
 _LMEVALJOB_IDS = (_TESTS_DIR / "lmevaljob_benchmark_ids.txt").read_text().split()
+# The catalog IDs this adapter offers: everything except the ones it deliberately
+# refuses (UNSUPPORTED_BENCHMARKS, each with a reason).
+_OFFERED_LMEVALJOB_IDS = [i for i in _LMEVALJOB_IDS if i not in UNSUPPORTED_BENCHMARKS]
 
 
 def test_lmevaljob_snapshot_has_expected_size():
@@ -622,14 +629,31 @@ def test_lmevaljob_snapshot_has_expected_size():
 
 
 def test_provider_yaml_exposes_every_lmevaljob_benchmark():
-    """provider.yaml is a superset of the LMEvalJob provider's benchmark IDs."""
+    """provider.yaml is a superset of the LMEvalJob IDs the adapter offers."""
     provider = yaml.safe_load((_ADAPTER_DIR / "provider.yaml").read_text())
     exposed = [b["id"] for b in provider["benchmarks"]]
     assert len(exposed) == len(set(exposed)), "duplicate benchmark IDs"
-    assert set(_LMEVALJOB_IDS) <= set(exposed)
+    assert set(_OFFERED_LMEVALJOB_IDS) <= set(exposed)
 
 
-@pytest.mark.parametrize("benchmark_id", _LMEVALJOB_IDS)
+def test_unsupported_benchmarks_are_catalog_ids_and_not_exposed():
+    """Every refused ID is a real catalog ID, and none sneaks back into the manifest."""
+    provider = yaml.safe_load((_ADAPTER_DIR / "provider.yaml").read_text())
+    exposed = {b["id"] for b in provider["benchmarks"]}
+    assert set(UNSUPPORTED_BENCHMARKS) <= set(_LMEVALJOB_IDS)
+    assert not set(UNSUPPORTED_BENCHMARKS) & exposed
+    assert len(_OFFERED_LMEVALJOB_IDS) == len(_LMEVALJOB_IDS) - len(UNSUPPORTED_BENCHMARKS)
+
+
+@pytest.mark.parametrize("benchmark_id", sorted(UNSUPPORTED_BENCHMARKS))
+def test_unsupported_benchmark_fails_with_the_reason(benchmark_id):
+    """A collection that still names pile_* gets the reason, not 'Unknown benchmark'."""
+    for requested in (benchmark_id, f"lm-eval/{benchmark_id}"):
+        with pytest.raises(ValueError, match="not offered.*the-eye.eu.*pile_10k"):
+            resolve_tasks(requested, None)
+
+
+@pytest.mark.parametrize("benchmark_id", _OFFERED_LMEVALJOB_IDS)
 def test_every_lmevaljob_benchmark_resolves(benchmark_id):
     """Each LMEvalJob ID resolves to its lm-eval task (code-exec ones need opt-in)."""
     task = resolve_tasks(benchmark_id, None, allow_code_execution=True)

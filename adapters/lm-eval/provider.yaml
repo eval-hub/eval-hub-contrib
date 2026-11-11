@@ -30,9 +30,10 @@ agent:
   summary: >-
     EleutherAI lm-evaluation-harness — academic accuracy benchmarks (MMLU, GSM8K,
     HellaSwag, BBH, GPQA, IFEval, etc.) against any OpenAI-compatible endpoint.
-    No local model loading. 214 benchmarks: 21 curated (lm-eval/*) plus 193 under
+    No local model loading. 208 benchmarks: 21 curated (lm-eval/*) plus 187 under
     the same bare IDs as the LMEvalJob-based lm_evaluation_harness provider
-    (RHOAI 3.5 live list unioned with server main).
+    (RHOAI 3.5 live list unioned with server main), minus the six pile_* IDs
+    (see the note above the bare-ID section).
   complements:
     - guidellm
     - inspect
@@ -531,12 +532,22 @@ benchmarks:
     tags: [custom, lm-eval]
 
   # -------------------------------------------------------------------------
-  # LMEvalJob-compatible benchmarks (193)
+  # LMEvalJob-compatible benchmarks (187 of the server's 193)
   #
   # Same IDs as the server's ``lm_evaluation_harness`` provider (bare lm-eval
   # task names), so existing collections and job specs can target this adapter
-  # by changing only provider_id. Union of the RHOAI 3.5 live provider and server main; generated from lm-eval 0.4.13 task configs;
-  # see _lmevaljob_tasks.py for how each ID is routed.
+  # by changing only provider_id. Union of the RHOAI 3.5 live provider and server
+  # main; generated from lm-eval 0.4.13 task configs; see _benchmarks.py for how
+  # each ID is routed.
+  #
+  # Deliberately not offered: pile_arxiv, pile_freelaw, pile_hackernews,
+  # pile_openwebtext2, pile_ubuntu-irc, pile_youtubesubtitles. They load
+  # EleutherAI/pile, a dataset script whose data host (the-eye.eu) no longer
+  # serves the files (val/test return 404 as of 2026-11-11; the original Pile was
+  # taken down), so they cannot run with any datasets version. They stay out of
+  # the manifest so a job fails at startup with that reason instead of after the
+  # model is loaded. For perplexity on Pile text use pile_10k (NeelNanda/pile-10k)
+  # through lm-eval/custom. See UNSUPPORTED_BENCHMARKS in _tasks.py.
   # -------------------------------------------------------------------------
 
   - id: arc_easy
@@ -3993,144 +4004,6 @@ benchmarks:
         meaning: Meets default pass threshold (100 or below; lower is better)
       - range: 100+
         meaning: Above default pass threshold
-  - id: pile_arxiv
-    url: null
-    name: Academic paper modeling
-    description: 'Measures how well the model predicts scientific paper text from ArXiv.
-
-      Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
-      endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
-    category: language_modeling
-    num_few_shot: 0
-    dataset_size: 210000000
-    tags:
-    - language_modeling
-    - lm_eval
-    - requires-completions
-    - lmevaljob-compatible
-    agent:
-      result_interpretation: Accuracy; lower is better.
-      score_ranges:
-      - range: 0.0-0.25
-        meaning: Meets default pass threshold (0.25 or below)
-      - range: 0.25+
-        meaning: Above default pass threshold
-    metrics: [word_perplexity, byte_perplexity, bits_per_byte]
-    primary_score:
-      metric: word_perplexity
-      lower_is_better: true
-    pass_criteria:
-      threshold: 100
-  - id: pile_freelaw
-    url: null
-    name: Legal document modeling
-    description: 'Measures how well the model predicts legal text from FreeLaw.
-
-      Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
-      endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
-    category: language_modeling
-    num_few_shot: 0
-    dataset_size: 210000000
-    tags:
-    - language_modeling
-    - lm_eval
-    - requires-completions
-    - lmevaljob-compatible
-    agent: null
-    metrics: [word_perplexity, byte_perplexity, bits_per_byte]
-    primary_score:
-      metric: word_perplexity
-      lower_is_better: true
-    pass_criteria:
-      threshold: 100
-  - id: pile_hackernews
-    url: null
-    name: Tech discussion modeling
-    description: 'Measures how well the model predicts Hacker News discussion text.
-
-      Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
-      endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
-    category: language_modeling
-    num_few_shot: 0
-    dataset_size: 210000000
-    tags:
-    - language_modeling
-    - lm_eval
-    - requires-completions
-    - lmevaljob-compatible
-    agent: null
-    metrics: [word_perplexity, byte_perplexity, bits_per_byte]
-    primary_score:
-      metric: word_perplexity
-      lower_is_better: true
-    pass_criteria:
-      threshold: 100
-  - id: pile_openwebtext2
-    url: null
-    name: Web text modeling
-    description: 'Measures how well the model predicts curated web text.
-
-      Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
-      endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
-    category: language_modeling
-    num_few_shot: 0
-    dataset_size: 210000000
-    tags:
-    - language_modeling
-    - lm_eval
-    - requires-completions
-    - lmevaljob-compatible
-    agent: null
-    metrics: [word_perplexity, byte_perplexity, bits_per_byte]
-    primary_score:
-      metric: word_perplexity
-      lower_is_better: true
-    pass_criteria:
-      threshold: 100
-  - id: pile_ubuntu-irc
-    url: null
-    name: Technical chat modeling
-    description: 'Measures how well the model predicts Ubuntu IRC technical chat.
-
-      Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
-      endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
-    category: language_modeling
-    num_few_shot: 0
-    dataset_size: 210000000
-    tags:
-    - language_modeling
-    - lm_eval
-    - requires-completions
-    - lmevaljob-compatible
-    agent: null
-    metrics: [word_perplexity, byte_perplexity, bits_per_byte]
-    primary_score:
-      metric: word_perplexity
-      lower_is_better: true
-    pass_criteria:
-      threshold: 100
-  - id: pile_youtubesubtitles
-    url: null
-    name: Spoken language modeling
-    description: 'Measures how well the model predicts YouTube video subtitle text.
-
-      Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
-      endpoints. Perplexity (loglikelihood_rolling) task: set the ''tokenizer'' parameter for accurate windowing.'
-    category: language_modeling
-    num_few_shot: 0
-    dataset_size: 210000000
-    tags:
-    - language_modeling
-    - lm_eval
-    - requires-completions
-    - lmevaljob-compatible
-    agent: null
-    metrics: [word_perplexity, byte_perplexity, bits_per_byte]
-    primary_score:
-      metric: word_perplexity
-      lower_is_better: true
-    pass_criteria:
-      threshold: 100
   - id: wikitext
     url: null
     name: Wikipedia article modeling
@@ -6049,7 +5922,7 @@ parameters:
     default: false
     description: >
       Pass --trust_remote_code to lm-eval so datasets that ship a loading script
-      on the Hugging Face Hub (e.g. pile_*, cmmlu_*, aclue_*, qasper, ethics_cm)
+      on the Hugging Face Hub (e.g. cmmlu_*, aclue_*, qasper, ethics_cm)
       can load. Off by default; enable only for datasets you trust.
       Mirrors LMEvalJob's allowOnline/trustRemoteCode behaviour.
 

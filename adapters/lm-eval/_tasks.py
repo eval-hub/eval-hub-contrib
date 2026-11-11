@@ -50,6 +50,28 @@ COMPOSITE_SUITES: dict[str, list[str]] = {
 }
 
 
+# Benchmark IDs the server's ``lm_evaluation_harness`` provider lists but this
+# adapter deliberately does not offer, with the reason shown to the user. They are
+# kept out of provider.yaml, so ``resolve_tasks`` is the only place that can say why.
+_PILE_REASON = (
+    "it loads EleutherAI/pile, a dataset script whose data host (the-eye.eu) no "
+    "longer serves the files (the original Pile was taken down), so it cannot run "
+    "with any datasets version. For perplexity on Pile text, run pile_10k "
+    "(NeelNanda/pile-10k) through lm-eval/custom with task=pile_10k"
+)
+UNSUPPORTED_BENCHMARKS: dict[str, str] = {
+    f"pile_{subset}": _PILE_REASON
+    for subset in (
+        "arxiv",
+        "freelaw",
+        "hackernews",
+        "openwebtext2",
+        "ubuntu-irc",
+        "youtubesubtitles",
+    )
+}
+
+
 def task_for(benchmark_id: str) -> str | None:
     """Return the lm-eval task for a benchmark ID, or None if it is not in the table.
 
@@ -136,6 +158,10 @@ def resolve_tasks(
     task = task_for(benchmark_id)
     if task is not None:
         return task
+
+    unsupported = UNSUPPORTED_BENCHMARKS.get(benchmark_id.removeprefix("lm-eval/"))
+    if unsupported:
+        raise ValueError(f"Benchmark '{benchmark_id}' is not offered: {unsupported}.")
 
     curated = sorted(i for i in BENCHMARKS if i.startswith("lm-eval/"))
     suites = sorted(COMPOSITE_SUITES) + ["lm-eval/custom"]
