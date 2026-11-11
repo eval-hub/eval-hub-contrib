@@ -95,12 +95,21 @@ parameters:
   - name: batch_size
     type: integer
     default: 32
-    description: Batch size for encoding
+    description: Positive integer batch size for encoding
+
+  - name: num_examples
+    type: integer
+    default: null
+    description: >-
+      Maximum evaluation examples per task; null evaluates the full dataset.
+      Retrieval limits queries and qrels but still processes the full corpus.
 
   - name: device
     type: string
     default: null
-    description: Device override (cuda, cpu, mps, cuda:0)
+    description: >-
+      Optional device override: cpu, mps, cuda, or cuda:<index>. Omit to let
+      MTEB choose the device.
 
   - name: languages
     type: array
