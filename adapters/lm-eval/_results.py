@@ -53,6 +53,27 @@ def parse_results_file(results_file: Path) -> dict[str, Any]:
 #: lm-eval's filter name for results that were not post-processed by a filter.
 _UNFILTERED = "none"
 
+#: Filters preferred, in order, for the bare-name alias when a metric exists only
+#: under several filters. ``strict-match`` checks that the answer has the exact
+#: template of the few-shot examples ("#### 42"), so it measures format
+#: compliance as much as capability: a chat model run zero-shot (no examples to
+#: copy) scored 0.00 strict-match and 0.75 flexible-extract on GSM8K. Which filter
+#: a task lists first is an arbitrary choice of its author (gsm8k lists
+#: strict-match first, gsm8k_platinum_cot_llama and the bbh_cot_zeroshot tasks differ),
+#: so "first" is not a usable rule. The pass/fail verdict therefore uses
+#: ``flexible-extract`` (the last number in the answer); every filter stays
+#: reported under its qualified name (``gsm8k.exact_match,strict-match``).
+_PREFERRED_FILTERS = ("flexible-extract",)
+
+
+def _alias_rank(filter_name: str) -> int:
+    """Lower wins: unfiltered, then a preferred filter, then whatever came first."""
+    if filter_name == _UNFILTERED:
+        return 0
+    if filter_name in _PREFERRED_FILTERS:
+        return 1 + _PREFERRED_FILTERS.index(filter_name)
+    return 1 + len(_PREFERRED_FILTERS)
+
 
 def extract_evaluation_results(
     raw: dict[str, Any], primary_task: str | None = None
@@ -71,8 +92,8 @@ def extract_evaluation_results(
     Its metrics are additionally emitted under the bare metric name (``acc_norm``),
     the form the LMEvalJob-based ``lm_evaluation_harness`` provider reports and
     that this provider's ``primary_score.metric`` declares. When a metric exists
-    under several filters the unfiltered value wins, otherwise the first filter
-    lm-eval reported (GSM8K: ``strict-match``).
+    under several filters the unfiltered value wins, then ``flexible-extract``
+    (see ``_PREFERRED_FILTERS``), otherwise the first filter lm-eval reported.
     """
     out: list[EvaluationResult] = []
     results_section = raw.get("results", {})
@@ -133,9 +154,7 @@ def extract_evaluation_results(
 
             if primary_task is not None and clean_task == primary_task:
                 kept = primary.get(metric_base)
-                if kept is None or (
-                    filter_name == _UNFILTERED and kept[0] != _UNFILTERED
-                ):
+                if kept is None or _alias_rank(filter_name) < _alias_rank(kept[0]):
                     primary[metric_base] = (filter_name, result.metric_name, result)
 
     # Bare-name aliases for the benchmark's own task. num_samples is left unset
@@ -188,23 +207,61 @@ def _task_num_samples(raw: dict[str, Any], task_name: str) -> int | None:
     return None
 
 
-def compute_overall_score(results: list[EvaluationResult]) -> float | None:
-    """Return a representative score normalised to [0, 1].
+_PRIORITY_METRICS = ("acc", "exact_match", "pass@1", "accuracy")
 
-    Prefers canonical accuracy metrics; falls back to the first numeric value.
-    The EvalHub service selects the primary metric from the Evaluation Collection
-    YAML — this value is only used for logging and MLflow tracking.
+
+def headline_result(results: list[EvaluationResult]) -> EvaluationResult | None:
+    """The result that stands for the benchmark in the EvalCard and the logs.
+
+    A canonical accuracy metric (``_PRIORITY_METRICS``) wins; among those, the
+    benchmark's own bare-name alias comes before a per-task row, and the filter
+    follows ``_alias_rank`` so the card agrees with the verdict (a zero-shot GSM8K
+    run is flexible-extract 0.75 in both, not strict-match 0.00 in the card).
+    Without a canonical metric, the first numeric result that is an alias, else
+    the first numeric result.
     """
-    _PRIORITY_SUFFIXES = ("acc", "exact_match", "pass@1", "accuracy")
-    for suffix in _PRIORITY_SUFFIXES:
-        for r in results:
-            if r.metric_name.endswith(f".{suffix}"):
-                v = float(r.metric_value)
-                return v / 100.0 if v > 1.0 else v
-    # Fallback: first numeric result
-    for r in results:
-        v = r.metric_value
-        if isinstance(v, (int, float)):
-            v = float(v)
-            return v / 100.0 if v > 1.0 else v
-    return None
+    best: tuple[tuple[int, int, int, int], EvaluationResult] | None = None
+    for order, r in enumerate(results):
+        if not isinstance(r.metric_value, (int, float)):
+            continue
+        meta = r.metadata or {}
+        base = meta.get("metric") or r.metric_name.rsplit(".", 1)[-1].split(",")[0]
+        priority = (
+            _PRIORITY_METRICS.index(base)
+            if base in _PRIORITY_METRICS
+            else len(_PRIORITY_METRICS)
+        )
+        is_alias = "alias_of" in meta
+        key = (
+            priority,
+            0 if is_alias else 1,
+            _alias_rank(meta.get("filter", _UNFILTERED)),
+            order,
+        )
+        if best is None or key < best[0]:
+            best = (key, r)
+    return best[1] if best else None
+
+
+def headline_metric_name(results: list[EvaluationResult]) -> str:
+    """Label of ``headline_result`` for the EvalCard (``acc`` if there is none)."""
+    r = headline_result(results)
+    if r is None:
+        return "acc"
+    if "alias_of" in (r.metadata or {}):
+        return r.metric_name
+    parts = r.metric_name.rsplit(".", 1)
+    return parts[1] if len(parts) == 2 else "acc"
+
+
+def compute_overall_score(results: list[EvaluationResult]) -> float | None:
+    """Return a representative score normalised to [0, 1] (see ``headline_result``).
+
+    The EvalHub service selects the primary metric from the Evaluation Collection
+    YAML — this value is only used for the EvalCard, logging and MLflow tracking.
+    """
+    r = headline_result(results)
+    if r is None:
+        return None
+    v = float(r.metric_value)
+    return v / 100.0 if v > 1.0 else v

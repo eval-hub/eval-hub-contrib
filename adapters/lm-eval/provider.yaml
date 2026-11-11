@@ -89,6 +89,23 @@ runtime:
     memory_limit: 4Gi
   # local: not supported — this adapter requires the lm-eval container (k8s only)
 
+# ── Pass thresholds ────────────────────────────────────────────────────────────
+# pass_criteria.threshold is a floor, not a quality bar. It separates "the run
+# works and the model is clearly better than guessing" from "something is broken
+# (wrong chat template, truncated output, answers not extracted) or the model is
+# at chance". Set a real acceptance bar per job or collection.
+#   * Multiple-choice benchmarks (loglikelihood): chance + 0.10, rounded to the
+#     nearest 0.05. Chance was measured on the benchmark's own dataset (mean of
+#     1/#options, or the majority-class rate where the answers are skewed) and is
+#     stated on each curated entry below (measured 2026-11-10).
+#   * Free-form exact-match benchmarks: chance is ~0, so the floor only detects a
+#     dead pipeline. It is set low and says so on the entry.
+#   * Entries that mirror the server's lm_evaluation_harness catalog keep its
+#     threshold (151 of its 225 entries use a blanket 0.25), so a collection gets
+#     the same verdict from either provider. The exceptions are the bare twins of
+#     curated entries, which are kept equal to them (a test enforces it); the
+#     server value there is at or below chance.
+
 benchmarks:
   # -------------------------------------------------------------------------
   # Generation tasks — generate_until output type.
@@ -100,7 +117,11 @@ benchmarks:
     description: >
       Grade school math word problems requiring multi-step arithmetic reasoning.
       8,500 problems; scored by exact-match on the final numeric answer.
-      5-shot by default.
+      5-shot by default. Two filters are reported: strict-match (answer must use
+      the few-shot "#### N" template) and flexible-extract (last number in the
+      answer). The pass/fail score is flexible-extract, because strict-match
+      measures format compliance and is 0 for a model that was not shown the
+      template (zero-shot chat); both are reported under their qualified names.
     category: reasoning
     metrics: [exact_match]
     tags: [generation-safe, math, reasoning, lm-eval]
@@ -108,7 +129,8 @@ benchmarks:
       result_interpretation: >-
         exact_match: HIGHER is better. Measures ability to produce the correct
         numeric answer after multi-step arithmetic. Generation-safe — works with
-        any endpoint.
+        any endpoint. The bare exact_match is the flexible-extract filter; read
+        gsm8k.exact_match,strict-match for compliance with the "#### N" format.
       score_ranges:
         - range: "0.0-0.30"
           meaning: "Weak mathematical reasoning — not suitable for math-intensive tasks"
@@ -121,8 +143,12 @@ benchmarks:
     primary_score:
       metric: exact_match
       lower_is_better: false
+    # threshold: Free-form exact match, chance ~0. 0.30 is the top of the 'weak' range above.
+    #   The verdict scores the flexible-extract filter, not strict-match: strict-match
+    #   needs the few-shot '#### N' template, so a zero-shot chat model scored 0.00 on it
+    #   and 0.75 on flexible-extract (wbos run, 2026-11-10). Both stay reported.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.3
 
   - id: lm-eval/ifeval
     name: IFEval
@@ -150,6 +176,8 @@ benchmarks:
     primary_score:
       metric: inst_level_strict_acc
       lower_is_better: false
+    # threshold: Same as the server catalog's ifeval (kept equal). inst_level_strict_acc is the
+    #   fraction of single constraints met; 0.5-0.7 is 'moderate' in the ranges above.
     pass_criteria:
       threshold: 0.6
 
@@ -165,8 +193,9 @@ benchmarks:
     primary_score:
       metric: exact_match
       lower_is_better: false
+    # threshold: Free-form exact match, chance ~0: a floor that only detects a dead pipeline.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.1
 
   - id: lm-eval/nq_open
     name: Natural Questions Open
@@ -179,8 +208,10 @@ benchmarks:
     primary_score:
       metric: exact_match
       lower_is_better: false
+    # threshold: Free-form exact match with no retrieval, chance ~0; scores stay low even for
+    #   capable models, so this floor only detects a dead pipeline.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.05
 
   - id: lm-eval/math_500
     name: MATH-500
@@ -194,8 +225,10 @@ benchmarks:
     primary_score:
       metric: exact_match
       lower_is_better: false
+    # threshold: Competition maths, exact match on the boxed answer, chance ~0; scores are low
+    #   for small models, so this floor only detects a dead pipeline.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.05
 
   # -------------------------------------------------------------------------
   # Loglikelihood tasks — multiple_choice / loglikelihood output type.
@@ -232,8 +265,9 @@ benchmarks:
     primary_score:
       metric: acc
       lower_is_better: false
+    # threshold: 4 options per question, chance 0.25 (14,042 test questions) + 0.10.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.35
 
   - id: lm-eval/mmlu_pro
     name: MMLU-Pro
@@ -246,8 +280,10 @@ benchmarks:
     primary_score:
       metric: exact_match
       lower_is_better: false
+    # threshold: Generation, 10 options: chance 0.11 (mean of 1/#options over 12,032 questions)
+    #   + 0.10, rounded to 0.20.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.2
 
   - id: lm-eval/arc_easy
     name: ARC-Easy
@@ -260,8 +296,10 @@ benchmarks:
     primary_score:
       metric: acc_norm
       lower_is_better: false
+    # threshold: 4 options (3 or 5 for a few), chance 0.250 over 2,376 test questions, + 0.10.
+    #   The bare arc_easy entry carries the same value.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.35
 
   - id: lm-eval/arc_challenge
     name: ARC-Challenge
@@ -274,8 +312,9 @@ benchmarks:
     primary_score:
       metric: acc_norm
       lower_is_better: false
+    # threshold: Chance 0.250 over 1,172 test questions + 0.10.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.35
 
   - id: lm-eval/hellaswag
     name: HellaSwag
@@ -302,8 +341,9 @@ benchmarks:
     primary_score:
       metric: acc_norm
       lower_is_better: false
+    # threshold: 4 endings, chance 0.250 over 10,042 validation questions + 0.10.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.35
 
   - id: lm-eval/winogrande
     name: WinoGrande
@@ -316,8 +356,9 @@ benchmarks:
     primary_score:
       metric: acc
       lower_is_better: false
+    # threshold: 2 options; the more frequent answer is 0.504 of 1,267 validation items; + 0.10.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.6
 
   - id: lm-eval/truthfulqa_mc2
     name: TruthfulQA MC2
@@ -331,8 +372,10 @@ benchmarks:
     primary_score:
       metric: acc
       lower_is_better: false
+    # threshold: MC2 is the share of probability on the true answers. Picking uniformly gives
+    #   0.448 (mean fraction of true answers over 817 questions); + 0.10, rounded to 0.55.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.55
 
   - id: lm-eval/boolq
     name: BoolQ
@@ -345,8 +388,10 @@ benchmarks:
     primary_score:
       metric: acc
       lower_is_better: false
+    # threshold: Always answering the more frequent label scores 0.622 on the 3,270 validation
+    #   items, so chance is not 0.25 here; + 0.10, rounded to 0.70.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.7
 
   - id: lm-eval/piqa
     name: PIQA
@@ -360,8 +405,9 @@ benchmarks:
     primary_score:
       metric: acc_norm
       lower_is_better: false
+    # threshold: 2 options, chance 0.50 (1,838 validation questions) + 0.10.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.6
 
   - id: lm-eval/openbookqa
     name: OpenBookQA
@@ -374,8 +420,9 @@ benchmarks:
     primary_score:
       metric: acc_norm
       lower_is_better: false
+    # threshold: 4 options, chance 0.250 over 500 test questions + 0.10.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.35
 
   - id: lm-eval/bbh
     name: BIG-Bench Hard
@@ -389,6 +436,9 @@ benchmarks:
     primary_score:
       metric: exact_match
       lower_is_better: false
+    # threshold: Same as the server catalog's bbh (kept equal). 23 subtasks of mixed option counts
+    #   (some binary), so chance differs per subtask and was not measured; the exact-match
+    #   score is also zero when the answer is not extracted.
     pass_criteria:
       threshold: 0.25
 
@@ -417,8 +467,10 @@ benchmarks:
     primary_score:
       metric: acc_norm
       lower_is_better: false
+    # threshold: 4 options, chance 0.25. Expert-written questions that resist non-experts, so even
+    #   capable models sit near chance: chance + 0.05 (the ranges above call < 0.30 near random).
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.3
 
   - id: lm-eval/musr
     name: MuSR
@@ -432,8 +484,11 @@ benchmarks:
     primary_score:
       metric: acc_norm
       lower_is_better: false
+    # threshold: Chance over the 756 questions is 0.371 (murder mysteries 0.50, object placements
+    #   0.28, team allocation 0.33); + 0.10, rounded to 0.45. The bare leaderboard_musr
+    #   entry carries the same value.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.45
 
   # -------------------------------------------------------------------------
   # Composite suites
@@ -507,8 +562,9 @@ benchmarks:
     primary_score:
       metric: acc_norm
       lower_is_better: false
+    # threshold: Same task as lm-eval/arc_easy (chance 0.250): kept equal to it.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.35
     agent:
       result_interpretation: Length-normalized accuracy on multiple-choice questions; higher is better.
       score_ranges:
@@ -4493,8 +4549,9 @@ benchmarks:
     primary_score:
       metric: acc_norm
       lower_is_better: false
+    # threshold: Same data family as lm-eval/gpqa (4 options, chance 0.25): kept equal to it.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.3
     agent: null
   - id: leaderboard_mmlu_pro
     url: null
@@ -4556,8 +4613,9 @@ benchmarks:
     primary_score:
       metric: acc_norm
       lower_is_better: false
+    # threshold: Same dataset as lm-eval/musr (chance 0.371): kept equal to it.
     pass_criteria:
-      threshold: 0.25
+      threshold: 0.45
     agent: null
   - id: leaderboard_math_hard
     url: null

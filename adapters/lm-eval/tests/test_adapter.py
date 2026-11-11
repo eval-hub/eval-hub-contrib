@@ -523,7 +523,11 @@ def test_build_endpoint_url_with_v1_already():
 
 # ── Unit: _results.py ─────────────────────────────────────────────────────────
 
-from _results import compute_overall_score, extract_evaluation_results
+from _results import (
+    compute_overall_score,
+    extract_evaluation_results,
+    headline_metric_name,
+)
 
 
 def test_extract_results_basic():
@@ -772,12 +776,30 @@ def test_primary_task_is_also_reported_under_bare_metric_names():
     assert by_name["acc_norm"].metadata["alias_of"] == "arc_easy.acc_norm"
 
 
-def test_bare_alias_prefers_unfiltered_then_first_filter():
+def test_bare_alias_prefers_unfiltered_then_flexible_extract_then_first_filter():
     primary = extract_evaluation_results(CANNED_GSM8K_FILTERS, primary_task="gsm8k")
     bare = {r.metric_name: r for r in primary if "." not in r.metric_name}
-    # Only filtered values exist: the first one lm-eval reported (strict-match).
-    assert bare["exact_match"].metric_value == pytest.approx(0.72)
-    assert bare["exact_match"].metadata["filter"] == "strict-match"
+    # Only filtered values exist: flexible-extract, although strict-match is listed
+    # first (a zero-shot chat model scores 0 on the strict template, 0.75 here).
+    assert bare["exact_match"].metric_value == pytest.approx(0.75)
+    assert bare["exact_match"].metadata["filter"] == "flexible-extract"
+    assert bare["exact_match"].metadata["alias_of"] == "gsm8k.exact_match,flexible-extract"
+    # The strict value is still reported under its qualified name.
+    assert any(
+        r.metric_name == "gsm8k.exact_match,strict-match" and r.metric_value == 0.72
+        for r in primary
+    )
+
+    # Neither is preferred: the first filter lm-eval reported.
+    other = {
+        "results": {"t": {"exact_match,b-filter": 0.1, "exact_match,a-filter": 0.2}}
+    }
+    bare = {
+        r.metric_name: r
+        for r in extract_evaluation_results(other, primary_task="t")
+        if "." not in r.metric_name
+    }
+    assert bare["exact_match"].metric_value == pytest.approx(0.1)
 
     mixed = {
         "results": {
@@ -1398,3 +1420,97 @@ def test_pinned_lmeval_renders_the_template_only_with_tokenized_requests(tmp_pat
     rendered = _model(tokenized=True).apply_chat_template(history)
     assert isinstance(rendered, str)
     assert rendered == "<|user|>hi\n<|assistant|>"
+
+
+# Chance baselines measured on each benchmark's own dataset (2026-11-10): mean of
+# 1/#options, or the majority-class rate for skewed binary sets. provider.yaml
+# documents each; a threshold at or below chance passes a model that guesses.
+_CHANCE = {
+    "lm-eval/mmlu": 0.25,
+    "lm-eval/mmlu_pro": 0.111,
+    "lm-eval/arc_easy": 0.250,
+    "lm-eval/arc_challenge": 0.250,
+    "lm-eval/hellaswag": 0.250,
+    "lm-eval/winogrande": 0.504,
+    "lm-eval/truthfulqa_mc2": 0.448,
+    "lm-eval/boolq": 0.622,
+    "lm-eval/piqa": 0.50,
+    "lm-eval/openbookqa": 0.250,
+    "lm-eval/gpqa": 0.25,
+    "lm-eval/musr": 0.371,
+}
+
+
+@pytest.mark.parametrize(("benchmark_id", "chance"), sorted(_CHANCE.items()))
+def test_curated_multiple_choice_threshold_is_above_chance(benchmark_id, chance):
+    entry = _MANIFEST[benchmark_id]
+    threshold = entry["pass_criteria"]["threshold"]
+    assert threshold >= chance + 0.05, (
+        f"{benchmark_id}: threshold {threshold} does not clear chance {chance}"
+    )
+
+
+def test_curated_entries_and_their_bare_twins_agree():
+    """The same task must give the same verdict under either ID."""
+    from _tasks import task_for
+
+    manifest = _MANIFEST
+    for benchmark_id, entry in manifest.items():
+        if not benchmark_id.startswith("lm-eval/") or "primary_score" not in entry:
+            continue
+        twin = manifest.get(task_for(benchmark_id) or "")
+        if twin is None or "primary_score" not in twin:
+            continue
+        assert twin["primary_score"] == entry["primary_score"], benchmark_id
+        assert twin["pass_criteria"] == entry["pass_criteria"], benchmark_id
+
+
+def test_every_curated_threshold_is_explained():
+    """Each curated entry says why its threshold is what it is."""
+    text = (_ADAPTER_DIR / "provider.yaml").read_text()
+    for benchmark_id, entry in _MANIFEST.items():
+        if not benchmark_id.startswith("lm-eval/") or "primary_score" not in entry:
+            continue
+        block = text.split(f"  - id: {benchmark_id}\n", 1)[1].split("\n  - id: ", 1)[0]
+        assert "    # threshold:" in block, benchmark_id
+
+
+CANNED_GSM8K_ZERO_SHOT = {
+    "results": {
+        "gsm8k": {
+            "exact_match,strict-match": 0.0,
+            "exact_match_stderr,strict-match": 0.0,
+            "exact_match,flexible-extract": 0.75,
+            "exact_match_stderr,flexible-extract": 0.16,
+        }
+    },
+    "n-samples": {"gsm8k": {"original": 8, "effective": 8}},
+    "n-shot": {"gsm8k": 0},
+}
+
+
+def test_evalcard_headline_agrees_with_the_verdict_filter():
+    """Zero-shot chat GSM8K: the card must not report the strict-match 0.00."""
+    results = extract_evaluation_results(CANNED_GSM8K_ZERO_SHOT, primary_task="gsm8k")
+    assert compute_overall_score(results) == pytest.approx(0.75)
+    assert headline_metric_name(results) == "exact_match"
+
+
+def test_headline_without_alias_uses_the_same_filter_preference():
+    """A suite has no primary task, so no alias: flexible-extract still wins."""
+    results = extract_evaluation_results(CANNED_GSM8K_ZERO_SHOT)
+    assert compute_overall_score(results) == pytest.approx(0.75)
+    assert headline_metric_name(results) == "exact_match,flexible-extract"
+
+
+def test_headline_prefers_the_benchmarks_own_row_over_subtasks():
+    raw = {
+        "results": {
+            "mmlu": {"acc,none": 0.65},
+            "mmlu_anatomy": {"acc,none": 0.5},
+        }
+    }
+    results = extract_evaluation_results(raw, primary_task="mmlu")
+    assert compute_overall_score(results) == pytest.approx(0.65)
+    assert headline_metric_name(results) == "acc"
+    assert headline_metric_name([]) == "acc"

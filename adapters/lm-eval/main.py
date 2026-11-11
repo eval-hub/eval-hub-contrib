@@ -65,6 +65,7 @@ from _results import (
     effective_num_fewshot,
     extract_evaluation_results,
     find_results_file,
+    headline_metric_name,
     parse_results_file,
 )
 from _tasks import (
@@ -115,15 +116,6 @@ def _benchmark_ability(benchmark_id: str) -> str:
     )
 
 
-def _primary_metric_name(results: list) -> str:
-    """Derive the primary metric label from the first result for EvalCard."""
-    for r in results:
-        parts = r.metric_name.rsplit(".", 1)
-        if len(parts) == 2:
-            return parts[1]
-    return "acc"
-
-
 class LMEvalAdapter(FrameworkAdapter):
     """lm-evaluation-harness adapter for OpenAI-compatible inference endpoints."""
 
@@ -163,7 +155,9 @@ class LMEvalAdapter(FrameworkAdapter):
 
             tokenizer = params.get("tokenizer")
             tokenizer_backend = resolve_tokenizer_backend(
-                config.benchmark_id, tokenizer, str(params.get("tokenizer_backend", "None"))
+                config.benchmark_id,
+                tokenizer,
+                str(params.get("tokenizer_backend", "None")),
             )
             if not tokenizer and tokenizer_backend in ("None", "none"):
                 logger.warning(
@@ -336,7 +330,7 @@ class LMEvalAdapter(FrameworkAdapter):
             # the run reports 0 shots.
             effective_shots = effective_num_fewshot(raw, params.get("num_fewshot"))
             _ability = _benchmark_ability(config.benchmark_id)
-            _primary_metric = _primary_metric_name(evaluation_results)
+            _primary_metric = headline_metric_name(evaluation_results)
             if effective_shots == 0:
                 cap_entry = CapabilityEvalEntry(
                     ability=_ability,
