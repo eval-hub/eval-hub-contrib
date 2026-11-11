@@ -572,7 +572,8 @@ This image pins `nltk` 3.10.4 to pick up the fix for GHSA-8mgp-746c-j5xp
 (CVE-2026-81726), reported against 3.10.3. It affects nltk's parser and perceptron
 model save/load APIs, which nothing in this image calls.
 
-NLTK 3.10.4 refuses to read data from a directory that is group-writable or owned by
-another account, so the bundled tokenizer data lives in `/usr/local/share/nltk_data`
-(root-owned, 0755/0644), not under the writable `/app` tree. Do not bump `nltk` without
+NLTK 3.10.4 only reads data from a directory that is owned by the running user or by
+root and is neither group- nor world-writable (`nltk/pathsec.py`, `_private_stat`), so
+the bundled tokenizer data lives in `/usr/local/share/nltk_data` (root-owned,
+0755/0644), not under the writable `/app` tree. Do not bump `nltk` without
 re-running the MakeMeSay initialization check with runtime downloads disabled.
