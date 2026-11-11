@@ -46,7 +46,7 @@ Copy or start from **`meta/job.json`**. Minimum expectations include:
 | `"litellm"` (default) | The adapter reads `model.url` and sets it as `OPENAI_BASE_URL` before invoking CLEAR. LiteLLM picks up `OPENAI_BASE_URL` automatically and routes all calls through it. If `model.url` is not set, LiteLLM falls back to the OpenAI SDK default. |
 | `"endpoint"` | The adapter passes `model.url` as `endpoint_url` directly in the CLEAR config. |
 
-For **local** runs with **`litellm`**, you often **delete `model.auth`** from the JSON when no Kubernetes Secret exists, and set **`OPENAI_API_KEY`** in the shell **only if** your endpoint requires it. Many **local** servers (for example some Ollama setups) do not require a key.
+For local runs, set `model.auth.secret_ref` to an absolute `file:///` auth directory. Put the primary `api-key` and optional `judge_api-key`/`judge_url` files there. Runtime `OPENAI_API_KEY` is not a judge credential input. See [model-role authentication](../../../../docs/model-role-auth.md).
 
 ## 4. Run
 

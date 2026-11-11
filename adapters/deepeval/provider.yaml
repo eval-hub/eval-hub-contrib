@@ -138,13 +138,6 @@ parameters:
       Judge model name used by DeepEval for LLM-as-judge evaluation.
       Defaults to the evaluated model's name if not set.
 
-  - name: eval_model_url
-    type: string
-    default: null
-    description: >
-      Base URL of the OpenAI-compatible judge endpoint (e.g. "http://judge-svc:8000/v1").
-      Defaults to the evaluated model's URL if not set.
-
   - name: threshold
     type: float
     default: 0.5
