@@ -10,7 +10,7 @@ clustering, reranking, and more.
 Architecture:
     1. JobSpec loaded from mounted ConfigMap (k8s mode) or local file
     2. Configuration validated and tasks resolved from benchmark_id or explicit list
-    3. MTEB CLI executed via subprocess, or the Python API when sampling is requested
+    3. MTEB CLI or Python API runner executed via subprocess
     4. Results parsed from MTEB output JSON files
     5. Metrics extracted and normalized to EvaluationResult format
     6. Artifacts persisted as OCI images via sidecar callbacks
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -65,16 +66,30 @@ def _positive_int(value: Any, name: str) -> int:
     return value
 
 
+def _validate_device(value: Any) -> str | None:
+    """Validate the device strings supported by MTEB's Python API."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("device must be one of: cpu, mps, cuda, or cuda:<index>")
+
+    device = value.strip().lower()
+    if device in {"cpu", "mps", "cuda"} or re.fullmatch(r"cuda:\d+", device):
+        return device
+    raise ValueError("device must be one of: cpu, mps, cuda, or cuda:<index>")
+
+
 class MTEBAdapter(FrameworkAdapter):
     """MTEB (Massive Text Embedding Benchmark) adapter.
 
     Evaluates embedding models using the MTEB CLI by default and the MTEB
-    Python API when a sample limit is requested. Integrates with eval-hub via
+    Python API for sampling, explicit device overrides, and dynamic task filters.
+    Integrates with eval-hub via
     the callback-based architecture.
 
     The adapter:
     - Validates job configuration and resolves tasks from benchmark presets
-    - Builds and executes MTEB CLI or sample-limited Python API runs
+    - Builds and executes MTEB CLI or Python API runs
     - Parses JSON results from MTEB output directory
     - Extracts metrics and computes overall scores
     - Persists detailed results as OCI artifacts
@@ -192,6 +207,7 @@ class MTEBAdapter(FrameworkAdapter):
             tasks = self._resolve_tasks(config.benchmark_id, config.parameters)
             benchmark_config = config.parameters or {}
             num_examples = benchmark_config.get("num_examples")
+            device = _validate_device(benchmark_config.get("device"))
             if num_examples is None:
                 num_examples = getattr(config, "num_examples", None)
             batch_size = _positive_int(
@@ -213,7 +229,10 @@ class MTEBAdapter(FrameworkAdapter):
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
             )
 
-            if num_examples is None:
+            use_python_runner = (
+                num_examples is not None or device is not None or not tasks
+            )
+            if not use_python_runner:
                 cmd = self._build_mteb_command(
                     model_name=config.model.name,
                     tasks=tasks,
@@ -229,7 +248,7 @@ class MTEBAdapter(FrameworkAdapter):
                     "languages": benchmark_config.get("languages", ["eng"]),
                     "batch_size": batch_size,
                     "num_examples": num_examples,
-                    "device": benchmark_config.get("device"),
+                    "device": device,
                     "verbosity": benchmark_config.get("verbosity", 2),
                     "co2_tracker": benchmark_config.get("co2_tracker", False),
                     "overwrite_results": benchmark_config.get(
@@ -246,10 +265,10 @@ class MTEBAdapter(FrameworkAdapter):
 
             sampling_info: dict[str, Any] = {}
             sampling_info_path = output_dir / "evalhub_sampling_info.json"
-            if num_examples is not None:
+            if use_python_runner:
                 if not sampling_info_path.is_file():
                     raise RuntimeError(
-                        "MTEB sample-limited runner did not produce sampling metadata"
+                        "MTEB Python runner did not produce evaluation metadata"
                     )
                 with sampling_info_path.open(encoding="utf-8") as f:
                     sampling_info = json.load(f)
@@ -320,7 +339,7 @@ class MTEBAdapter(FrameworkAdapter):
                 results=evaluation_results,
                 overall_score=overall_score,
                 num_examples_evaluated=sampling_info.get(
-                    "num_examples_evaluated", len(tasks)
+                    "num_tasks_evaluated", len(tasks)
                 ),
                 duration_seconds=duration,
                 completed_at=datetime.now(UTC),
@@ -397,6 +416,7 @@ class MTEBAdapter(FrameworkAdapter):
             _positive_int(num_examples, "num_examples")
 
         _positive_int(benchmark_config.get("batch_size", 32), "batch_size")
+        _validate_device(benchmark_config.get("device"))
 
         task_types = benchmark_config.get("task_types")
         if task_types:
@@ -480,7 +500,8 @@ class MTEBAdapter(FrameworkAdapter):
 
         Constructs the 'mteb run' command with appropriate arguments based on
         the job configuration. Handles model specification, task selection,
-        batch size, device override, and other MTEB options.
+        batch size, and other MTEB options. Device overrides use the Python
+        runner because the pinned MTEB CLI accepts a different device format.
 
         Args:
             model_name: HuggingFace model identifier (e.g., 'sentence-transformers/all-MiniLM-L6-v2')
@@ -488,7 +509,6 @@ class MTEBAdapter(FrameworkAdapter):
             output_dir: Directory where MTEB will write result JSON files
             benchmark_config: Optional configuration with additional parameters:
                 - batch_size (int): Encoding batch size, default 32
-                - device (str): Device override ('cuda', 'cpu', 'mps', 'cuda:0')
                 - verbosity (int): MTEB verbosity level 0-3, default 2
                 - co2_tracker (bool): Enable CO2 tracking, default False
                 - overwrite_results (bool): Overwrite existing results, default True
@@ -504,7 +524,7 @@ class MTEBAdapter(FrameworkAdapter):
             ...     "sentence-transformers/all-MiniLM-L6-v2",
             ...     ["STS12", "STS13"],
             ...     Path("/tmp/output"),
-            ...     {"batch_size": 64, "device": "cuda"}
+            ...     {"batch_size": 64}
             ... )
             >>> # Returns: ["mteb", "run", "--model", "...", "--tasks", "STS12", "STS13", ...]
         """
@@ -556,11 +576,6 @@ class MTEBAdapter(FrameworkAdapter):
         verbosity = benchmark_config.get("verbosity", 2)
         cmd.extend(["--verbosity", str(verbosity)])
 
-        # Device override (optional)
-        device = benchmark_config.get("device")
-        if device is not None and str(device).strip():
-            cmd.extend(["--device", str(device)])
-
         # CO2 tracker (optional)
         if benchmark_config.get("co2_tracker", False):
             cmd.append("--co2-tracker")
@@ -573,7 +588,7 @@ class MTEBAdapter(FrameworkAdapter):
         return cmd
 
     def _build_mteb_runner_command(self, config_path: Path) -> list[str]:
-        """Build the Python API runner command used for sample-limited jobs."""
+        """Build the Python API runner command for jobs needing API features."""
         runner_path = Path(__file__).with_name("mteb_runner.py")
         return [sys.executable, str(runner_path), str(config_path)]
 
@@ -588,7 +603,7 @@ class MTEBAdapter(FrameworkAdapter):
         errors and timeouts appropriately.
 
         Args:
-            cmd: Command arguments from the CLI or sample-limited runner builder
+            cmd: Command arguments from the CLI or Python API runner builder
             timeout: Maximum execution time in seconds
 
         Returns:
@@ -786,11 +801,11 @@ class MTEBAdapter(FrameworkAdapter):
 
                     # Extract main_score first (primary metric)
                     main_score = score_entry.get("main_score")
-                    if main_score is not None:
+                    if self._is_finite_number(main_score):
                         evaluation_results.append(
                             EvaluationResult(
                                 metric_name=f"{task_name}.{split_name}.main_score",
-                                metric_value=main_score,
+                                metric_value=float(main_score),
                                 metric_type="float",
                                 metadata={
                                     "task": task_name,
@@ -801,12 +816,15 @@ class MTEBAdapter(FrameworkAdapter):
                             )
                         )
 
-                    # Extract additional numeric metrics
+                    # Extract additional numeric metrics. MTEB can emit NaN or
+                    # infinity for undefined metrics (for example, on tiny
+                    # samples); these cannot be serialized in EvalHub's JSON
+                    # result payload.
                     skip_keys = {"main_score", "hf_subset", "languages"}
                     for metric_key, metric_value in score_entry.items():
                         if metric_key in skip_keys:
                             continue
-                        if isinstance(metric_value, (int, float)):
+                        if self._is_finite_number(metric_value):
                             evaluation_results.append(
                                 EvaluationResult(
                                     metric_name=f"{task_name}.{split_name}.{metric_key}",
@@ -821,6 +839,15 @@ class MTEBAdapter(FrameworkAdapter):
 
         logger.info(f"Extracted {len(evaluation_results)} metrics from MTEB results")
         return evaluation_results
+
+    @staticmethod
+    def _is_finite_number(value: Any) -> bool:
+        """Return whether value is a finite JSON-compatible number."""
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+        )
 
     def _compute_overall_score(
         self,
@@ -845,7 +872,7 @@ class MTEBAdapter(FrameworkAdapter):
             r.metric_value
             for r in results
             if r.metric_name.endswith(".main_score")
-            and isinstance(r.metric_value, (int, float))
+            and self._is_finite_number(r.metric_value)
         ]
 
         if main_scores:
@@ -901,7 +928,12 @@ class MTEBAdapter(FrameworkAdapter):
         # Save raw MTEB results
         raw_results_file = output_dir / "mteb_results.json"
         with open(raw_results_file, "w") as f:
-            json.dump(mteb_results, f, indent=2)
+            json.dump(
+                self._replace_non_finite_numbers(mteb_results),
+                f,
+                indent=2,
+                allow_nan=False,
+            )
         files.append(raw_results_file)
         logger.debug(f"Saved raw results to {raw_results_file}")
 
@@ -932,6 +964,7 @@ class MTEBAdapter(FrameworkAdapter):
                 },
                 f,
                 indent=2,
+                allow_nan=False,
             )
         files.append(structured_results_file)
         logger.debug(f"Saved structured results to {structured_results_file}")
@@ -975,6 +1008,20 @@ class MTEBAdapter(FrameworkAdapter):
 
         logger.info(f"Saved {len(files)} result files to {output_dir}")
         return files
+
+    @classmethod
+    def _replace_non_finite_numbers(cls, value: Any) -> Any:
+        """Replace non-finite floats with nulls for standards-compliant JSON."""
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        if isinstance(value, dict):
+            return {
+                key: cls._replace_non_finite_numbers(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [cls._replace_non_finite_numbers(item) for item in value]
+        return value
 
     def _get_mteb_version(self) -> str:
         """Get installed MTEB package version.

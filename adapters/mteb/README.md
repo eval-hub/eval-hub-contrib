@@ -132,9 +132,9 @@ You can also filter tasks by type using the `task_types` parameter:
 | `task_types` | `list[str]` | `null` | Filter by task type (e.g., `["STS", "Retrieval"]`) |
 | `task_categories` | `list[str]` | `null` | Filter by category (e.g., `["s2s", "p2p"]`) - maps to `--categories` |
 | `languages` | `list[str]` | `["eng"]` | Language codes to include |
-| `batch_size` | `int` | `32` | Batch size for encoding |
-| `num_examples` | `int` or `null` | `null` | Maximum examples per evaluation split and subset for each task. Retrieval tasks limit queries and matching relevance judgments while retaining the full corpus. Unsupported task data layouts fail with a clear error. Partial-sample scores are not directly comparable to full-dataset scores. |
-| `device` | `str` | `null` | Device override (`cuda`, `cpu`, `mps`, `cuda:0`) |
+| `batch_size` | `int` | `32` | Positive JSON integer batch size for encoding. String and floating-point values are rejected. |
+| `num_examples` | `int` or `null` | `null` | Maximum examples per evaluation split and subset for each task. Retrieval tasks limit queries and matching relevance judgments while retaining and processing the full corpus; retrieval corpus loading and encoding time are not bounded by this parameter. Unsupported task data layouts fail with a clear error. Partial-sample scores are not directly comparable to full-dataset scores. |
+| `device` | `str` | `null` | Device override: `cpu`, `mps`, `cuda`, or `cuda:<index>` (for example, `cuda:0`). Omit to let MTEB choose the device. Jobs with an override use the Python API so full-dataset and sample-limited runs accept the same values. |
 | `verbosity` | `int` | `2` | MTEB verbosity level (0-3) |
 | `co2_tracker` | `bool` | `false` | Enable CO2 emissions tracking |
 | `overwrite_results` | `bool` | `true` | Overwrite existing results |
@@ -217,10 +217,19 @@ podman run --rm \
 To cap each selected task's evaluation data, set `num_examples`. For example,
 `"num_examples": 1` evaluates at most one example per evaluation split and
 subset. The effective `num_examples` and `batch_size`, along with actual sample
-counts per task, are included in `additional_info`.
+counts per task and `total_examples_evaluated`, are included in
+`additional_info`. The shared `JobResults.num_examples_evaluated` field keeps
+its existing MTEB meaning: the number of selected tasks, not the number of
+dataset rows.
 Some metrics require a minimum sample count: STS Pearson/Spearman correlations,
 for example, need at least two examples, so an STS task cannot be scored with
 `num_examples: 1`.
+
+For sample-limited runs, task data is loaded and validated one task at a time,
+then released before MTEB evaluates the task set. MTEB reloads and applies the
+same sample cap when each task is evaluated, allowing its normal per-task data
+cleanup to run. Retrieval sampling caps evaluated queries and their qrels, but
+the complete corpus remains available and may dominate runtime and memory use.
 
 #### Single Task Evaluation
 

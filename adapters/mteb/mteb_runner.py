@@ -97,16 +97,8 @@ def _limit_eval_data(
     eval_splits: list[str],
     limit: int,
     task_name: str,
-    *,
-    split_value: bool = False,
 ) -> tuple[int, bool]:
     """Limit supported MTEB dataset structures and report (count, found)."""
-    if _is_dataset(data):
-        if not split_value:
-            return 0, False
-        selected = data.select(range(min(limit, len(data))))
-        return len(selected), True
-
     if isinstance(data, MutableMapping):
         # MTEB retrieval data is nested by subset and split, with query/qrel
         # structures at the split level.
@@ -115,6 +107,13 @@ def _limit_eval_data(
 
         matching_splits = [split for split in eval_splits if split in data]
         if matching_splits:
+            missing_splits = [split for split in eval_splits if split not in data]
+            if missing_splits:
+                raise ValueError(
+                    f"MTEB task '{task_name}' cannot apply num_examples: "
+                    f"evaluation split(s) {missing_splits} declared in metadata "
+                    "are missing from the loaded dataset"
+                )
             count = 0
             for split_name in matching_splits:
                 split_data = data[split_name]
@@ -137,7 +136,6 @@ def _limit_eval_data(
                         eval_splits,
                         limit,
                         task_name,
-                        split_value=True,
                     )
                     if not found:
                         raise ValueError(
@@ -156,19 +154,37 @@ def _limit_eval_data(
         # Multilingual tasks may nest DatasetDicts under an HF subset name.
         count = 0
         found = False
-        for value in data.values():
-            if isinstance(value, Mapping) or _is_dataset(value):
+        for subset_name, value in data.items():
+            if _is_dataset(value):
+                raise ValueError(
+                    f"MTEB task '{task_name}' cannot apply num_examples: "
+                    f"evaluation split(s) {eval_splits} are missing before "
+                    f"dataset subset '{subset_name}'"
+                )
+            if isinstance(value, Mapping):
                 nested_count, nested_found = _limit_eval_data(
                     value, eval_splits, limit, task_name
                 )
+                if not nested_found:
+                    raise ValueError(
+                        f"MTEB task '{task_name}' cannot apply num_examples: "
+                        f"no declared evaluation split was found for subset "
+                        f"'{subset_name}'"
+                    )
                 count += nested_count
-                found = found or nested_found
+                found = True
         return count, found
 
     return 0, False
 
 
 def _limit_task(task: Any, limit: int) -> int:
+    _validate_task_limit(task, limit)
+    task.load_data()
+    return _limit_loaded_task(task, limit)
+
+
+def _validate_task_limit(task: Any, limit: int) -> list[str]:
     task_name = task.metadata.name
     eval_splits = list(getattr(task.metadata, "eval_splits", None) or [])
     if not eval_splits:
@@ -185,7 +201,14 @@ def _limit_task(task: Any, limit: int) -> int:
             "its correlation metrics need at least two evaluation examples"
         )
 
-    task.load_data()
+    return eval_splits
+
+
+def _limit_loaded_task(task: Any, limit: int) -> int:
+    """Apply a sample cap to data that has already been loaded."""
+    task_name = task.metadata.name
+    eval_splits = _validate_task_limit(task, limit)
+
     count, found = _limit_eval_data(
         task.dataset, eval_splits, limit, task_name
     )
@@ -200,6 +223,39 @@ def _limit_task(task: Any, limit: int) -> int:
             f"MTEB task '{task_name}' has no examples in its evaluation splits"
         )
     return count
+
+
+def _install_sample_limit(task: Any, limit: int) -> int:
+    """Validate sampling and apply it on each load within MTEB's lifecycle.
+
+    MTEB unloads data after evaluating a task only when it was not preloaded.
+    Wrapping load_data lets us validate one task at a time, release its data,
+    and have MTEB load and cap it again immediately before evaluation.
+    """
+    unload_data = getattr(task, "unload_data", None)
+    if not callable(unload_data):
+        raise ValueError(
+            f"MTEB task '{task.metadata.name}' does not support unload_data; "
+            "sample-limited execution cannot safely release per-task data"
+        )
+
+    _validate_task_limit(task, limit)
+    original_load_data = task.load_data
+    sample_count: int | None = None
+
+    def load_and_limit(*args: Any, **kwargs: Any) -> Any:
+        nonlocal sample_count
+        result = original_load_data(*args, **kwargs)
+        sample_count = _limit_loaded_task(task, limit)
+        return result
+
+    task.load_data = load_and_limit
+    try:
+        task.load_data()
+        assert sample_count is not None
+        return sample_count
+    finally:
+        unload_data()
 
 
 def run(config_path: Path) -> None:
@@ -231,10 +287,19 @@ def run(config_path: Path) -> None:
     if not tasks:
         raise RuntimeError("MTEB task selection returned no tasks")
 
-    num_examples = int(config["num_examples"])
     examples_by_task: dict[str, int] = {}
-    for task in tasks:
-        examples_by_task[task.metadata.name] = _limit_task(task, num_examples)
+    num_examples = config.get("num_examples")
+    if num_examples is not None:
+        if (
+            isinstance(num_examples, bool)
+            or not isinstance(num_examples, int)
+            or num_examples <= 0
+        ):
+            raise ValueError("num_examples must be a positive integer")
+        for task in tasks:
+            examples_by_task[task.metadata.name] = _install_sample_limit(
+                task, num_examples
+            )
 
     # Load the model only after all selected tasks prove they support sampling.
     model = mteb.get_model(
@@ -255,10 +320,14 @@ def run(config_path: Path) -> None:
         show_progress_bar=verbosity > 0,
     )
 
-    sampling_info = {
-        "num_examples_by_task": examples_by_task,
-        "num_examples_evaluated": sum(examples_by_task.values()),
-    }
+    sampling_info = {"num_tasks_evaluated": len(tasks)}
+    if num_examples is not None:
+        sampling_info.update(
+            {
+                "num_examples_by_task": examples_by_task,
+                "total_examples_evaluated": sum(examples_by_task.values()),
+            }
+        )
     (output_dir / "evalhub_sampling_info.json").write_text(
         json.dumps(sampling_info, indent=2), encoding="utf-8"
     )
