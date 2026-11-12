@@ -6,6 +6,7 @@ Dataset loading and OpenAI API calls are monkeypatched — no real network calls
 from __future__ import annotations
 
 import copy
+import json
 import sys
 import types
 from unittest.mock import MagicMock, create_autospec
@@ -113,7 +114,8 @@ def _inject_call_model(monkeypatch, responses: dict[str, str]):
 
 
 @pytest.mark.integration
-def test_ifbench_happy_path(monkeypatch):
+@pytest.mark.parametrize("save_samples", [False, True])
+def test_ifbench_happy_path(monkeypatch, save_samples):
     adapter = IFBenchAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
 
@@ -121,6 +123,10 @@ def test_ifbench_happy_path(monkeypatch):
     config.parameters["num_examples"] = 2
     config.parameters["max_concurrent"] = 1
     config.parameters["scoring_mode"] = "loose"
+    config.parameters["save_sample_results"] = save_samples
+    config.experiment_name = "sample-test"
+    callbacks.mlflow = MagicMock()
+    callbacks.mlflow.save.return_value = "run-1"
 
     _inject_fake_ifbench_data(monkeypatch, CANNED_EXAMPLES)
     _inject_fake_openai(monkeypatch)
@@ -144,6 +150,14 @@ def test_ifbench_happy_path(monkeypatch):
     assert results.overall_score == pytest.approx(1.0)
     assert results.eval_card is not None
     assert results.env_card is not None
+    if save_samples:
+        artifact = callbacks.mlflow.save.call_args.kwargs["artifacts"][0]
+        samples = [json.loads(line) for line in artifact.content.splitlines()]
+        assert [row["sample_id"] for row in samples] == ["0", "1"]
+        assert [row["accuracy"] for row in samples] == [1.0, 1.0]
+        assert samples[0]["response"] == "hello zebra"
+    else:
+        callbacks.mlflow.save.assert_not_called()
 
     phases = [c.args[0].phase for c in callbacks.report_status.call_args_list]
     assert phases[0] == JobPhase.INITIALIZING

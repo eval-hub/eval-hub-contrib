@@ -73,3 +73,11 @@ EvalHub local runtime sets `EVALHUB_MODE=local` and still expects sidecar report
 - Paper: https://arxiv.org/abs/2507.02833
 - Upstream: https://github.com/allenai/IFBench
 - eval-hub-contrib issue: https://github.com/eval-hub/eval-hub-contrib/issues/131
+
+## Per-sample results
+
+Set `parameters.save_sample_results: true` to persist `sample_results.jsonl` for
+confidence-interval post-processing. Each observation retains a stable `sample_id`
+and the native primary metric. Configured OCI exports receive the file and a
+metric manifest; configured MLflow persistence receives the sample file as well.
+Persistence errors fail the evaluation. The export is disabled by default.

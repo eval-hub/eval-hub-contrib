@@ -15,7 +15,7 @@ ENV NLTK_DATA=/usr/local/share/nltk_data
 COPY prepare_nltk.py /tmp/prepare_ifbench_nltk.py
 RUN python /tmp/prepare_ifbench_nltk.py && rm /tmp/prepare_ifbench_nltk.py
 
-COPY _evaluation.py main.py provider.yaml ./
+COPY _evaluation.py main.py sample_results.py provider.yaml ./
 COPY meta/job.json /meta/job.json
 
 ENV PYTHONUNBUFFERED=1

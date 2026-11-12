@@ -351,6 +351,33 @@ class IFBenchAdapter(FrameworkAdapter):
                 )
             )
 
+            if config.parameters.get("save_sample_results"):
+                from sample_results import persist_sample_results
+
+                # Keep the selected primary score and strict/loose outcomes per prompt.
+                records = [
+                    {
+                        "sample_id": example.key,
+                        "prompt": example.prompt,
+                        "response": loose.response,
+                        "instruction_id_list": example.instruction_id_list,
+                        "accuracy": float(
+                            (loose if scoring_mode == "loose" else strict)
+                            .follow_all_instructions
+                        ),
+                        "prompt_level_strict": float(strict.follow_all_instructions),
+                        "prompt_level_loose": float(loose.follow_all_instructions),
+                        "strict_instruction_results": strict.follow_instruction_list,
+                        "loose_instruction_results": loose.follow_instruction_list,
+                    }
+                    for example, strict, loose in zip(
+                        examples, strict_outputs, loose_outputs, strict=True
+                    )
+                ]
+                persist_sample_results(
+                    config, callbacks, job_results, records, "accuracy"
+                )
+
             logger.info(
                 "Done %s score=%.4f n=%d %.2fs",
                 config.id,
