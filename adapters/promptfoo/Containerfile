@@ -1,26 +1,44 @@
-FROM registry.access.redhat.com/ubi9/python-311:latest
+# promptfoo adapter image — ships the promptfoo CLI alongside the Python adapter.
+#
+# Node.js 24 is installed from RHEL 9 / UBI9 AppStream. Prefer a RHEL 9 base for
+# product/Konflux builds (longer 9.8 support than UBI); upstream CI defaults to
+# UBI9 (no entitlement).
+#
+# Override the base for product builds, e.g.:
+#   podman build --build-arg BASE_IMAGE=registry.redhat.io/rhel9/rhel-minimal:latest ...
+#
+# We intentionally do NOT use ubi9/python-311 here: that image already enables
+# the nodejs:22 module stream, and switching to nodejs:24 fails with
+# "It is not possible to switch enabled streams of a module".
+
+ARG BASE_IMAGE=registry.access.redhat.com/ubi9/ubi-minimal:latest
+FROM ${BASE_IMAGE}
+
+# Keep in sync with main.py PROMPTFOO_VERSION.
+ARG PROMPTFOO_VERSION=0.123.1
 
 WORKDIR /app
 
 USER 0
 
-# promptfoo is a Node.js CLI; pin the exact promptfoo version verified
-# against this adapter (see main.py PROMPTFOO_VERSION) rather than tracking
-# @latest. Do NOT force a specific nodejs module stream here — the UBI9
-# python-311 base image already ships with a nodejs module stream enabled
-# (verified: nodejs:22 on the image built 2026-09-21), and re-enabling a
-# different stream fails with "It is not possible to switch enabled streams
-# of a module". Installing without specifying a stream uses whatever the
-# base image already has, which is new enough for promptfoo.
-RUN dnf install -y nodejs \
-    && dnf clean all \
-    && npm install -g promptfoo@0.123.1 \
-    && npm cache clean --force
+RUN microdnf -y module enable nodejs:24 \
+    && microdnf -y install \
+        nodejs \
+        python3.11 \
+        python3.11-pip \
+        shadow-utils \
+    && microdnf clean all \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && npm install -g "promptfoo@${PROMPTFOO_VERSION}" \
+    && npm cache clean --force \
+    && useradd -u 1001 -g 0 -M -d /app -s /sbin/nologin default
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
+
+RUN chown -R 1001:0 /app && chmod -R g+w /app
 
 ENV PYTHONUNBUFFERED=1 \
     EVALHUB_MODE=k8s \
