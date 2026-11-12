@@ -201,3 +201,70 @@ def test_unmapped_categories_are_rejected(value):
 def test_invalid_value_mapping_fails_before_loading_data(tmp_path, mapping):
     with pytest.raises(ValueError, match="value_mappings"):
         read_table(tmp_path, {"value_mappings": mapping})
+
+
+@pytest.mark.parametrize(
+    "provider_id,metadata", [("guidellm", {}), (None, {"guidellm_version": "0.5.3"})]
+)
+def test_guidellm_native_records_join_calibration(tmp_path, provider_id, metadata):
+    records = [{"request_id": str(i), "time_to_first_token_ms": float(i)} for i in range(8)]
+    path = tmp_path / "benchmarks.json"
+    path.write_text(
+        json.dumps({"metadata": metadata, "benchmarks": [{"requests": {"successful": records}}]})
+    )
+    table = read_table(
+        path,
+        {"columns": {"sample_id": "request_id", "prediction": "time_to_first_token_ms"}},
+        provider_id=provider_id,
+    )
+    assert table.rows == records
+    calibration = Table([{"sample_id": "0", "label": 1}, {"sample_id": "4", "label": 3}])
+    y, yhat, unlabeled = ppi_arrays(table, [calibration], {"metric": "latency"}, shared=False)
+    np.testing.assert_array_equal(y, [1, 3])
+    np.testing.assert_array_equal(yhat, [0, 4])
+    np.testing.assert_array_equal(unlabeled, [1, 2, 3, 5, 6, 7])
+
+
+@pytest.mark.parametrize(
+    "document,provider_id,error",
+    [
+        ({"benchmarks": []}, None, "Cannot identify"),
+        ({"metadata": {"guidellm_version": "0.5.3"}}, None, "missing its benchmarks"),
+        ({"benchmarks": []}, "guidellm", "exactly one"),
+        ({"benchmarks": [{}, {}]}, "guidellm", "exactly one"),
+        ({"benchmarks": {}}, "guidellm", "exactly one"),
+        ({"benchmarks": [None]}, "guidellm", "record objects"),
+        ({"benchmarks": [{"requests": {"successful": {}}}]}, "guidellm", "record objects"),
+        ({"benchmarks": [{"requests": {"successful": [1]}}]}, "guidellm", "record objects"),
+        ({"benchmarks": [{"requests": {"successful": []}}]}, "guidellm", "no successful"),
+        ({"metadata": {"guidellm_version": "0.5.3"}, "benchmarks": [{}]}, "other", "conflicts"),
+        ({"metadata": {"guidellm_version": ""}, "benchmarks": [{}]}, None, "Cannot identify"),
+    ],
+)
+def test_unusable_native_reports_fail_with_source_context(tmp_path, document, provider_id, error):
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match=f"results_data_ref: report.json: .*{error}"):
+        read_table(path, provider_id=provider_id, dataset="results_data_ref")
+
+
+def test_guidellm_detection_does_not_change_calibration(tmp_path):
+    path = tmp_path / "report.json"
+    path.write_text(
+        json.dumps(
+            {
+                "metadata": {"guidellm_version": "0.5.3"},
+                "benchmarks": [{"requests": {"successful": [{"sample_id": "a", "label": 1}]}}],
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="No per-example calibration"):
+        read_table(path, calibration=True)
+
+
+@pytest.mark.parametrize("provider_id", [None, "guidellm", "other"])
+def test_canonical_records_need_no_framework_identity(tmp_path, provider_id):
+    path = tmp_path / "samples.json"
+    rows = [{"sample_id": "a", "prediction": 1}]
+    path.write_text(json.dumps({"samples": rows}))
+    assert read_table(path, provider_id=provider_id).rows == rows

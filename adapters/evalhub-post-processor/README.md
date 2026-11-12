@@ -161,6 +161,33 @@ mapping takes precedence and disables that fallback. Identifiers must be nonempt
 strings or integers. Predictions can also be stored at the metric's own key,
 `metrics[metric]`, or `scores[metric]`. A score object `{"value": 0.8}` is accepted.
 
+### Native GuideLLM reports
+
+For `eval_job` references, the source benchmark's `provider_id` identifies GuideLLM.
+For external references (S3, PVC, Git, Hugging Face, MLflow, or OCI), the reader
+recognizes a native report through its nonempty `metadata.guidellm_version`.
+It internally selects `benchmarks[0].requests.successful`; no API field or
+JSONPath configuration is required. Reports must contain exactly one benchmark
+and a nonempty array of successful request objects. Ambiguous, malformed, or
+unidentified nested reports fail the post-processing job with an error message.
+Canonical per-sample files remain accepted without framework identification.
+
+Use the existing column mappings to select the desired request-level measurement:
+
+```json
+{
+  "columns": {
+    "sample_id": "request_id",
+    "prediction": "time_to_first_token_ms"
+  }
+}
+```
+
+External inputs still require a primary metric declaration in the result document
+or a companion manifest. Extracted records undergo the usual sample ID, numeric
+score, and calibration validation. Calibration parsing is unchanged. Files are
+fully downloaded before parsing; this is not streaming JSON processing.
+
 For a job with multiple benchmarks, calibration must carry both `benchmark_id`
 and `provider_id` in each row or its file's `selection`. This pair matches
 `results.benchmarks[].id` and `results.benchmarks[].provider_id` in the source job,

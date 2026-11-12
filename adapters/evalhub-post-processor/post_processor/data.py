@@ -31,6 +31,40 @@ ROLES = {
 }
 
 
+def result_records(document: Any, provider_id: str | None) -> Any:
+    """Unwrap recognized GuideLLM reports without guessing an unknown file's origin."""
+    if not isinstance(document, dict):
+        return document
+    # Canonical records remain usable regardless of which framework produced them.
+    if "samples" in document or "records" in document:
+        return document.get("samples", document.get("records"))
+    metadata = document.get("metadata")
+    version = metadata.get("guidellm_version") if isinstance(metadata, dict) else None
+    identified = isinstance(version, str) and bool(version.strip())
+    if "benchmarks" not in document:
+        if identified:
+            raise ValueError("GuideLLM report is missing its benchmarks array")
+        return [document]
+    if provider_id != "guidellm" and not identified:
+        raise ValueError(
+            "Cannot identify the origin of nested results; supply supported per-sample records"
+        )
+    if identified and provider_id not in {None, "guidellm"}:
+        raise ValueError("GuideLLM report conflicts with the evaluation job provider")
+    benchmarks = document["benchmarks"]
+    # Never silently choose a benchmark from a multi-run GuideLLM report.
+    if not isinstance(benchmarks, list) or len(benchmarks) != 1:
+        raise ValueError("GuideLLM report must contain exactly one benchmark")
+    benchmark = benchmarks[0]
+    requests = benchmark.get("requests") if isinstance(benchmark, dict) else None
+    records = requests.get("successful") if isinstance(requests, dict) else None
+    if not isinstance(records, list) or any(not isinstance(row, dict) for row in records):
+        raise ValueError("GuideLLM requests.successful must be an array of record objects")
+    if not records:
+        raise ValueError("GuideLLM report contains no successful per-sample requests")
+    return records
+
+
 def within(root: Path, name: str) -> Path:
     """Resolve an untrusted relative artifact path under its download directory."""
     if not isinstance(name, str) or "\\" in name or Path(name).is_absolute():
@@ -103,6 +137,7 @@ def read_table(
     *,
     dataset: str | None = None,
     calibration: bool = False,
+    provider_id: str | None = None,
 ) -> Table:
     """Load per-example records from supported files under a source path."""
     config = config or {}
@@ -164,6 +199,11 @@ def read_table(
                 records = obj.get("samples", obj.get("records", [obj]))
             else:
                 records = obj
+            if not calibration:
+                try:
+                    records = result_records(obj, provider_id)
+                except ValueError as exc:
+                    raise ValueError(f"{prefix}{path.name}: {exc}") from exc
         elif kind == "jsonl":
             records = [
                 json.loads(line)
