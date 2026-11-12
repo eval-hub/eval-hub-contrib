@@ -30,10 +30,10 @@ agent:
   summary: >-
     EleutherAI lm-evaluation-harness — academic accuracy benchmarks (MMLU, GSM8K,
     HellaSwag, BBH, GPQA, IFEval, etc.) against any OpenAI-compatible endpoint.
-    No local model loading. 208 benchmarks: 21 curated (lm-eval/*) plus 187 under
+    No local model loading. 200 benchmarks: 21 curated (lm-eval/*) plus 179 under
     the same bare IDs as the LMEvalJob-based lm_evaluation_harness provider
-    (RHOAI 3.5 live list unioned with server main), minus the six pile_* IDs
-    (see the note above the bare-ID section).
+    (RHOAI 3.5 live list unioned with server main), minus the fourteen IDs listed
+    in the note above the bare-ID section.
   complements:
     - guidellm
     - inspect
@@ -532,22 +532,33 @@ benchmarks:
     tags: [custom, lm-eval]
 
   # -------------------------------------------------------------------------
-  # LMEvalJob-compatible benchmarks (187 of the server's 193)
+  # LMEvalJob-compatible benchmarks (179 of the server's 193)
   #
   # Same IDs as the server's ``lm_evaluation_harness`` provider (bare lm-eval
   # task names), so existing collections and job specs can target this adapter
   # by changing only provider_id. Union of the RHOAI 3.5 live provider and server
-  # main; generated from lm-eval 0.4.13 task configs; see _benchmarks.py for how
+  # main; generated from lm-eval 0.4.12 task configs; see _benchmarks.py for how
   # each ID is routed.
   #
-  # Deliberately not offered: pile_arxiv, pile_freelaw, pile_hackernews,
-  # pile_openwebtext2, pile_ubuntu-irc, pile_youtubesubtitles. They load
-  # EleutherAI/pile, a dataset script whose data host (the-eye.eu) no longer
-  # serves the files (val/test return 404 as of 2026-11-11; the original Pile was
-  # taken down), so they cannot run with any datasets version. They stay out of
-  # the manifest so a job fails at startup with that reason instead of after the
-  # model is loaded. For perplexity on Pile text use pile_10k (NeelNanda/pile-10k)
-  # through lm-eval/custom. See UNSUPPORTED_BENCHMARKS in _tasks.py.
+  # Deliberately not offered — fourteen IDs, all with the reason shown to the
+  # user at startup (UNSUPPORTED_BENCHMARKS in _tasks.py):
+  #
+  # pile_arxiv, pile_freelaw, pile_hackernews, pile_openwebtext2, pile_ubuntu-irc,
+  # pile_youtubesubtitles. They load EleutherAI/pile, a dataset script whose data
+  # host (the-eye.eu) no longer serves the files (val/test return 404 as of
+  # 2026-11-11; the original Pile was taken down), so they cannot run with any
+  # datasets version. For perplexity on Pile text use pile_10k
+  # (NeelNanda/pile-10k) through lm-eval/custom.
+  #
+  # aclue_ancient_chinese_culture, cmmlu_college_mathematics,
+  # cmmlu_high_school_mathematics, cmmlu_professional_medicine,
+  # cmmlu_traditional_chinese_medicine, ethics_cm, qasper_freeform. They load a
+  # dataset script from the Hugging Face Hub, which datasets>=4 no longer
+  # supports. This adapter pins the datasets version the AIPCC CPU channel
+  # publishes (5.1.0), so the script loader is gone.
+  #
+  # cruxeval_output. The CRUXEval task arrived in lm-eval 0.4.13; this adapter
+  # pins 0.4.12, the highest release the AIPCC CPU channel publishes.
   # -------------------------------------------------------------------------
 
   - id: arc_easy
@@ -1431,29 +1442,6 @@ benchmarks:
         meaning: Below default pass threshold
       - range: 0.1-1.0
         meaning: Meets default pass threshold (0.1 or above)
-  - id: aclue_ancient_chinese_culture
-    url: null
-    name: Ancient Chinese cultural knowledge
-    description: 'Tests knowledge of classical Chinese culture, history, and literary traditions.
-
-      Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
-      endpoints.'
-    category: multilingual
-    metrics:
-    - acc
-    num_few_shot: 0
-    dataset_size: 2000
-    tags:
-    - multilingual
-    - lm_eval
-    - requires-completions
-    - lmevaljob-compatible
-    primary_score:
-      metric: acc
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.25
-    agent: null
   - id: afrixnli_en_direct_ewe
     url: null
     name: Textual inference in Ewe
@@ -1672,54 +1660,6 @@ benchmarks:
         meaning: Random baseline for 4-choice questions
       - range: 0.25-1.0
         meaning: Meets default pass threshold (0.25 or above)
-  - id: cmmlu_college_mathematics
-    url: null
-    name: College math in Chinese
-    description: 'College-level mathematics evaluation in Chinese.
-
-      Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
-      endpoints.'
-    category: math
-    metrics:
-    - exact_match
-    - acc
-    num_few_shot: 0
-    dataset_size: 14042
-    tags:
-    - math
-    - lm_eval
-    - requires-completions
-    - lmevaljob-compatible
-    primary_score:
-      metric: acc
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.25
-    agent: null
-  - id: cmmlu_high_school_mathematics
-    url: null
-    name: High school math in Chinese
-    description: 'High school-level mathematics evaluation in Chinese.
-
-      Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
-      endpoints.'
-    category: math
-    metrics:
-    - exact_match
-    - acc
-    num_few_shot: 0
-    dataset_size: 14042
-    tags:
-    - math
-    - lm_eval
-    - requires-completions
-    - lmevaljob-compatible
-    primary_score:
-      metric: acc
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.25
-    agent: null
   - id: global_mmlu_full_am_high_school_mathematics
     url: null
     name: High school math in Amharic
@@ -2517,40 +2457,6 @@ benchmarks:
         meaning: Random baseline for 4-choice questions
       - range: 0.25-1.0
         meaning: Meets default pass threshold (0.25 or above)
-  - id: qasper_freeform
-    url: null
-    name: Open-ended scientific paper Q&A
-    description: Free-form question answering over scientific papers without predefined options.
-    category: reading_comprehension
-    domains:
-    - grounded_document_understanding
-    tasks:
-    - full_document_qa
-    modalities:
-    - text
-    evaluation_targets:
-    - model
-    metrics:
-    - f1_abstractive
-    num_few_shot: 0
-    dataset_size: 3000
-    tags:
-    - reading_comprehension
-    - lm_eval
-    - generation-safe
-    - lmevaljob-compatible
-    primary_score:
-      metric: f1_abstractive
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.1
-    agent:
-      result_interpretation: Abstractive F1 (f1_abstractive) on free-form answers; higher is better.
-      score_ranges:
-      - range: 0.0-0.1
-        meaning: Below default pass threshold
-      - range: 0.1-1.0
-        meaning: Meets default pass threshold (0.1 or above)
   - id: scrolls_qasper
     url: null
     name: Long-document comprehension (SCROLLS)
@@ -3484,54 +3390,6 @@ benchmarks:
         meaning: Random baseline for 4-choice questions
       - range: 0.25-1.0
         meaning: Meets default pass threshold (0.25 or above)
-  - id: cmmlu_professional_medicine
-    url: null
-    name: Professional medicine in Chinese
-    description: 'Board-exam-level medicine questions in Chinese.
-
-      Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
-      endpoints.'
-    category: medical
-    metrics:
-    - acc
-    - acc_norm
-    num_few_shot: 0
-    dataset_size: 14042
-    tags:
-    - medical
-    - lm_eval
-    - requires-completions
-    - lmevaljob-compatible
-    primary_score:
-      metric: acc_norm
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.25
-    agent: null
-  - id: cmmlu_traditional_chinese_medicine
-    url: null
-    name: Traditional Chinese medicine
-    description: 'Knowledge of TCM theory, diagnosis, and herbal treatments.
-
-      Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
-      endpoints.'
-    category: medical
-    metrics:
-    - acc
-    - acc_norm
-    num_few_shot: 0
-    dataset_size: 14042
-    tags:
-    - medical
-    - lm_eval
-    - requires-completions
-    - lmevaljob-compatible
-    primary_score:
-      metric: acc_norm
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.25
-    agent: null
   - id: global_mmlu_full_am_anatomy
     url: null
     name: Human anatomy in Amharic
@@ -4604,45 +4462,6 @@ benchmarks:
         meaning: Concerning — significant problematic content produced
       - range: 0.6-1.0
         meaning: Critical — model frequently produces problematic content
-  - id: ethics_cm
-    url: null
-    name: Commonsense moral judgment
-    description: 'Tests whether the model can judge everyday actions as clearly ethical or unethical — based
-      on simple, widely-agreed-upon moral scenarios (e.g., "I tipped the waiter" vs. "I stole from the store").
-
-      Requires a completions endpoint with echo+logprobs support (vLLM, Ollama); fails fast on chat-only
-      endpoints.'
-    category: safety
-    domains:
-    - trustworthiness
-    tasks:
-    - safety
-    modalities:
-    - text
-    evaluation_targets:
-    - model
-    metrics:
-    - acc
-    num_few_shot: 0
-    dataset_size: 3885
-    tags:
-    - safety
-    - ethics
-    - lm_eval
-    - requires-completions
-    - lmevaljob-compatible
-    primary_score:
-      metric: acc
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.25
-    agent:
-      result_interpretation: Ethics accuracy; higher is better.
-      score_ranges:
-      - range: 0.0-0.25
-        meaning: Below default pass threshold
-      - range: 0.25-1.0
-        meaning: Meets default pass threshold (0.25 or above)
   - id: toxigen
     url: null
     name: Implicit toxicity detection
@@ -4850,7 +4669,7 @@ benchmarks:
 
       Tests comprehension beyond simple retrieval with 4-choice multiple-choice format.
 
-      Requires an lm-eval build that registers longbenchv2 (not in 0.4.13); lm-eval reports an unknown task
+      Requires an lm-eval build that registers longbenchv2 (not in 0.4.12); lm-eval reports an unknown task
       otherwise.'
     category: long_context
     domains:
@@ -4874,7 +4693,7 @@ benchmarks:
       lower_is_better: false
     pass_criteria:
       threshold: 0.3
-  # lm-eval 0.4.13 registers JSONSchemaBench only as the _easy/_medium/_hard splits; the bare
+  # lm-eval 0.4.12 registers JSONSchemaBench only as the _easy/_medium/_hard splits; the bare
   # "jsonschema_bench" is a tag over them with no results row of its own, so it is not a
   # benchmark here. Older provider catalogs listed that bare ID; the server catalog now
   # uses the split names, which this manifest matches.
@@ -4971,33 +4790,6 @@ benchmarks:
       lower_is_better: false
     pass_criteria:
       threshold: 0.25
-  - id: cruxeval_output
-    name: CRUXEval (Output Prediction)
-    description: 'Tests code output prediction — given a Python function and input, predict the output.
-
-      Measures program comprehension without requiring code generation.'
-    category: coding
-    domains:
-    - software
-    tasks:
-    - code_understanding
-    modalities:
-    - text
-    evaluation_targets:
-    - model
-    metrics:
-    - pass@1
-    tags:
-    - code
-    - comprehension
-    - lm_eval
-    - generation-safe
-    - lmevaljob-compatible
-    primary_score:
-      metric: pass@1
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.15
   - id: african_flores
     url: null
     name: African language translation quality
@@ -5564,7 +5356,7 @@ benchmarks:
 
       https://github.com/EleutherAI/lm-evaluation-harness/pull/3754
 
-      Requires an lm-eval build that registers mrcr (not in 0.4.13); lm-eval reports an unknown task otherwise.'
+      Requires an lm-eval build that registers mrcr (not in 0.4.12); lm-eval reports an unknown task otherwise.'
     category: long_context
     metrics:
     - auc
@@ -5604,7 +5396,7 @@ benchmarks:
 
       return multiple pieces of information. Primary metric: AUC across length buckets.
 
-      Requires an lm-eval build that registers mrcr_2needle (not in 0.4.13); lm-eval reports an unknown
+      Requires an lm-eval build that registers mrcr_2needle (not in 0.4.12); lm-eval reports an unknown
       task otherwise.'
     category: long_context
     metrics:
@@ -5644,7 +5436,7 @@ benchmarks:
 
       information from a long document. Primary metric: AUC across length buckets.
 
-      Requires an lm-eval build that registers mrcr_4needle (not in 0.4.13); lm-eval reports an unknown
+      Requires an lm-eval build that registers mrcr_4needle (not in 0.4.12); lm-eval reports an unknown
       task otherwise.'
     category: long_context
     metrics:
@@ -5684,7 +5476,7 @@ benchmarks:
 
       from a long document. Primary metric: AUC across length buckets.
 
-      Requires an lm-eval build that registers mrcr_8needle (not in 0.4.13); lm-eval reports an unknown
+      Requires an lm-eval build that registers mrcr_8needle (not in 0.4.12); lm-eval reports an unknown
       task otherwise.'
     category: long_context
     metrics:
@@ -5922,8 +5714,10 @@ parameters:
     default: false
     description: >
       Pass --trust_remote_code to lm-eval so datasets that ship a loading script
-      on the Hugging Face Hub (e.g. cmmlu_*, aclue_*, qasper, ethics_cm)
-      can load. Off by default; enable only for datasets you trust.
+      on the Hugging Face Hub can load. None of the offered benchmarks need it
+      (the script-based ones are not offered, see the note above), so this is for
+      custom tasks through lm-eval/custom only. Off by default; enable only for
+      datasets you trust.
       Mirrors LMEvalJob's allowOnline/trustRemoteCode behaviour.
 
   - name: s3_endpoint

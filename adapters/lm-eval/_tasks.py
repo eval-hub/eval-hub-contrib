@@ -43,7 +43,7 @@ COMPOSITE_SUITES: dict[str, list[str]] = {
         "ifeval",
         "triviaqa",
         "nq_open",
-        # Registered as "hendrycks_math500" in lm-eval 0.4.13 ("math_500" is the
+        # Registered as "hendrycks_math500" in lm-eval 0.4.12 ("math_500" is the
         # benchmark ID, not a task name).
         "hendrycks_math500",
     ],
@@ -59,6 +59,16 @@ _PILE_REASON = (
     "with any datasets version. For perplexity on Pile text, run pile_10k "
     "(NeelNanda/pile-10k) through lm-eval/custom with task=pile_10k"
 )
+_DATASET_SCRIPT_REASON = (
+    "it loads a dataset script from the Hugging Face Hub, which datasets>=4 no "
+    "longer supports. This adapter pins the datasets release the AIPCC CPU channel "
+    "publishes (5.1.0), so the script loader is gone. Run it through a build that "
+    "ships datasets<4 if you need this benchmark"
+)
+_LMEVAL_VERSION_REASON = (
+    "it needs lm-eval 0.4.13 or later, and this adapter pins 0.4.12, the highest "
+    "release the AIPCC CPU channel publishes"
+)
 UNSUPPORTED_BENCHMARKS: dict[str, str] = {
     f"pile_{subset}": _PILE_REASON
     for subset in (
@@ -70,6 +80,19 @@ UNSUPPORTED_BENCHMARKS: dict[str, str] = {
         "youtubesubtitles",
     )
 }
+UNSUPPORTED_BENCHMARKS |= {
+    benchmark_id: _DATASET_SCRIPT_REASON
+    for benchmark_id in (
+        "aclue_ancient_chinese_culture",
+        "cmmlu_college_mathematics",
+        "cmmlu_high_school_mathematics",
+        "cmmlu_professional_medicine",
+        "cmmlu_traditional_chinese_medicine",
+        "ethics_cm",
+        "qasper_freeform",
+    )
+}
+UNSUPPORTED_BENCHMARKS["cruxeval_output"] = _LMEVAL_VERSION_REASON
 
 
 def task_for(benchmark_id: str) -> str | None:
@@ -231,7 +254,7 @@ def resolve_chat_template_mode(
     """Return ``(tokenizer_backend, tokenized_requests)`` for the model args.
 
     On a chat endpoint the server renders the template, so strings are sent as
-    before. On a completions endpoint lm_eval 0.4.13 only renders the Hugging
+    before. On a completions endpoint lm_eval 0.4.12 only renders the Hugging
     Face template when ``tokenizer_backend=huggingface`` and
     ``tokenized_requests=True``; otherwise it hands the endpoint the chat
     history serialised as JSON. That is not a usable prompt, so reject it here

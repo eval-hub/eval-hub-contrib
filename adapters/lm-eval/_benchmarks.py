@@ -2,7 +2,7 @@
 
 Regenerate with ``python scripts/generate_benchmarks.py`` after changing the
 benchmark list in ``provider.yaml`` or the pinned lm-eval version. The facts
-are read from lm-eval 0.4.13's own task configs; the drift tests in
+are read from lm-eval 0.4.12's own task configs; the drift tests in
 ``tests/test_adapter.py`` fail if this file no longer matches them.
 
 ``scoring``     loglikelihood: needs /v1/completions with echo+logprobs;
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-LMEVAL_VERSION = "0.4.13"
+LMEVAL_VERSION = "0.4.12"
 
 
 class TaskSpec(NamedTuple):
@@ -72,7 +72,6 @@ TASKS: dict[str, TaskSpec] = {
     "AraDiCE_piqa_lev": TaskSpec('loglikelihood', False, False, True, 'AraDiCE_piqa_lev', ('acc', 'acc_norm', 'f1'), (), False),
     "AraDiCE_truthfulqa_mc1_lev": TaskSpec('loglikelihood', False, False, True, 'AraDiCE_truthfulqa_mc1_lev', ('acc', 'acc_norm', 'f1'), (), False),
     "AraDiCE_winogrande_eng": TaskSpec('loglikelihood', False, False, True, 'AraDiCE_winogrande_eng', ('acc', 'acc_norm', 'f1'), (), False),
-    "aclue_ancient_chinese_culture": TaskSpec('loglikelihood', False, False, True, 'aclue_ancient_chinese_culture', ('acc', 'acc_norm'), (), False),
     "african_flores": TaskSpec('generation', False, False, True, 'african_flores', ('acc',), (), True),
     "afrixnli-irokobench": TaskSpec('loglikelihood', False, False, True, 'afrixnli-irokobench', ('acc',), (), False),
     "afrixnli_amh_prompt_2": TaskSpec('loglikelihood', False, False, True, 'afrixnli_amh_prompt_2', ('f1', 'acc'), (), False),
@@ -143,19 +142,13 @@ TASKS: dict[str, TaskSpec] = {
     "boolq": TaskSpec('loglikelihood', False, False, True, 'boolq', ('acc',), (), False),
     "careqa_open_perplexity": TaskSpec('loglikelihood', True, False, True, 'careqa_open_perplexity', ('word_perplexity', 'byte_perplexity', 'bits_per_byte'), ('bits_per_byte', 'byte_perplexity', 'word_perplexity'), False),
     "ceval-valid_college_programming": TaskSpec('loglikelihood', False, False, True, 'ceval-valid_college_programming', ('acc', 'acc_norm'), (), False),
-    "cmmlu_college_mathematics": TaskSpec('loglikelihood', False, False, True, 'cmmlu_college_mathematics', ('acc', 'acc_norm'), (), False),
-    "cmmlu_high_school_mathematics": TaskSpec('loglikelihood', False, False, True, 'cmmlu_high_school_mathematics', ('acc', 'acc_norm'), (), False),
-    "cmmlu_professional_medicine": TaskSpec('loglikelihood', False, False, True, 'cmmlu_professional_medicine', ('acc', 'acc_norm'), (), False),
-    "cmmlu_traditional_chinese_medicine": TaskSpec('loglikelihood', False, False, True, 'cmmlu_traditional_chinese_medicine', ('acc', 'acc_norm'), (), False),
     "code2text_javascript": TaskSpec('generation', False, False, True, 'code2text_javascript', (), (), True),
     "code2text_ruby": TaskSpec('generation', False, False, True, 'code2text_ruby', (), (), True),
     "copa_ar": TaskSpec('loglikelihood', False, False, True, 'copa_ar', ('acc', 'acc_norm'), (), False),
     "copal_id_colloquial": TaskSpec('loglikelihood', False, False, True, 'copal_id_colloquial', ('acc',), (), False),
     "crows_pairs_english": TaskSpec('loglikelihood', False, False, True, 'crows_pairs_english', ('likelihood_diff', 'pct_stereotype'), ('likelihood_diff', 'pct_stereotype'), False),
-    "cruxeval_output": TaskSpec('generation', False, True, True, 'cruxeval_output', (), (), True),
     "darijahellaswag": TaskSpec('loglikelihood', False, False, True, 'darijahellaswag', ('acc', 'acc_norm'), (), False),
     "egyhellaswag": TaskSpec('loglikelihood', False, False, True, 'egyhellaswag', ('acc', 'acc_norm'), (), False),
-    "ethics_cm": TaskSpec('loglikelihood', False, False, True, 'ethics_cm', ('acc',), (), False),
     "eus_reading": TaskSpec('loglikelihood', False, False, True, 'eus_reading', ('acc',), (), False),
     "global_mmlu_full_am_anatomy": TaskSpec('loglikelihood', False, False, True, 'global_mmlu_full_am_anatomy', ('acc',), (), False),
     "global_mmlu_full_am_clinical_knowledge": TaskSpec('loglikelihood', False, False, True, 'global_mmlu_full_am_clinical_knowledge', ('acc',), (), False),
@@ -223,7 +216,6 @@ TASKS: dict[str, TaskSpec] = {
     "openbookqa": TaskSpec('loglikelihood', False, False, True, 'openbookqa', ('acc', 'acc_norm'), (), False),
     "paloma_wikitext_103": TaskSpec('loglikelihood', True, False, True, 'paloma_wikitext_103', ('word_perplexity', 'byte_perplexity', 'bits_per_byte'), ('bits_per_byte', 'byte_perplexity', 'word_perplexity'), False),
     "piqa": TaskSpec('loglikelihood', False, False, True, 'piqa', ('acc', 'acc_norm'), (), False),
-    "qasper_freeform": TaskSpec('generation', False, False, True, 'qasper_freeform', (), (), True),
     "ruler_qa_squad": TaskSpec('generation', False, False, True, 'ruler_qa_squad', ('4096', '8192', '16384', '32768', '65536', '131072'), (), False),
     "scrolls_qasper": TaskSpec('generation', False, False, True, 'scrolls_qasper', ('exact_match',), (), False),
     "tinyTruthfulQA": TaskSpec('loglikelihood', False, False, True, 'tinyTruthfulQA', ('acc',), (), False),
@@ -296,7 +288,6 @@ BENCHMARKS: dict[str, str] = {
     "arabic_leaderboard_arabic_mt_boolq_light": "arabic_leaderboard_arabic_mt_boolq_light",
     "arabic_mt_boolq_light": "arabic_mt_boolq_light",
     "leaderboard_bbh_salient_translation_error_detection": "leaderboard_bbh_salient_translation_error_detection",
-    "aclue_ancient_chinese_culture": "aclue_ancient_chinese_culture",
     "afrixnli_en_direct_ewe": "afrixnli_en_direct_ewe",
     "afrixnli_en_direct_ibo": "afrixnli_en_direct_ibo",
     "afrixnli_en_direct_lug": "afrixnli_en_direct_lug",
@@ -306,8 +297,6 @@ BENCHMARKS: dict[str, str] = {
     "AraDiCE_ArabicMMLU_primary_stem_math_egy": "AraDiCE_ArabicMMLU_primary_stem_math_egy",
     "arabic_leaderboard_arabic_mmlu_college_mathematics_light": "arabic_leaderboard_arabic_mmlu_college_mathematics_light",
     "arabic_leaderboard_arabic_mmlu_high_school_mathematics": "arabic_leaderboard_arabic_mmlu_high_school_mathematics",
-    "cmmlu_college_mathematics": "cmmlu_college_mathematics",
-    "cmmlu_high_school_mathematics": "cmmlu_high_school_mathematics",
     "global_mmlu_full_am_high_school_mathematics": "global_mmlu_full_am_high_school_mathematics",
     "global_mmlu_full_ar_high_school_mathematics": "global_mmlu_full_ar_high_school_mathematics",
     "global_mmlu_full_bn_high_school_mathematics": "global_mmlu_full_bn_high_school_mathematics",
@@ -337,7 +326,6 @@ BENCHMARKS: dict[str, str] = {
     "blimp_drop_argument": "blimp_drop_argument",
     "bigbench_gre_reading_comprehension_multiple_choice": "bigbench_gre_reading_comprehension_multiple_choice",
     "eus_reading": "eus_reading",
-    "qasper_freeform": "qasper_freeform",
     "scrolls_qasper": "scrolls_qasper",
     "AraDiCE_ArabicMMLU_high_social-science_economics_egy": "AraDiCE_ArabicMMLU_high_social-science_economics_egy",
     "AraDiCE_ArabicMMLU_high_social-science_geography_lev": "AraDiCE_ArabicMMLU_high_social-science_geography_lev",
@@ -373,8 +361,6 @@ BENCHMARKS: dict[str, str] = {
     "arabic_leaderboard_arabic_mmlu_clinical_knowledge": "arabic_leaderboard_arabic_mmlu_clinical_knowledge",
     "arabic_leaderboard_arabic_mmlu_medical_genetics": "arabic_leaderboard_arabic_mmlu_medical_genetics",
     "arabic_leaderboard_arabic_mmlu_professional_medicine": "arabic_leaderboard_arabic_mmlu_professional_medicine",
-    "cmmlu_professional_medicine": "cmmlu_professional_medicine",
-    "cmmlu_traditional_chinese_medicine": "cmmlu_traditional_chinese_medicine",
     "global_mmlu_full_am_anatomy": "global_mmlu_full_am_anatomy",
     "global_mmlu_full_am_clinical_knowledge": "global_mmlu_full_am_clinical_knowledge",
     "global_mmlu_full_am_medical_genetics": "global_mmlu_full_am_medical_genetics",
@@ -411,7 +397,6 @@ BENCHMARKS: dict[str, str] = {
     "leaderboard_math_hard": "leaderboard_math_hard",
     "bbq": "bbq",
     "crows_pairs_english": "crows_pairs_english",
-    "ethics_cm": "ethics_cm",
     "toxigen": "toxigen",
     "truthfulqa_mc1": "truthfulqa_mc1",
     "bigbench_hhh_alignment_multiple_choice": "bigbench_hhh_alignment_multiple_choice",
@@ -421,7 +406,6 @@ BENCHMARKS: dict[str, str] = {
     "jsonschema_bench_easy": "jsonschema_bench_easy",
     "jsonschema_bench_medium": "jsonschema_bench_medium",
     "jsonschema_bench_hard": "jsonschema_bench_hard",
-    "cruxeval_output": "cruxeval_output",
     "african_flores": "african_flores",
     "afrixnli-irokobench": "afrixnli-irokobench",
     "afrixnli_amh_prompt_2": "afrixnli_amh_prompt_2",
