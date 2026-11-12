@@ -210,7 +210,17 @@ def test_guidellm_native_records_join_calibration(tmp_path, provider_id, metadat
     records = [{"request_id": str(i), "time_to_first_token_ms": float(i)} for i in range(8)]
     path = tmp_path / "benchmarks.json"
     path.write_text(
-        json.dumps({"metadata": metadata, "benchmarks": [{"requests": {"successful": records}}]})
+        json.dumps(
+            {
+                "metadata": metadata,
+                "benchmarks": [
+                    {
+                        "requests": {"successful": records},
+                        "metrics": {"request_totals": {"successful": len(records)}},
+                    }
+                ],
+            }
+        )
     )
     table = read_table(
         path,
@@ -331,7 +341,14 @@ def test_generic_records_bypass_guidellm_detection(tmp_path, monkeypatch, kind):
 @pytest.mark.parametrize("strategies", [2, 10])
 def test_guidellm_sweep_uses_first_strategy_like_producer(tmp_path, provider_id, strategies):
     first = [{"request_id": "same-request", "latency": 10}]
-    document = {"benchmarks": [{"requests": {"successful": first}}]}
+    document = {
+        "benchmarks": [
+            {
+                "requests": {"successful": first},
+                "metrics": {"request_totals": {"successful": len(first)}},
+            }
+        ]
+    }
     document["benchmarks"].extend(
         {"requests": {"successful": [{"request_id": "same-request", "latency": i * 100}]}}
         for i in range(1, strategies)
@@ -399,7 +416,8 @@ def test_nullable_guidellm_measurement_fails_numeric_validation(tmp_path):
                     {
                         "requests": {
                             "successful": [{"request_id": "a", "time_to_first_token_ms": None}]
-                        }
+                        },
+                        "metrics": {"request_totals": {"successful": 1}},
                     }
                 ],
             }
@@ -425,7 +443,14 @@ def test_label_only_calibration_requires_matching_request_ids():
 @pytest.mark.parametrize("summary_name", ["a-summary.json", "z-summary.json"])
 def test_native_report_and_unrelated_summary_coexist(tmp_path, provider_id, summary_name):
     rows = [{"request_id": "a", "latency": 10}]
-    native = {"benchmarks": [{"requests": {"successful": rows}}]}
+    native = {
+        "benchmarks": [
+            {
+                "requests": {"successful": rows},
+                "metrics": {"request_totals": {"successful": len(rows)}},
+            }
+        ]
+    }
     if provider_id is None:
         native["metadata"] = {"guidellm_version": "0.5.3"}
     (tmp_path / "benchmarks.json").write_text(json.dumps(native))
@@ -456,3 +481,54 @@ def test_independent_calibration_can_supply_its_own_paired_predictions():
     np.testing.assert_array_equal(y, [6, 9])
     np.testing.assert_array_equal(predicted, [5, 8])
     np.testing.assert_array_equal(unlabeled, [10, 20])
+
+
+@pytest.mark.parametrize("provider_id", [None, "guidellm"])
+@pytest.mark.parametrize("total", [9, 200])
+def test_guidellm_sampled_or_inconsistent_report_is_rejected(tmp_path, provider_id, total):
+    document = {
+        "metadata": {"guidellm_version": "0.5.3"},
+        "args": {"sample_requests": 10},
+        "benchmarks": [
+            {
+                "requests": {
+                    "successful": [{"request_id": str(i), "latency": i} for i in range(10)]
+                },
+                "metrics": {"request_totals": {"successful": total}},
+            }
+        ],
+    }
+    path = tmp_path / "benchmarks.json"
+    path.write_text(json.dumps(document))
+    with pytest.raises(
+        ValueError, match="results_data_ref: benchmarks.json: .*sampled or inconsistent"
+    ):
+        read_table(path, provider_id=provider_id, dataset="results_data_ref")
+
+
+@pytest.mark.parametrize("total", [None, True, False, 0, -1, 1.0, "1", {}, []])
+def test_guidellm_missing_or_invalid_total_is_rejected(total):
+    document = {
+        "benchmarks": [
+            {
+                "requests": {"successful": [{"request_id": "a", "latency": 10}]},
+                "metrics": {"request_totals": {"successful": total}},
+            }
+        ]
+    }
+    with pytest.raises(ValueError, match="positive integer metrics.request_totals.successful"):
+        extract_guidellm_records(document, "guidellm")
+
+
+def test_guidellm_complete_report_uses_actual_total_not_sampling_option():
+    rows = [{"request_id": str(i), "latency": i} for i in range(20)]
+    document = {
+        "args": {"sample_requests": 10},
+        "benchmarks": [
+            {
+                "requests": {"successful": rows},
+                "metrics": {"request_totals": {"successful": 20}},
+            }
+        ],
+    }
+    assert extract_guidellm_records(document, "guidellm") == rows

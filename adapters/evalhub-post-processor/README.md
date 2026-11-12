@@ -174,7 +174,14 @@ sweep and multi-rate/concurrency reports. This deliberately matches the GuideLLM
 adapter's `_parse_results`, which reports metrics from `benchmarks[0]`. Later
 strategies are not pooled or substituted if the first has no usable requests.
 No API field or JSONPath configuration is required. The selected section must
-contain a nonempty array of successful request objects.
+contain a nonempty array of successful request objects. Its row count must equal
+that strategy's positive integer `metrics.request_totals.successful`; missing or
+invalid totals and count mismatches fail with an explicit error. GuideLLM versions
+can persist only a random request sample while aggregate metrics cover the full
+run. Such sampled reports cannot support an interval for the full successful
+request set. Provide a complete per-request export instead. The reader checks the
+actual total rather than `args.sample_requests`, which does not establish how many
+records were persisted. Duplicate selected sample IDs still fail normal validation.
 
 JSON arrays, `samples`/`records` wrappers, single records with a usable sample ID,
 and JSONL inputs bypass GuideLLM extraction. Unidentified aggregate summaries

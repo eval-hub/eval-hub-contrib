@@ -642,8 +642,9 @@ def test_legacy_adapter_result_config_and_conflict(runtime):
 
 @pytest.mark.parametrize("sections", [1, 10])
 @pytest.mark.parametrize("external", [False, True])
+@pytest.mark.parametrize("sampled", [False, True])
 def test_guidellm_native_report_computes_ci_without_api_selector(
-    runtime, tmp_path, monkeypatch, external, sections
+    runtime, tmp_path, monkeypatch, external, sections, sampled
 ):
     config = runtime["spec"]["parameters"]["operations"]["confidence_interval"]
     rows = [
@@ -651,7 +652,18 @@ def test_guidellm_native_report_computes_ci_without_api_selector(
         for row in runtime["data"]["samples"]
     ]
     runtime["data"].clear()
-    runtime["data"].update({"benchmarks": [{"requests": {"successful": rows}}]})
+    runtime["data"].update(
+        {
+            "benchmarks": [
+                {
+                    "requests": {"successful": rows},
+                    "metrics": {"request_totals": {"successful": len(rows)}},
+                }
+            ]
+        }
+    )
+    if sampled:
+        runtime["data"]["benchmarks"][0]["metrics"]["request_totals"]["successful"] = 200
     # Repeated request IDs in later strategies must never be pooled into the first.
     runtime["data"]["benchmarks"].extend(
         {"requests": {"successful": [{**row, "time_to_first_token_ms": 100} for row in rows]}}
@@ -688,6 +700,11 @@ def test_guidellm_native_report_computes_ci_without_api_selector(
                 benchmark["provider_id"] = "guidellm"
         path = runtime["cal"] / "labels.jsonl"
         path.write_text(path.read_text().replace("test-provider", "guidellm"))
+    if sampled:
+        with pytest.raises(ValueError, match="sampled or inconsistent reports"):
+            runtime["run"]()
+        assert runtime["events"][-1]["status"] == "failed"
+        return
     result = runtime["run"]()
     assert runtime["events"][-1]["status"] == "completed"
     output = result.additional_info["confidence_interval"]

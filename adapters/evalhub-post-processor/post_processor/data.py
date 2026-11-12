@@ -77,6 +77,22 @@ def extract_guidellm_records(document: dict, provider_id: str | None) -> list[di
         raise ValueError("GuideLLM requests.successful must be an array of record objects")
     if not records:
         raise ValueError("GuideLLM report contains no successful per-sample requests")
+    # GuideLLM may retain only a sampled request list while metrics cover the full run.
+    # The declared successful total, rather than args.sample_requests, proves completeness.
+    metrics = benchmark.get("metrics")
+    totals = metrics.get("request_totals") if isinstance(metrics, dict) else None
+    total = totals.get("successful") if isinstance(totals, dict) else None
+    if isinstance(total, bool) or not isinstance(total, int) or total <= 0:
+        raise ValueError(
+            "GuideLLM report requires a positive integer metrics.request_totals.successful "
+            "to verify complete per-request results"
+        )
+    if len(records) != total:
+        raise ValueError(
+            f"GuideLLM report contains {len(records)} successful request records but "
+            f"metrics.request_totals.successful is {total}; sampled or inconsistent reports "
+            "cannot be used for confidence intervals. Provide complete per-request results."
+        )
     return records
 
 
