@@ -199,7 +199,14 @@ def read_table(
                 records = obj.get("samples", obj.get("records", [obj]))
             else:
                 records = obj
-            if not calibration:
+            # Keep usable samples on the generic path, even with report-like fields.
+            if (
+                not calibration
+                and isinstance(obj, dict)
+                and "samples" not in obj
+                and "records" not in obj
+                and table.get(obj, "sample_id") is None
+            ):
                 try:
                     records = extract_guidellm_records(obj, provider_id)
                 except ValueError as exc:

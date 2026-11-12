@@ -268,3 +268,52 @@ def test_canonical_records_need_no_framework_identity(tmp_path, provider_id):
     rows = [{"sample_id": "a", "prediction": 1}]
     path.write_text(json.dumps({"samples": rows}))
     assert read_table(path, provider_id=provider_id).rows == rows
+
+
+@pytest.mark.parametrize("provider_id", [None, "guidellm", "other"])
+@pytest.mark.parametrize(
+    "identity,config",
+    [
+        ({"sample_id": "a"}, {}),
+        ({"doc_id": "a"}, {}),
+        ({"sample_id": None, "doc_id": "a"}, {}),
+        ({"sample_id": 0}, {}),
+        ({"custom_id": "a"}, {"columns": {"sample_id": "custom_id"}}),
+        ({"info": {"id": "a"}}, {"columns": {"sample_id": "info.id"}}),
+        ({"info.id": "a"}, {"columns": {"sample_id": "info.id"}}),
+    ],
+)
+def test_single_sample_with_report_fields_bypasses_guidellm_detection(
+    tmp_path, monkeypatch, provider_id, identity, config
+):
+    def unexpected_extraction(*args, **kwargs):
+        pytest.fail("Usable single samples must bypass framework-specific extraction")
+
+    monkeypatch.setattr("post_processor.data.extract_guidellm_records", unexpected_extraction)
+    row = {
+        **identity,
+        "prediction": 1,
+        "benchmarks": [],
+        "metadata": {"guidellm_version": "0.5.3"},
+    }
+    path = tmp_path / "sample.json"
+    path.write_text(json.dumps(row))
+    table = read_table(path, config, provider_id=provider_id)
+    assert table.rows == [row]
+    assert table.get(row, "sample_id") == (0 if identity.get("sample_id") == 0 else "a")
+
+
+@pytest.mark.parametrize("kind", ["array", "samples", "records", "jsonl"])
+def test_generic_records_bypass_guidellm_detection(tmp_path, monkeypatch, kind):
+    def unexpected_extraction(*args, **kwargs):
+        pytest.fail("Generic per-sample formats must bypass framework-specific extraction")
+
+    monkeypatch.setattr("post_processor.data.extract_guidellm_records", unexpected_extraction)
+    rows = [{"sample_id": "a", "prediction": 1, "benchmarks": []}]
+    path = tmp_path / ("data.jsonl" if kind == "jsonl" else "data.json")
+    if kind == "jsonl":
+        path.write_text(json.dumps(rows[0]) + "\n")
+    else:
+        document = rows if kind == "array" else {kind: rows, "benchmarks": []}
+        path.write_text(json.dumps(document))
+    assert read_table(path).rows == rows
