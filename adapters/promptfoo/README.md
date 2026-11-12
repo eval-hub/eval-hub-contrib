@@ -172,6 +172,32 @@ See `provider.yaml` for the full annotated list. Key ones:
 | `plugins` | promptfoo-redteam | Plugin IDs to run; defaults to an OWASP LLM Top 10-mapped subset |
 | `generation_provider` | promptfoo-redteam | Provider used to generate adversarial content; unset falls back to promptfoo's default (requires `OPENAI_API_KEY`) |
 
+## Container image
+
+Promptfoo is a Node.js CLI shipped in the adapter image:
+
+1. Uses a **UBI9** (upstream) or **RHEL 9** (preferred for product/Konflux —
+   longer 9.8 support) minimal base
+2. Installs **Node.js 24** from RHEL/UBI AppStream (`dnf`/`microdnf module
+   enable nodejs:24`)
+3. Installs the pinned `promptfoo@0.123.1` CLI globally via npm
+4. Installs Python 3.11 + the adapter (`main.py`) so EvalHub can keep calling
+   promptfoo as a subprocess
+
+```sh
+# Upstream / local (UBI9 default)
+make image-promptfoo
+
+# Product / Konflux-style RHEL 9 base (requires registry.redhat.io access)
+cd adapters/promptfoo
+podman build \
+  --build-arg BASE_IMAGE=registry.redhat.io/rhel9/rhel-minimal:latest \
+  -t community-promptfoo:dev -f Containerfile .
+```
+
+We avoid `ubi9/python-311` as the base: that image already enables the
+`nodejs:22` module stream, and switching to `nodejs:24` fails.
+
 ## Local testing
 
 ```sh
