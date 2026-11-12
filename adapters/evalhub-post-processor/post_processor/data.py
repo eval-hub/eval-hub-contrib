@@ -31,7 +31,7 @@ ROLES = {
 }
 
 
-def result_records(document: Any, provider_id: str | None) -> Any:
+def extract_guidellm_records(document: Any, provider_id: str | None) -> Any:
     """Unwrap recognized GuideLLM reports without guessing an unknown file's origin."""
     if not isinstance(document, dict):
         return document
@@ -201,7 +201,7 @@ def read_table(
                 records = obj
             if not calibration:
                 try:
-                    records = result_records(obj, provider_id)
+                    records = extract_guidellm_records(obj, provider_id)
                 except ValueError as exc:
                     raise ValueError(f"{prefix}{path.name}: {exc}") from exc
         elif kind == "jsonl":
