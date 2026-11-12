@@ -638,3 +638,104 @@ def test_legacy_adapter_result_config_and_conflict(runtime):
     config["results_data_ref"]["data_config"] = {}
     with pytest.raises(ValueError, match="only in results_data_ref.data_config"):
         runtime["run"]()
+
+
+@pytest.mark.parametrize("sections", [1, 10])
+@pytest.mark.parametrize("external", [False, True])
+@pytest.mark.parametrize("sampled", [False, True])
+def test_guidellm_native_report_computes_ci_without_api_selector(
+    runtime, tmp_path, monkeypatch, external, sections, sampled
+):
+    config = runtime["spec"]["parameters"]["operations"]["confidence_interval"]
+    rows = [
+        {"request_id": row["sample_id"], "time_to_first_token_ms": row["prediction"]}
+        for row in runtime["data"]["samples"]
+    ]
+    runtime["data"].clear()
+    runtime["data"].update(
+        {
+            "benchmarks": [
+                {
+                    "requests": {"successful": rows},
+                    "metrics": {"request_totals": {"successful": len(rows)}},
+                }
+            ]
+        }
+    )
+    if sampled:
+        runtime["data"]["benchmarks"][0]["metrics"]["request_totals"]["successful"] = 200
+    # Repeated request IDs in later strategies must never be pooled into the first.
+    runtime["data"]["benchmarks"].extend(
+        {"requests": {"successful": [{**row, "time_to_first_token_ms": 100} for row in rows]}}
+        for _ in range(sections - 1)
+    )
+    mapping = {"columns": {"sample_id": "request_id", "prediction": "time_to_first_token_ms"}}
+    if external:
+        runtime["data"]["metadata"] = {"guidellm_version": "0.5.3"}
+        results = tmp_path / "native-results"
+        results.mkdir()
+        (results / "benchmarks.json").write_text(json.dumps(runtime["data"]))
+        (results / "manifest.json").write_text(
+            json.dumps({"primary_score": {"metric": "accuracy"}})
+        )
+        monkeypatch.setenv(
+            "EVALHUB_POST_PROCESSOR_PVC_MOUNTS",
+            json.dumps({"calibration-data": str(runtime["cal"]), "results": str(results)}),
+        )
+        config["results_data_ref"] = {"pvc": {"claim_name": "results"}, "data_config": mapping}
+        (runtime["cal"] / "labels.jsonl").write_text(
+            "\n".join(
+                json.dumps({"sample_id": sid, "label": label, "prediction": pred})
+                for sid, label, pred in [("c1", 1, 0.8), ("c2", 0, 0.2), ("c3", 1, 0.7)]
+            )
+        )
+        config["calibration_data_ref"][0].pop("data_config")
+    else:
+        config["results_data_ref"]["data_config"] = mapping
+        for collection in [
+            runtime["job"]["status"]["benchmarks"],
+            runtime["job"]["results"]["benchmarks"],
+        ]:
+            for benchmark in collection:
+                benchmark["provider_id"] = "guidellm"
+        path = runtime["cal"] / "labels.jsonl"
+        path.write_text(path.read_text().replace("test-provider", "guidellm"))
+    if sampled:
+        with pytest.raises(ValueError, match="sampled or inconsistent reports"):
+            runtime["run"]()
+        assert runtime["events"][-1]["status"] == "failed"
+        return
+    result = runtime["run"]()
+    assert runtime["events"][-1]["status"] == "completed"
+    output = result.additional_info["confidence_interval"]
+    bounds = (
+        output["confidence_interval"]
+        if external
+        else output["benchmarks"][0]["confidence_interval"]
+    )
+    assert bounds["lower"] < bounds["upper"]
+
+
+@pytest.mark.parametrize("identified", [False, True])
+def test_unusable_nested_external_results_report_failure(
+    runtime, tmp_path, monkeypatch, identified
+):
+    results = tmp_path / "nested-results"
+    results.mkdir()
+    document = {"benchmarks": [{}, {}]}
+    if identified:
+        document["metadata"] = {"guidellm_version": "0.5.3"}
+    (results / "benchmarks.json").write_text(json.dumps(document))
+    monkeypatch.setenv(
+        "EVALHUB_POST_PROCESSOR_PVC_MOUNTS",
+        json.dumps({"calibration-data": str(runtime["cal"]), "results": str(results)}),
+    )
+    config = runtime["spec"]["parameters"]["operations"]["confidence_interval"]
+    config["results_data_ref"] = {"pvc": {"claim_name": "results"}}
+    with pytest.raises(
+        ValueError, match="record objects" if identified else "Cannot identify"
+    ) as exc:
+        runtime["run"]()
+    assert runtime["events"][-1]["status"] == "failed"
+    assert runtime["events"][-1]["error_message"]["message"] == str(exc.value)
+    assert not any(event["status"] == "completed" for event in runtime["events"])

@@ -31,6 +31,71 @@ ROLES = {
 }
 
 
+def is_guidellm_report(document: dict, provider_id: str | None) -> bool:
+    """Recognize native reports without treating aggregate summaries as request data."""
+    metadata = document.get("metadata")
+    version = metadata.get("guidellm_version") if isinstance(metadata, dict) else None
+    if isinstance(version, str) and version.strip():
+        return True
+    benchmarks = document.get("benchmarks")
+    # Provider identity alone does not make every JSON artifact a native report.
+    return (
+        provider_id == "guidellm"
+        and isinstance(benchmarks, list)
+        and any(
+            isinstance(section, dict)
+            and (
+                section.get("type_") == "generative_benchmark"
+                or (
+                    isinstance(section.get("requests"), dict)
+                    and "successful" in section["requests"]
+                )
+            )
+            for section in benchmarks
+        )
+    )
+
+
+def extract_guidellm_records(document: dict, provider_id: str | None) -> list[dict]:
+    """Extract the first strategy, matching the GuideLLM adapter's reported metrics."""
+    metadata = document.get("metadata")
+    version = metadata.get("guidellm_version") if isinstance(metadata, dict) else None
+    identified = isinstance(version, str) and bool(version.strip())
+    if identified and provider_id not in {None, "guidellm"}:
+        raise ValueError("GuideLLM report conflicts with the evaluation job provider")
+    if "benchmarks" not in document:
+        raise ValueError("GuideLLM report is missing its benchmarks array")
+    benchmarks = document["benchmarks"]
+    if not isinstance(benchmarks, list) or not benchmarks:
+        raise ValueError("GuideLLM report must contain a nonempty benchmarks array")
+    # The producer reports benchmarks[0] metrics even for sweep/multi-rate runs.
+    # Use the same observations rather than pooling different load strategies.
+    benchmark = benchmarks[0]
+    requests = benchmark.get("requests") if isinstance(benchmark, dict) else None
+    records = requests.get("successful") if isinstance(requests, dict) else None
+    if not isinstance(records, list) or any(not isinstance(row, dict) for row in records):
+        raise ValueError("GuideLLM requests.successful must be an array of record objects")
+    if not records:
+        raise ValueError("GuideLLM report contains no successful per-sample requests")
+    # GuideLLM may retain only a sampled request list while metrics cover the full run.
+    # The declared successful total, rather than args.sample_requests, proves completeness.
+    metrics = benchmark.get("metrics")
+    totals = metrics.get("request_totals") if isinstance(metrics, dict) else None
+    total = totals.get("successful") if isinstance(totals, dict) else None
+    if isinstance(total, bool) or not isinstance(total, int) or total <= 0:
+        raise ValueError(
+            "GuideLLM report requires a positive integer metrics.request_totals.successful "
+            "to verify complete per-request results"
+        )
+    if len(records) != total:
+        raise ValueError(
+            f"GuideLLM report contains {len(records)} successful request records but "
+            f"metrics.request_totals.successful is {total}; sampled or inconsistent reports "
+            "cannot be used for confidence intervals. Provide complete per-request results."
+        )
+    return records
+
+
 def within(root: Path, name: str) -> Path:
     """Resolve an untrusted relative artifact path under its download directory."""
     if not isinstance(name, str) or "\\" in name or Path(name).is_absolute():
@@ -103,6 +168,7 @@ def read_table(
     *,
     dataset: str | None = None,
     calibration: bool = False,
+    provider_id: str | None = None,
 ) -> Table:
     """Load per-example records from supported files under a source path."""
     config = config or {}
@@ -146,6 +212,7 @@ def read_table(
     prefix = f"{dataset}: " if dataset else ""
     primary_scores: set[str] = set()
     estimands: set[str] = set()
+    unidentified_reports: list[str] = []
     for path in files:
         if path.is_symlink():
             raise ValueError("Data artifacts must not contain symbolic links")
@@ -164,6 +231,24 @@ def read_table(
                 records = obj.get("samples", obj.get("records", [obj]))
             else:
                 records = obj
+            # Keep usable samples on the generic path, even with report-like fields.
+            if (
+                not calibration
+                and isinstance(obj, dict)
+                and "samples" not in obj
+                and "records" not in obj
+                and table.get(obj, "sample_id") is None
+            ):
+                if is_guidellm_report(obj, provider_id):
+                    try:
+                        records = extract_guidellm_records(obj, provider_id)
+                    except ValueError as exc:
+                        raise ValueError(f"{prefix}{path.name}: {exc}") from exc
+                elif "benchmarks" in obj:
+                    # Skip unrecognized summaries when another file supplies samples.
+                    # If no file is usable, preserve a source-specific error below.
+                    unidentified_reports.append(path.name)
+                    continue
         elif kind == "jsonl":
             records = [
                 json.loads(line)
@@ -201,6 +286,11 @@ def read_table(
                 "Check the dataset format and column mappings. Each record must provide "
                 "a sample identifier and an observed label. Model/judge predictions can be "
                 "supplied directly or joined from evaluation data by sample identifier."
+            )
+        if unidentified_reports:
+            raise ValueError(
+                f"{prefix}{unidentified_reports[0]}: Cannot identify the origin of nested "
+                "results; supply supported per-sample records"
             )
         raise ValueError(
             f"{prefix}No per-example scores found; aggregate metrics cannot be used for PPI. "

@@ -161,6 +161,60 @@ mapping takes precedence and disables that fallback. Identifiers must be nonempt
 strings or integers. Predictions can also be stored at the metric's own key,
 `metrics[metric]`, or `scores[metric]`. A score object `{"value": 0.8}` is accepted.
 
+### Native GuideLLM reports
+
+For `eval_job` references, the source benchmark's `provider_id` plus native report
+markers identify GuideLLM; provider identity alone does not turn an unrelated
+aggregate summary into a request report. External references (S3, PVC, Git,
+Hugging Face, MLflow, or OCI) identify native reports through a nonempty
+`metadata.guidellm_version`.
+
+The reader selects `benchmarks[0].requests.successful`, including for default
+sweep and multi-rate/concurrency reports. This deliberately matches the GuideLLM
+adapter's `_parse_results`, which reports metrics from `benchmarks[0]`. Later
+strategies are not pooled or substituted if the first has no usable requests.
+No API field or JSONPath configuration is required. The selected section must
+contain a nonempty array of successful request objects. Its row count must equal
+that strategy's positive integer `metrics.request_totals.successful`; missing or
+invalid totals and count mismatches fail with an explicit error. GuideLLM versions
+can persist only a random request sample while aggregate metrics cover the full
+run. Such sampled reports cannot support an interval for the full successful
+request set. Provide a complete per-request export instead. The reader checks the
+actual total rather than `args.sample_requests`, which does not establish how many
+records were persisted. Duplicate selected sample IDs still fail normal validation.
+
+JSON arrays, `samples`/`records` wrappers, single records with a usable sample ID,
+and JSONL inputs bypass GuideLLM extraction. Unidentified aggregate summaries
+alongside usable sample files are skipped regardless of file order. If no usable
+samples remain, the job fails with a source-specific error. Positively identified
+but malformed native reports still fail rather than silently discard data.
+
+Use the existing column mappings to select the desired request-level measurement:
+
+```json
+{
+  "columns": {
+    "sample_id": "request_id",
+    "prediction": "time_to_first_token_ms"
+  }
+}
+```
+
+External inputs still require a primary metric declaration in the result document
+or a companion manifest. Extracted records undergo the usual sample ID, numeric
+score, and calibration validation. A selected measurement must be finite and
+numeric for every request. In particular, `time_to_first_token_ms` can be null
+for non-streaming requests; these values are rejected, not filled or dropped.
+Select a metric/measurement that is available for the evaluation being processed.
+
+GuideLLM `request_id` values are local to a report. Label-only calibration joined
+to results must use IDs from the selected first strategy of that same report;
+IDs from another run cannot be matched automatically. Independent calibration
+observations can instead provide their own paired prediction and label using
+the existing calibration configuration, without joining by evaluation ID.
+Calibration parsing is unchanged. Files are fully downloaded before parsing;
+this is not streaming JSON processing.
+
 For a job with multiple benchmarks, calibration must carry both `benchmark_id`
 and `provider_id` in each row or its file's `selection`. This pair matches
 `results.benchmarks[].id` and `results.benchmarks[].provider_id` in the source job,
