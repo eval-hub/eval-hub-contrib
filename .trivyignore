@@ -11,3 +11,18 @@
 # The exception expires on the date below so it is re-evaluated; remove it as soon
 # as a fixed nltk is released and requirements.txt is bumped.
 CVE-2026-81726 exp:2026-12-31
+
+# CVE-2026-104851: fsspec < 2026.6.0, ReferenceFileSystem template rendering (HIGH).
+# The lm-eval adapter pins fsspec 2025.3.0 because datasets==3.6.0 caps it at
+# <=2025.3.0, and datasets>=4 cannot load the dataset-loading scripts that 7 of its
+# 208 benchmarks need (cmmlu_*, aclue_*, ethics_cm, qasper_freeform). Nothing in the
+# adapter, datasets, lm_eval or s3fs uses ReferenceFileSystem (grepped 2026-11-11),
+# so the vulnerable code path is not reachable. See adapters/lm-eval/requirements.txt.
+#
+# The exception expires so it is re-evaluated. Remove it when lm-eval or the dataset
+# owners make those tasks load without scripts and the adapter moves to datasets>=4.8.5
+# (fsspec >= 2026.6.0). If that has not happened by the expiry date, drop the 7
+# benchmarks and move to datasets>=4 instead of extending the exception. (The six
+# pile_* benchmarks were dropped earlier for a different reason: their data host is
+# gone, so they cannot run on any datasets version.)
+CVE-2026-104851 exp:2027-01-31
