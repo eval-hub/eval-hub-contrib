@@ -64,7 +64,7 @@ NON_TASK_IDS = {
     "lm-eval/generation-suite",
 }
 
-#: Not registered in lm-eval 0.4.13 (the midstream ships them); kept for parity
+#: Not registered in lm-eval 0.4.12 (the midstream ships them); kept for parity
 #: with the LMEvalJob provider. lm-eval reports an unknown task if it lacks them.
 UNREGISTERED = {"longbenchv2", "mrcr", "mrcr_2needle", "mrcr_4needle", "mrcr_8needle"}
 

@@ -647,10 +647,24 @@ def test_unsupported_benchmarks_are_catalog_ids_and_not_exposed():
 
 @pytest.mark.parametrize("benchmark_id", sorted(UNSUPPORTED_BENCHMARKS))
 def test_unsupported_benchmark_fails_with_the_reason(benchmark_id):
-    """A collection that still names pile_* gets the reason, not 'Unknown benchmark'."""
+    """A collection that still names an unsupported ID gets the reason, not 'Unknown benchmark'."""
+    reason = UNSUPPORTED_BENCHMARKS[benchmark_id]
     for requested in (benchmark_id, f"lm-eval/{benchmark_id}"):
-        with pytest.raises(ValueError, match="not offered.*the-eye.eu.*pile_10k"):
+        with pytest.raises(ValueError, match="not offered") as excinfo:
             resolve_tasks(requested, None)
+        assert reason in str(excinfo.value)
+
+
+@pytest.mark.parametrize("benchmark_id", sorted(UNSUPPORTED_BENCHMARKS))
+def test_unsupported_benchmark_reason_names_the_cause(benchmark_id):
+    """Each refused ID explains which pin it is blocked by, so the report is actionable."""
+    reason = UNSUPPORTED_BENCHMARKS[benchmark_id]
+    if benchmark_id.startswith("pile_"):
+        assert "the-eye.eu" in reason and "pile_10k" in reason
+    elif benchmark_id == "cruxeval_output":
+        assert "0.4.13" in reason and "0.4.12" in reason
+    else:
+        assert "dataset script" in reason and "datasets" in reason
 
 
 @pytest.mark.parametrize("benchmark_id", _OFFERED_LMEVALJOB_IDS)
@@ -942,13 +956,13 @@ def _unsafe_code_run(tmp_path, mock_callbacks, monkeypatch, **job_overrides):
 
 
 @pytest.mark.integration
-def test_cruxeval_output_forwards_unsafe_code_confirmation(tmp_path, mock_callbacks, monkeypatch):
-    """lm-eval marks cruxeval_output unsafe; without the flag the harness refuses it."""
+def test_humaneval_forwards_unsafe_code_confirmation(tmp_path, mock_callbacks, monkeypatch):
+    """lm-eval marks humaneval unsafe; without the flag the harness refuses it."""
     seen = _unsafe_code_run(
         tmp_path,
         mock_callbacks,
         monkeypatch,
-        benchmark_id="cruxeval_output",
+        benchmark_id="humaneval",
         parameters={"allow_code_execution": True},
     )
     assert "--confirm_run_unsafe_code" in seen["cmd"]
@@ -956,10 +970,10 @@ def test_cruxeval_output_forwards_unsafe_code_confirmation(tmp_path, mock_callba
 
 
 @pytest.mark.integration
-def test_cruxeval_output_is_refused_without_opt_in(tmp_path, mock_callbacks, monkeypatch):
+def test_humaneval_is_refused_without_opt_in(tmp_path, mock_callbacks, monkeypatch):
     with pytest.raises(ValueError, match="allow_code_execution"):
         _unsafe_code_run(
-            tmp_path, mock_callbacks, monkeypatch, benchmark_id="cruxeval_output"
+            tmp_path, mock_callbacks, monkeypatch, benchmark_id="humaneval"
         )
 
 
@@ -1046,7 +1060,7 @@ def test_suite_needs_completions_iff_a_member_does():
 def test_unsafe_code_tasks_are_flagged():
     """The tasks lm-eval refuses without --confirm_run_unsafe_code."""
     unsafe = {t for t, s in TASKS.items() if s.unsafe_code}
-    assert {"humaneval", "humaneval_instruct", "mbpp", "cruxeval_output"} <= unsafe
+    assert {"humaneval", "humaneval_instruct", "mbpp"} <= unsafe
     assert not any(TASKS[t].unsafe_code for t in ("gsm8k", "arc_easy", "ifeval"))
 
 
@@ -1405,7 +1419,7 @@ def _offline_chat_tokenizer(path: Path) -> str:
 
 @pytest.mark.lmeval
 def test_pinned_lmeval_renders_the_template_only_with_tokenized_requests(tmp_path, lmeval):
-    """lm_eval 0.4.13 on local-completions: JSON string vs a rendered template.
+    """lm_eval 0.4.12 on local-completions: JSON string vs a rendered template.
 
     Documents why the adapter must send tokenized_requests=True here, and checks
     the model args it builds select the rendering path.

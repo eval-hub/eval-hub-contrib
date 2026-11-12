@@ -50,7 +50,7 @@ def build_model_args(
     Without a local tokenizer loaded, True would make the harness guess token
     IDs from characters. It must be True (with ``tokenizer_backend=huggingface``
     and a ``tokenizer``) to render a chat template on a completions endpoint:
-    lm_eval 0.4.13 only calls the tokenizer's ``apply_chat_template`` in that
+    lm_eval 0.4.12 only calls the tokenizer's ``apply_chat_template`` in that
     case, and otherwise returns the chat history serialised as JSON, which a
     completions endpoint would receive as the literal prompt.
     """

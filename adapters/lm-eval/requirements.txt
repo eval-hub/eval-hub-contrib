@@ -1,28 +1,34 @@
 # lm-eval adapter — runtime dependencies
 #
 # Every version below was installed together and run through tests/ with
-# LMEVAL_REQUIRED=1 (the CI "registry" job) on 2026-11-10. Change them as a set.
+# LMEVAL_REQUIRED=1 (the CI "registry" job). Change them as a set.
+#
+# The set is bounded by the AIPCC CPU channel the product image installs from:
+# https://packages.redhat.com/api/pypi/public-rhai/cpu-torch2.11-el9.8/simple/
+# (python 3.12, wheels only, no PyPI fallback, inherited from the base image).
+# Each pin is the highest version that channel publishes. A newer version that
+# exists on PyPI is not installable in the product image, so it is not used here.
 
 # lm-evaluation-harness with API model extras (no GPU/transformers weights).
-# Pinned exactly: _benchmarks.py (endpoint class, code execution, emitted metrics per
+# 0.4.12, not 0.4.13: the channel publishes 0.4.8 and 0.4.12 only. Pinned
+# exactly: _benchmarks.py (endpoint class, code execution, emitted metrics per
 # benchmark) is generated from this release's task configs, and the registry job
-# fails if it no longer matches. [ifeval] and [math] supply langdetect / math-verify,
-# needed by ifeval, leaderboard_ifeval, hendrycks_math500 and leaderboard_math_hard.
-# 0.4.13 is the latest release.
-lm_eval[api,ifeval,math]==0.4.13
+# fails if it no longer matches. cruxeval_output arrived in 0.4.13, so it is not
+# offered — see UNSUPPORTED_BENCHMARKS in _tasks.py. [ifeval] and [math] supply
+# langdetect / math-verify, needed by ifeval, leaderboard_ifeval,
+# hendrycks_math500 and leaderboard_math_hard.
+lm_eval[api,ifeval,math]==0.4.12
 
 # NLTK is pulled in by lm_eval[ifeval] (>=3.9.1). 3.9.1 carries 42 published
 # advisories; 3.10.4 has none (same pin as the inspect and lighteval adapters).
 nltk==3.10.4
 
-# datasets>=4 removed dataset-loading scripts, which cmmlu_*, aclue_*,
-# qasper_freeform and ethics_cm still use. Re-checked against datasets 5.2.0 on 2026-11-10:
-# load_dataset_builder raises "Dataset scripts are no longer supported" for all of
-# them, and loads fine on 3.6.0. 3.6.0 is the last 3.x release.
-# Side effect: it caps fsspec at <=2025.3.0, which carries CVE-2026-104851
-# (ReferenceFileSystem, unused here). The repo-root .trivyignore accepts it until
-# 2027-01-31; after that, drop those 7 benchmarks and move to datasets>=4.8.5.
-datasets==3.6.0
+# 5.1.0 is the highest the channel publishes. datasets>=4 removed dataset-loading
+# scripts, which cmmlu_*, aclue_*, qasper_freeform and ethics_cm still use, so
+# those seven benchmarks are not offered either (UNSUPPORTED_BENCHMARKS in
+# _tasks.py). Moving off the 3.x line is also what lets fsspec leave 2025.3.0,
+# which drops the CVE-2026-104851 exception that used to live in .trivyignore.
+datasets==5.1.0
 
 # HuggingFace tokenizers for tokenizer_backend=huggingface (no torch required).
 # They render chat templates and count tokens, so an unpinned pair makes two
@@ -32,13 +38,13 @@ transformers==5.22.2
 tokenizers==0.23.3
 
 # S3-compatible dataset loading (dataset_source=s3).
-# datasets 3.6.0 caps fsspec at <=2025.3.0, and every s3fs release pins one exact
-# fsspec, so s3fs must be 2025.3.0. Left as ranges, pip 24.2 (the UBI image's)
-# backtracks through newer s3fs releases and gives up with ResolutionImpossible
-# (uv resolves it, pip does not). aiobotocore[boto3] pulls in the boto3/botocore
-# pair that matches it.
-fsspec[s3]==2025.3.0
-s3fs==2025.3.0
+# s3fs pins one exact fsspec and datasets 5.1.0 caps fsspec at <=2026.7.0, so
+# 2026.6.0 is the highest pair satisfying both (s3fs 2026.9.0 needs
+# fsspec>=2026.9.0). aiobotocore[boto3] pulls in the boto3/botocore pair that
+# matches it. Keep aiobotocore at 2.26.0: 3.x no longer provides a [boto3] extra,
+# so bumping it would silently drop that pairing.
+fsspec[s3]==2026.6.0
+s3fs==2026.6.0
 aiobotocore[boto3]==2.26.0
 
 # EvalHub SDK: adapter extras only
