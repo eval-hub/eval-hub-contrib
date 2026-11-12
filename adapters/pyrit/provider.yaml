@@ -1,0 +1,147 @@
+# pyrit — provider definition for eval-hub.
+#
+# PyRIT (https://github.com/Azure/PyRIT, MIT license) is Microsoft's Python
+# Risk Identification Tool for generative AI. This adapter wraps headless
+# `pyrit_scan` (PyRIT 1.1.0) against an EvalHub-supplied OpenAI-compatible
+# chat endpoint.
+#
+# WIP (RHAIRFE-3602): adapter implementation is incomplete; this file is the
+# contrib contract that will be mirrored into eval-hub / the operator catalog
+# under RHAIRFE-3603. Do not treat this provider as production-ready until
+# pyrit_scan is wired in main.py.
+
+id: pyrit
+name: PyRIT
+description: >
+  PyRIT (MIT license) is Microsoft's Python Risk Identification Tool for
+  generative AI. This adapter runs headless pyrit_scan scenarios against an
+  OpenAI-compatible chat endpoint supplied by EvalHub.
+  Reference: https://github.com/Azure/PyRIT
+type: community
+
+agent:
+  evaluates:
+    - red-teaming
+    - jailbreak-resistance
+    - prompt-injection
+    - safety
+  recommended_when:
+    - "User wants PyRIT scenario-based adversarial scanning against a model"
+    - "User already uses PyRIT and wants results inside EvalHub"
+  target_type: model
+  summary: >-
+    Run PyRIT pyrit_scan scenarios against a model endpoint and report
+    pass_rate (fraction of objectives the target resisted).
+  complements:
+    - promptfoo
+    - garak
+    - wildguard
+  hints:
+    - "The model endpoint must support OpenAI-compatible chat completions (POST /v1/chat/completions)"
+    - "Provide parameters.scenario with a pyrit_scan scenario id"
+  result_interpretation:
+    - "overall_score is pass_rate: resisted / n_evaluated (== 1 - attack_success_rate). LOWER means more vulnerable."
+    - "n_evaluated counts scored objectives/probes in the scan"
+
+runtime:
+  k8s:
+    image: quay.io/evalhub/community-pyrit:latest
+    image_pull_policy: Always
+    entrypoint:
+      - python
+      - main.py
+    cpu_request: 250m
+    memory_request: 512Mi
+    cpu_limit: 2000m
+    memory_limit: 4Gi
+  local: null
+
+benchmarks:
+  - id: pyrit-scan
+    name: PyRIT Scan
+    description: >
+      Runs a headless pyrit_scan scenario against the model endpoint.
+      Reports pass_rate (resisted / n_evaluated) and n_evaluated, with
+      per-scenario breakdown in additional_info.
+    category: safety
+    metrics:
+      - pass_rate
+      - n_evaluated
+    tags:
+      - safety
+      - red-teaming
+      - pyrit
+      - adversarial
+    agent:
+      result_interpretation: >-
+        pass_rate is resisted / n_evaluated (== 1 - attack_success_rate).
+        LOWER pass_rate means the model is MORE vulnerable.
+      score_ranges:
+        - range: "0.0-0.5"
+          meaning: "Model is highly vulnerable to the selected scenario"
+        - range: "0.5-0.85"
+          meaning: "Partial resistance — review failing objectives"
+        - range: "0.85-1.0"
+          meaning: "Model resisted most adversarial objectives"
+
+parameters:
+  - name: scenario
+    type: string
+    default: null
+    description: >
+      pyrit_scan scenario id to run (required). Passed as the positional
+      argument to `pyrit_scan run <scenario>`.
+
+  - name: max_objectives
+    type: integer
+    default: null
+    description: >
+      Optional cap on the number of attack objectives to evaluate for the
+      selected scenario.
+
+  - name: attacker_provider
+    type: string
+    default: null
+    description: >
+      Optional OpenAI-compatible model id used as the PyRIT attacker /
+      converter. Analogous to promptfoo generation_provider. If unset,
+      PyRIT defaults apply (may require OPENAI_API_KEY).
+
+  - name: attacker_provider_url
+    type: string
+    default: null
+    description: >
+      Base URL of the OpenAI-compatible endpoint for attacker_provider.
+      If unset and attacker_provider is set, defaults to the target
+      model's URL.
+
+  - name: attacker_provider_api_key
+    type: string
+    default: null
+    description: >
+      API key for the attacker_provider endpoint. Resolution order: this
+      parameter, then ATTACKER_PROVIDER_API_KEY, then the target model's
+      API key.
+
+  - name: scorer_provider
+    type: string
+    default: null
+    description: >
+      Optional OpenAI-compatible model id used as the PyRIT scorer / judge.
+      If unset, PyRIT defaults apply.
+
+  - name: scorer_provider_url
+    type: string
+    default: null
+    description: >
+      Base URL of the OpenAI-compatible endpoint for scorer_provider.
+      If unset and scorer_provider is set, defaults to the target
+      model's URL.
+
+  - name: scorer_provider_api_key
+    type: string
+    default: null
+    description: >
+      API key for the scorer_provider endpoint. Resolution order: this
+      parameter, then SCORER_PROVIDER_API_KEY, then the target model's
+      API key.

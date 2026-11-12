@@ -1,0 +1,3 @@
+# Runtime-only: installed in the Containerfile (not in unit-test venvs).
+# Pin matches PYRIT_VERSION in main.py.
+pyrit==1.1.0
