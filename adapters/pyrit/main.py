@@ -36,10 +36,26 @@ _ADAPTER_VERSION = "0.1.0"
 # (still available via MLflow/OCI artifact paths when configured).
 PYRIT_RESULTS_JSON_MAX_BYTES = 5_000_000
 
+# Job parameters that must never appear in additional_info, MLflow params,
+# or OCI artifacts (plaintext credentials). Keep in sync with provider.yaml.
+SECRET_PARAM_NAMES: frozenset[str] = frozenset(
+    {
+        "attacker_provider_api_key",
+        "scorer_provider_api_key",
+    }
+)
+
 
 # ---------------------------------------------------------------------------
 # Credentials / env / conf (stubs — implement in adapter step)
 # ---------------------------------------------------------------------------
+
+
+def _strip_secret_params(params: dict[str, Any] | None) -> dict[str, Any]:
+    """Return a copy of job parameters with secret keys removed."""
+    if not params:
+        return {}
+    return {k: v for k, v in params.items() if k not in SECRET_PARAM_NAMES}
 
 
 def _resolve_api_key(config: JobSpec) -> str:
@@ -85,12 +101,17 @@ class PyritAdapter(FrameworkAdapter):
     """eval-hub FrameworkAdapter wrapping headless pyrit_scan."""
 
     def generate_additional_info(self, results: JobResults) -> dict[str, Any] | None:
-        """Return a compact summary dict for job additional_info."""
+        """Return a compact summary dict for job additional_info (no secrets)."""
         metric = {r.metric_name: r.metric_value for r in results.results}
-        return {
+        info: dict[str, Any] = {
             "pass_rate": metric.get("pass_rate"),
             "pyrit_version": PYRIT_VERSION,
         }
+        # Defense in depth: never echo secret job parameters if a future
+        # implementation copies parameters into additional_info.
+        for key in SECRET_PARAM_NAMES:
+            info.pop(key, None)
+        return info
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         """Run a pyrit-scan benchmark and return JobResults.

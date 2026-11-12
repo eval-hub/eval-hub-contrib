@@ -28,6 +28,7 @@ TOOLBENCH_SERVER_REGISTRY ?= quay.io/evalhub
 TOOLBENCH_SERVER_VERSION ?= 0.3.0
 IMAGE_TOOLBENCH_SERVER = $(TOOLBENCH_SERVER_REGISTRY)/community-toolbench-server:$(TOOLBENCH_SERVER_VERSION)
 IMAGE_PROMPTFOO = $(REGISTRY)/community-promptfoo:$(VERSION)
+IMAGE_PYRIT = $(REGISTRY)/community-pyrit:$(VERSION)
 IMAGE_WILDGUARD = $(REGISTRY)/community-wildguard:$(VERSION)
 
 # Default target
@@ -90,6 +91,8 @@ help:
 	@echo "  make test-ragas        - Run RAGAS adapter tests"
 	@echo "  make test-tooleval     - Run ToolEval adapter tests"
 	@echo "  make test-ruler        - Run RULER adapter tests"
+	@echo "  make test-promptfoo    - Run promptfoo adapter tests"
+	@echo "  make test-pyrit        - Run PyRIT adapter tests"
 	@echo "  make test-evalhub-post-processor - Run post-processing tests"
 	@echo "  make tests             - Run all adapter tests"
 	@echo ""
@@ -192,7 +195,7 @@ image-swebench:
 	@echo "✅ Built: $(IMAGE_SWEBENCH)"
 
 .PHONY: images
-images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler image-nemo-guardrails image-promptfoo image-followbench image-tooleval image-toolbench-server
+images: image-lighteval image-guidellm image-mteb image-ragas image-swebench image-ruler image-nemo-guardrails image-promptfoo image-pyrit image-followbench image-tooleval image-toolbench-server
 	@echo "✅ All adapter images built"
 
 # Push targets
@@ -243,7 +246,7 @@ push-swebench:
 	@echo "✅ Pushed: $(IMAGE_SWEBENCH)"
 
 .PHONY: push-images
-push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench push-ruler push-nemo-guardrails push-promptfoo push-tooleval push-toolbench-server
+push-images: push-lighteval push-guidellm push-mteb push-ragas push-swebench push-ruler push-nemo-guardrails push-promptfoo push-pyrit push-tooleval push-toolbench-server
 	@echo "✅ All adapter images pushed"
 
 # Clean targets
@@ -294,7 +297,7 @@ clean-swebench:
 	@echo "✅ Removed: $(IMAGE_SWEBENCH)"
 
 .PHONY: clean-images
-clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench clean-ruler clean-nemo-guardrails clean-promptfoo clean-tooleval clean-toolbench-server
+clean-images: clean-lighteval clean-guidellm clean-mteb clean-ragas clean-swebench clean-ruler clean-nemo-guardrails clean-promptfoo clean-pyrit clean-tooleval clean-toolbench-server
 	@echo "✅ All adapter images removed"
 
 # Development targets
@@ -390,7 +393,7 @@ test-ragas:
 	@echo "✅ RAGAS tests passed"
 
 .PHONY: tests
-tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler test-nemo-guardrails test-promptfoo test-swebench test-tooleval
+tests: test-guidellm test-lighteval test-mteb test-clear test-ragas test-ruler test-nemo-guardrails test-promptfoo test-pyrit test-swebench test-tooleval
 	@echo "✅ All adapter tests passed"
 .PHONY: test-swebench
 test-swebench:
@@ -527,6 +530,43 @@ test-promptfoo:
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
 	@echo "✅ promptfoo tests passed"
+
+.PHONY: image-pyrit
+image-pyrit:
+	@echo "Building PyRIT adapter image..."
+	cd adapters/pyrit && \
+	$(BUILD_TOOL) build -t $(IMAGE_PYRIT) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_PYRIT)"
+
+.PHONY: push-pyrit
+push-pyrit:
+	@echo "Pushing PyRIT adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_PYRIT)
+	@echo "✅ Pushed: $(IMAGE_PYRIT)"
+
+.PHONY: clean-pyrit
+clean-pyrit:
+	@echo "Removing PyRIT adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_PYRIT) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_PYRIT)"
+
+.PHONY: build-and-push-pyrit
+build-and-push-pyrit: image-pyrit push-pyrit
+	@echo "✅ PyRIT adapter built and pushed"
+
+.PHONY: test-pyrit
+test-pyrit:
+	@echo "Running PyRIT adapter tests..."
+	cd adapters/pyrit && \
+	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v
+	@echo "✅ PyRIT tests passed"
+
+images: image-pyrit
+push-images: push-pyrit
+clean-images: clean-pyrit
+tests: test-pyrit
 
 .PHONY: image-wildguard
 image-wildguard:
