@@ -8,13 +8,32 @@ CLI bridge and metrics mapping.
 from __future__ import annotations
 
 import pytest
-from main import PyritAdapter
+from main import SECRET_PARAM_NAMES, PyritAdapter, _strip_secret_params
 
 
 def test_adapter_loads_job_fixture(pyrit_adapter: PyritAdapter):
     """Scaffold smoke: PyritAdapter loads meta/job.json."""
     assert pyrit_adapter.job_spec.provider_id == "pyrit"
     assert pyrit_adapter.job_spec.benchmark_id == "pyrit-scan"
+
+
+def test_secret_param_names():
+    """Attacker/scorer API key params must stay on the secret denylist."""
+    assert "attacker_provider_api_key" in SECRET_PARAM_NAMES
+    assert "scorer_provider_api_key" in SECRET_PARAM_NAMES
+
+
+def test_strip_secret_params_removes_keys():
+    """_strip_secret_params drops credential parameters and keeps the rest."""
+    cleaned = _strip_secret_params(
+        {
+            "scenario": "prompt_injection",
+            "attacker_provider_api_key": "sk-attacker",
+            "scorer_provider_api_key": "sk-scorer",
+            "max_objectives": 5,
+        }
+    )
+    assert cleaned == {"scenario": "prompt_injection", "max_objectives": 5}
 
 
 @pytest.mark.skip(reason="scaffold: implement env/conf builders from JobSpec")

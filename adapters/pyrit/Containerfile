@@ -4,8 +4,16 @@ WORKDIR /app
 
 USER 0
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# pyrit→pyodbc needs unixODBC; base2048 (pyrit dep) needs a Rust toolchain
+# to build from source when no wheel matches the platform.
+RUN dnf install -y unixODBC unixODBC-devel gcc gcc-c++ make rust cargo \
+    && dnf clean all
+
+COPY requirements.txt requirements-pyrit.txt constraints.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-pyrit.txt -c constraints.txt \
+    && dnf remove -y rust cargo gcc gcc-c++ make unixODBC-devel \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf /root/.cargo /root/.rustup
 
 COPY main.py .
 

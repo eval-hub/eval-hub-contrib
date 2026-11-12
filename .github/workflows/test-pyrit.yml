@@ -1,0 +1,37 @@
+name: Test pyrit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'adapters/pyrit/**'
+      - '.github/workflows/test-pyrit.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'adapters/pyrit/**'
+      - '.github/workflows/test-pyrit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        working-directory: adapters/pyrit
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+      - name: Run tests
+        working-directory: adapters/pyrit
+        run: pytest tests/ -v

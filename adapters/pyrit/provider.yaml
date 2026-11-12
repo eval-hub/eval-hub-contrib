@@ -5,11 +5,13 @@
 # `pyrit_scan` (PyRIT 1.1.0) against an EvalHub-supplied OpenAI-compatible
 # chat endpoint.
 #
-# Scaffold for RHAIRFE-3602 — fill in agent metadata, parameters, and
-# runtime details as the adapter is implemented.
+# WIP (RHAIRFE-3602): adapter implementation is incomplete; this file is the
+# contrib contract that will be mirrored into eval-hub / the operator catalog
+# under RHAIRFE-3603. Do not treat this provider as production-ready until
+# pyrit_scan is wired in main.py.
 
 id: pyrit
-name: pyrit
+name: PyRIT
 description: >
   PyRIT (MIT license) is Microsoft's Python Risk Identification Tool for
   generative AI. This adapter runs headless pyrit_scan scenarios against an
@@ -28,8 +30,8 @@ agent:
     - "User already uses PyRIT and wants results inside EvalHub"
   target_type: model
   summary: >-
-    Run PyRIT pyrit_scan scenarios against a model endpoint and map
-    attack-success / pass metrics into EvalHub JobResults.
+    Run PyRIT pyrit_scan scenarios against a model endpoint and report
+    pass_rate (fraction of objectives the target resisted).
   complements:
     - promptfoo
     - garak
@@ -38,7 +40,7 @@ agent:
     - "The model endpoint must support OpenAI-compatible chat completions (POST /v1/chat/completions)"
     - "Provide parameters.scenario with a pyrit_scan scenario id"
   result_interpretation:
-    - "overall_score is the pass rate (1 - attack success rate) or attack-success rate — see adapter docs"
+    - "overall_score is pass_rate: resisted / n_evaluated (== 1 - attack_success_rate). LOWER means more vulnerable."
     - "n_evaluated counts scored objectives/probes in the scan"
 
 runtime:
@@ -59,7 +61,7 @@ benchmarks:
     name: PyRIT Scan
     description: >
       Runs a headless pyrit_scan scenario against the model endpoint.
-      Reports pass_rate (or attack-success rate) and n_evaluated, with
+      Reports pass_rate (resisted / n_evaluated) and n_evaluated, with
       per-scenario breakdown in additional_info.
     category: safety
     metrics:
@@ -72,8 +74,8 @@ benchmarks:
       - adversarial
     agent:
       result_interpretation: >-
-        pass_rate reflects how often the target resisted the configured
-        attack scenario. LOWER pass_rate means the model is MORE vulnerable.
+        pass_rate is resisted / n_evaluated (== 1 - attack_success_rate).
+        LOWER pass_rate means the model is MORE vulnerable.
       score_ranges:
         - range: "0.0-0.5"
           meaning: "Model is highly vulnerable to the selected scenario"
