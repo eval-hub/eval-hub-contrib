@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from scipy.stats import norm
 
-from post_processor.data import Table, ppi_arrays, read_table, within
+from post_processor.data import Table, extract_guidellm_records, ppi_arrays, read_table, within
 from post_processor.operations import interval
 
 
@@ -230,10 +230,18 @@ def test_guidellm_native_records_join_calibration(tmp_path, provider_id, metadat
     [
         ({"benchmarks": []}, None, "Cannot identify"),
         ({"metadata": {"guidellm_version": "0.5.3"}}, None, "missing its benchmarks"),
-        ({"benchmarks": []}, "guidellm", "exactly one"),
-        ({"benchmarks": [{}, {}]}, "guidellm", "exactly one"),
-        ({"benchmarks": {}}, "guidellm", "exactly one"),
-        ({"benchmarks": [None]}, "guidellm", "record objects"),
+        ({"metadata": {"guidellm_version": "0.5.3"}, "benchmarks": []}, "guidellm", "nonempty"),
+        (
+            {"metadata": {"guidellm_version": "0.5.3"}, "benchmarks": [{}, {}]},
+            "guidellm",
+            "record objects",
+        ),
+        ({"metadata": {"guidellm_version": "0.5.3"}, "benchmarks": {}}, "guidellm", "nonempty"),
+        (
+            {"metadata": {"guidellm_version": "0.5.3"}, "benchmarks": [None]},
+            "guidellm",
+            "record objects",
+        ),
         ({"benchmarks": [{"requests": {"successful": {}}}]}, "guidellm", "record objects"),
         ({"benchmarks": [{"requests": {"successful": [1]}}]}, "guidellm", "record objects"),
         ({"benchmarks": [{"requests": {"successful": []}}]}, "guidellm", "no successful"),
@@ -317,3 +325,134 @@ def test_generic_records_bypass_guidellm_detection(tmp_path, monkeypatch, kind):
         document = rows if kind == "array" else {kind: rows, "benchmarks": []}
         path.write_text(json.dumps(document))
     assert read_table(path).rows == rows
+
+
+@pytest.mark.parametrize("provider_id", [None, "guidellm"])
+@pytest.mark.parametrize("strategies", [2, 10])
+def test_guidellm_sweep_uses_first_strategy_like_producer(tmp_path, provider_id, strategies):
+    first = [{"request_id": "same-request", "latency": 10}]
+    document = {"benchmarks": [{"requests": {"successful": first}}]}
+    document["benchmarks"].extend(
+        {"requests": {"successful": [{"request_id": "same-request", "latency": i * 100}]}}
+        for i in range(1, strategies)
+    )
+    if provider_id is None:
+        document["metadata"] = {"guidellm_version": "0.5.3"}
+    path = tmp_path / "benchmarks.json"
+    path.write_text(json.dumps(document))
+    table = read_table(
+        path,
+        {"columns": {"sample_id": "request_id", "prediction": "latency"}},
+        provider_id=provider_id,
+    )
+    assert table.rows == first
+
+
+@pytest.mark.parametrize("provider_id", [None, "guidellm", "other"])
+@pytest.mark.parametrize("summary_name", ["a-summary.json", "z-summary.json"])
+def test_aggregate_summary_does_not_hide_usable_samples(tmp_path, provider_id, summary_name):
+    rows = [{"sample_id": "a", "prediction": 1}]
+    (tmp_path / "samples.json").write_text(json.dumps({"samples": rows}))
+    (tmp_path / summary_name).write_text(
+        json.dumps(
+            {"benchmarks": [{"id": "b1", "metrics": {"accuracy": 1}, "requests": {"total": 1}}]}
+        )
+    )
+    assert read_table(tmp_path, provider_id=provider_id).rows == rows
+
+
+@pytest.mark.parametrize("provider_id", [None, "guidellm", "other"])
+def test_aggregate_only_directory_still_fails(tmp_path, provider_id):
+    (tmp_path / "summary.json").write_text(
+        json.dumps(
+            {"benchmarks": [{"id": "b1", "metrics": {"accuracy": 1}, "requests": {"total": 1}}]}
+        )
+    )
+    with pytest.raises(ValueError, match="summary.json: Cannot identify"):
+        read_table(tmp_path, provider_id=provider_id)
+
+
+def test_recognized_malformed_guidellm_report_is_not_silently_skipped(tmp_path):
+    (tmp_path / "samples.json").write_text(json.dumps([{"sample_id": "a", "prediction": 1}]))
+    (tmp_path / "broken.json").write_text(
+        json.dumps({"metadata": {"guidellm_version": "0.5.3"}, "benchmarks": [{"requests": {}}]})
+    )
+    with pytest.raises(ValueError, match="broken.json: GuideLLM requests.successful"):
+        read_table(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "document", [{"samples": []}, {"samples": None, "records": [{"sample_id": "a"}]}]
+)
+def test_guidellm_helper_is_strictly_for_native_reports(document):
+    with pytest.raises(ValueError, match="missing its benchmarks"):
+        extract_guidellm_records(document, None)
+
+
+def test_nullable_guidellm_measurement_fails_numeric_validation(tmp_path):
+    path = tmp_path / "benchmarks.json"
+    path.write_text(
+        json.dumps(
+            {
+                "metadata": {"guidellm_version": "0.5.3"},
+                "benchmarks": [
+                    {
+                        "requests": {
+                            "successful": [{"request_id": "a", "time_to_first_token_ms": None}]
+                        }
+                    }
+                ],
+            }
+        )
+    )
+    table = read_table(
+        path, {"columns": {"sample_id": "request_id", "prediction": "time_to_first_token_ms"}}
+    )
+    with pytest.raises(ValueError, match="latency prediction must be a finite numeric score"):
+        ppi_arrays(
+            table, [Table([{"sample_id": "a", "label": 1}])], {"metric": "latency"}, shared=False
+        )
+
+
+def test_label_only_calibration_requires_matching_request_ids():
+    table = Table([{"sample_id": "fresh-request", "prediction": 10}])
+    labels = Table([{"sample_id": "another-run-request", "label": 10}])
+    with pytest.raises(ValueError, match="matching evaluation sample_id"):
+        ppi_arrays(table, [labels], {"metric": "latency"}, shared=False)
+
+
+@pytest.mark.parametrize("provider_id", [None, "guidellm"])
+@pytest.mark.parametrize("summary_name", ["a-summary.json", "z-summary.json"])
+def test_native_report_and_unrelated_summary_coexist(tmp_path, provider_id, summary_name):
+    rows = [{"request_id": "a", "latency": 10}]
+    native = {"benchmarks": [{"requests": {"successful": rows}}]}
+    if provider_id is None:
+        native["metadata"] = {"guidellm_version": "0.5.3"}
+    (tmp_path / "benchmarks.json").write_text(json.dumps(native))
+    (tmp_path / summary_name).write_text(
+        json.dumps({"benchmarks": [{"id": "b1", "metrics": {"latency": 10}}]})
+    )
+    table = read_table(
+        tmp_path,
+        {"columns": {"sample_id": "request_id", "prediction": "latency"}},
+        provider_id=provider_id,
+    )
+    assert table.rows == rows
+
+
+def test_independent_calibration_can_supply_its_own_paired_predictions():
+    results = Table(
+        [{"sample_id": "fresh-1", "prediction": 10}, {"sample_id": "fresh-2", "prediction": 20}]
+    )
+    calibration = Table(
+        [
+            {"sample_id": "other-1", "prediction": 5, "label": 6},
+            {"sample_id": "other-2", "prediction": 8, "label": 9},
+        ]
+    )
+    y, predicted, unlabeled = ppi_arrays(
+        results, [calibration], {"metric": "latency"}, shared=False
+    )
+    np.testing.assert_array_equal(y, [6, 9])
+    np.testing.assert_array_equal(predicted, [5, 8])
+    np.testing.assert_array_equal(unlabeled, [10, 20])

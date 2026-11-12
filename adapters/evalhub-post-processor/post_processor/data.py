@@ -31,30 +31,45 @@ ROLES = {
 }
 
 
-def extract_guidellm_records(document: Any, provider_id: str | None) -> Any:
-    """Unwrap recognized GuideLLM reports without guessing an unknown file's origin."""
-    if not isinstance(document, dict):
-        return document
-    # Canonical records remain usable regardless of which framework produced them.
-    if "samples" in document or "records" in document:
-        return document.get("samples", document.get("records"))
+def is_guidellm_report(document: dict, provider_id: str | None) -> bool:
+    """Recognize native reports without treating aggregate summaries as request data."""
+    metadata = document.get("metadata")
+    version = metadata.get("guidellm_version") if isinstance(metadata, dict) else None
+    if isinstance(version, str) and version.strip():
+        return True
+    benchmarks = document.get("benchmarks")
+    # Provider identity alone does not make every JSON artifact a native report.
+    return (
+        provider_id == "guidellm"
+        and isinstance(benchmarks, list)
+        and any(
+            isinstance(section, dict)
+            and (
+                section.get("type_") == "generative_benchmark"
+                or (
+                    isinstance(section.get("requests"), dict)
+                    and "successful" in section["requests"]
+                )
+            )
+            for section in benchmarks
+        )
+    )
+
+
+def extract_guidellm_records(document: dict, provider_id: str | None) -> list[dict]:
+    """Extract the first strategy, matching the GuideLLM adapter's reported metrics."""
     metadata = document.get("metadata")
     version = metadata.get("guidellm_version") if isinstance(metadata, dict) else None
     identified = isinstance(version, str) and bool(version.strip())
-    if "benchmarks" not in document:
-        if identified:
-            raise ValueError("GuideLLM report is missing its benchmarks array")
-        return [document]
-    if provider_id != "guidellm" and not identified:
-        raise ValueError(
-            "Cannot identify the origin of nested results; supply supported per-sample records"
-        )
     if identified and provider_id not in {None, "guidellm"}:
         raise ValueError("GuideLLM report conflicts with the evaluation job provider")
+    if "benchmarks" not in document:
+        raise ValueError("GuideLLM report is missing its benchmarks array")
     benchmarks = document["benchmarks"]
-    # Never silently choose a benchmark from a multi-run GuideLLM report.
-    if not isinstance(benchmarks, list) or len(benchmarks) != 1:
-        raise ValueError("GuideLLM report must contain exactly one benchmark")
+    if not isinstance(benchmarks, list) or not benchmarks:
+        raise ValueError("GuideLLM report must contain a nonempty benchmarks array")
+    # The producer reports benchmarks[0] metrics even for sweep/multi-rate runs.
+    # Use the same observations rather than pooling different load strategies.
     benchmark = benchmarks[0]
     requests = benchmark.get("requests") if isinstance(benchmark, dict) else None
     records = requests.get("successful") if isinstance(requests, dict) else None
@@ -181,6 +196,7 @@ def read_table(
     prefix = f"{dataset}: " if dataset else ""
     primary_scores: set[str] = set()
     estimands: set[str] = set()
+    unidentified_reports: list[str] = []
     for path in files:
         if path.is_symlink():
             raise ValueError("Data artifacts must not contain symbolic links")
@@ -207,10 +223,16 @@ def read_table(
                 and "records" not in obj
                 and table.get(obj, "sample_id") is None
             ):
-                try:
-                    records = extract_guidellm_records(obj, provider_id)
-                except ValueError as exc:
-                    raise ValueError(f"{prefix}{path.name}: {exc}") from exc
+                if is_guidellm_report(obj, provider_id):
+                    try:
+                        records = extract_guidellm_records(obj, provider_id)
+                    except ValueError as exc:
+                        raise ValueError(f"{prefix}{path.name}: {exc}") from exc
+                elif "benchmarks" in obj:
+                    # Skip unrecognized summaries when another file supplies samples.
+                    # If no file is usable, preserve a source-specific error below.
+                    unidentified_reports.append(path.name)
+                    continue
         elif kind == "jsonl":
             records = [
                 json.loads(line)
@@ -248,6 +270,11 @@ def read_table(
                 "Check the dataset format and column mappings. Each record must provide "
                 "a sample identifier and an observed label. Model/judge predictions can be "
                 "supplied directly or joined from evaluation data by sample identifier."
+            )
+        if unidentified_reports:
+            raise ValueError(
+                f"{prefix}{unidentified_reports[0]}: Cannot identify the origin of nested "
+                "results; supply supported per-sample records"
             )
         raise ValueError(
             f"{prefix}No per-example scores found; aggregate metrics cannot be used for PPI. "

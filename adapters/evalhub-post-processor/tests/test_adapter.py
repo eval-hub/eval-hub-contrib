@@ -640,9 +640,10 @@ def test_legacy_adapter_result_config_and_conflict(runtime):
         runtime["run"]()
 
 
+@pytest.mark.parametrize("sections", [1, 10])
 @pytest.mark.parametrize("external", [False, True])
 def test_guidellm_native_report_computes_ci_without_api_selector(
-    runtime, tmp_path, monkeypatch, external
+    runtime, tmp_path, monkeypatch, external, sections
 ):
     config = runtime["spec"]["parameters"]["operations"]["confidence_interval"]
     rows = [
@@ -651,6 +652,11 @@ def test_guidellm_native_report_computes_ci_without_api_selector(
     ]
     runtime["data"].clear()
     runtime["data"].update({"benchmarks": [{"requests": {"successful": rows}}]})
+    # Repeated request IDs in later strategies must never be pooled into the first.
+    runtime["data"]["benchmarks"].extend(
+        {"requests": {"successful": [{**row, "time_to_first_token_ms": 100} for row in rows]}}
+        for _ in range(sections - 1)
+    )
     mapping = {"columns": {"sample_id": "request_id", "prediction": "time_to_first_token_ms"}}
     if external:
         runtime["data"]["metadata"] = {"guidellm_version": "0.5.3"}
@@ -710,7 +716,7 @@ def test_unusable_nested_external_results_report_failure(
     config = runtime["spec"]["parameters"]["operations"]["confidence_interval"]
     config["results_data_ref"] = {"pvc": {"claim_name": "results"}}
     with pytest.raises(
-        ValueError, match="exactly one benchmark" if identified else "Cannot identify"
+        ValueError, match="record objects" if identified else "Cannot identify"
     ) as exc:
         runtime["run"]()
     assert runtime["events"][-1]["status"] == "failed"
