@@ -38,8 +38,15 @@ from evalhub.adapter import (
     read_model_auth_key,
     resolve_model_credentials,
 )
-from evalhub.models import MetricSchema, ResultType
 from evalhub.adapter.mlflow import MlflowFileArtifact
+from evalhub.models import MetricSchema, ResultType
+
+from _hf_offline import (
+    TEST_DATA_DIR,
+    build_hf_offline_environment,
+    ensure_lighteval_registry_assets,
+    ensure_nltk_offline_resources,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +95,7 @@ class LightEvalAdapter(FrameworkAdapter):
         "language_understanding": ["glue:cola", "glue:sst2", "glue:mrpc"],
     }
     CUSTOM_TASK_ALIASES = CUSTOM_TASK_ALIASES
+    LOG_LIKELIHOOD_UNSUPPORTED_PROVIDERS = {"anthropic"}
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         """Execute a LightEval benchmark evaluation job.
@@ -113,6 +121,24 @@ class LightEvalAdapter(FrameworkAdapter):
             callbacks.report_status(
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
             )
+
+            subprocess_env = build_hf_offline_environment(
+                TEST_DATA_DIR,
+            )
+            if subprocess_env is not None:
+                # LightEval's task registry is also loaded in this process and
+                # imports IFEval, which attempts NLTK downloads if these
+                # resources are missing. Set the staged path and validate it
+                # before any registry import, in both this process and the CLI.
+                os.environ.update(subprocess_env)
+                ensure_nltk_offline_resources(TEST_DATA_DIR)
+                ensure_lighteval_registry_assets(TEST_DATA_DIR)
+                logger.info(
+                    "Using staged Hugging Face assets from %s; Hub downloads are disabled "
+                    "and the writable datasets cache is %s",
+                    TEST_DATA_DIR,
+                    subprocess_env["HF_DATASETS_CACHE"],
+                )
 
             self._validate_config(config)
             tasks = self._parse_benchmark_tasks(config.benchmark_id, config.parameters)
@@ -140,6 +166,7 @@ class LightEvalAdapter(FrameworkAdapter):
                 limit=config.num_examples or config.parameters.get("max_samples"),
                 batch_size=config.parameters.get("batch_size", 1),
                 benchmark_config=config.parameters,
+                subprocess_env=subprocess_env,
             )
 
             # Phase 4: Post-processing
@@ -403,18 +430,19 @@ class LightEvalAdapter(FrameworkAdapter):
         """Reject a provider only for the tasks that need a capability it lacks.
 
         Log-likelihood scoring is served through ``/v1/completions`` with
-        ``echo=True`` and ``logprobs``, which Anthropic's API does not offer.
-        Generation-only tasks do not use it and run fine on Anthropic.
+        ``echo=True`` and ``logprobs``. Anthropic does not implement that API;
+        generation-only tasks remain supported.
         """
-        if provider != "anthropic":
+        if provider not in self.LOG_LIKELIHOOD_UNSUPPORTED_PROVIDERS:
             return
         needing = self._loglikelihood_tasks(tasks)
         if needing:
             raise ValueError(
-                "provider: anthropic cannot run log-likelihood benchmarks "
+                f"provider: {provider} cannot run log-likelihood benchmarks "
                 f"({', '.join(needing)}): they are scored through /v1/completions with "
                 "echo=True and logprobs=1, which Anthropic's API does not implement. "
-                "Use provider: endpoint with a vLLM-compatible server for these tasks."
+                "For an API-backed model, use an OpenAI-compatible endpoint that "
+                "supports echo and logprobs, or use lm-evaluation-harness."
             )
 
     @classmethod
@@ -435,6 +463,7 @@ class LightEvalAdapter(FrameworkAdapter):
         limit: int | None,
         batch_size: int,
         benchmark_config: dict[str, Any],
+        subprocess_env: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Execute LightEval CLI and return parsed results.
 
@@ -553,11 +582,12 @@ class LightEvalAdapter(FrameworkAdapter):
         safe_cmd = [re.sub(r"(,api_key=)[^,]*", r"\1***", arg) for arg in cmd]
         logger.info(f"Executing LightEval CLI: {' '.join(safe_cmd)}")
 
-        env = None
-        if "HF_TOKEN" not in os.environ:
+        env = dict(subprocess_env) if subprocess_env is not None else None
+        effective_env = env if env is not None else os.environ
+        if "HF_TOKEN" not in effective_env:
             hf_token = read_model_auth_key("hf-token")
             if hf_token:
-                env = {**os.environ, "HF_TOKEN": hf_token}
+                env = {**effective_env, "HF_TOKEN": hf_token}
                 logger.info("Injected HF_TOKEN from model secret")
 
         try:
@@ -715,6 +745,13 @@ class LightEvalAdapter(FrameworkAdapter):
         # Normalise LightEval metric names to match collection primary_score.metric.
         # pass@k:k=1&n=3 → pass@1  (query-string: extract k value)
         # codegen_pass@1:16 → codegen_pass@1  (plain numeric suffix)
+        # maj@n:n=4&...normalize_pred=<function ... at 0x...> → maj@4
+        # Keep the majority-vote sample count in the public metric name, just
+        # as pass@k keeps k, rather than exposing process-specific function reprs.
+        if metric_name.startswith("maj@n:"):
+            match = re.search(r"(?:^|&)n=([1-9]\d*)(?:&|$)", metric_name.partition(":")[2])
+            if match:
+                return f"maj@{match.group(1)}"
         if ":" not in metric_name:
             return metric_name
         base, _, suffix = metric_name.rpartition(":")
@@ -994,6 +1031,7 @@ def main() -> None:
     Note: The service URL for callbacks comes from job_spec.callback_url (mounted via ConfigMap)
     """
     import sys
+
     from evalhub.adapter import DefaultCallbacks, configure_telemetry
 
     # Configure logging

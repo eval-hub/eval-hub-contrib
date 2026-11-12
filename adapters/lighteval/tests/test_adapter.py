@@ -6,19 +6,22 @@ returns parsed results inline, so no filesystem setup is needed.
 
 import copy
 import json
+import os
 import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest.mock import MagicMock, create_autospec
 
 import pytest
 
 from evalhub.adapter import JobCallbacks, JobPhase, JobResults, OCIArtifactResult
 from evalhub.models import ResultType
-from main import LightEvalAdapter
+
+import _hf_offline as offline_assets
 import main as adapter_main
+from main import LightEvalAdapter
 
 # Canned output matching LightEval's results JSON structure.
 # Based losely on https://github.com/huggingface/lighteval/blob/main/docs/source/saving-and-reading-results.mdx#general-configuration
@@ -115,6 +118,147 @@ def test_lighteval_happy_path(adapter, mock_callbacks, monkeypatch, mock_hf_api)
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
     # PERSISTING_ARTIFACTS only emitted when OCI exports are configured
+
+
+@pytest.mark.integration
+def test_staged_hf_cache_enables_offline_mode(
+    tmp_path, mock_callbacks, monkeypatch, mock_hf_api
+):
+    """A test-data mount enables offline mode without a serialized test_data_ref."""
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    job = json.loads(Path("meta/job.json").read_text())
+    assert "test_data_ref" not in job
+    job_path = meta_dir / "job.json"
+    job_path.write_text(json.dumps(job))
+
+    test_data_root = tmp_path / "test_data"
+    (test_data_root / "hub").mkdir(parents=True)
+    staged_dataset = (
+        test_data_root / "datasets" / "fixture" / "default" / "1.0.0" / "abc123"
+    )
+    staged_dataset.mkdir(parents=True)
+    (staged_dataset / "dataset_info.json").write_text("{}")
+    (staged_dataset / "train.arrow").write_bytes(b"prepared dataset")
+    writable_cache = tmp_path / "writable-datasets"
+    registry_asset = test_data_root / "lighteval" / "tinyBenchmarks.pkl"
+    registry_asset.parent.mkdir()
+    registry_asset.write_bytes(b"staged task-registry asset")
+    (test_data_root / "nltk_data").mkdir()
+    registry_dir = tmp_path / "site-packages" / "lighteval" / "tasks" / "tasks"
+    registry_dir.mkdir(parents=True)
+    monkeypatch.setattr(offline_assets, "LIGHTEVAL_TASK_REGISTRY_DIR", registry_dir)
+    monkeypatch.setattr(adapter_main, "TEST_DATA_DIR", test_data_root)
+    build_offline_environment = adapter_main.build_hf_offline_environment
+    monkeypatch.setattr(
+        adapter_main,
+        "build_hf_offline_environment",
+        lambda root: build_offline_environment(
+            root,
+            writable_datasets_cache_dir=writable_cache,
+        ),
+    )
+    checked_nltk = []
+
+    def check_nltk(root):
+        checked_nltk.append((root, os.environ.get("NLTK_DATA")))
+
+    monkeypatch.setattr(adapter_main, "ensure_nltk_offline_resources", check_nltk)
+    for variable in (
+        "HF_HOME",
+        "HF_HUB_CACHE",
+        "HF_DATASETS_CACHE",
+        "HF_HUB_OFFLINE",
+        "HF_DATASETS_OFFLINE",
+        "HF_EVALUATE_OFFLINE",
+        "TRANSFORMERS_OFFLINE",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("NLTK_DATA", "/image/nltk_data")
+
+    adapter = LightEvalAdapter(job_spec_path=str(job_path))
+    observed_env = {}
+
+    def run_lighteval(**kwargs):
+        observed_env.update(
+            {
+                key: kwargs["subprocess_env"].get(key)
+                for key in (
+                    "HF_HOME",
+                    "HF_HUB_CACHE",
+                    "HF_DATASETS_CACHE",
+                    "HF_HUB_OFFLINE",
+                    "HF_DATASETS_OFFLINE",
+                    "NLTK_DATA",
+                )
+            }
+        )
+        return CANNED_RESULTS
+
+    monkeypatch.setattr(adapter, "_run_lighteval", run_lighteval)
+    adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+
+    expected_env = {
+        "HF_HOME": str(test_data_root),
+        "HF_HUB_CACHE": str(test_data_root / "hub"),
+        "HF_DATASETS_CACHE": str(writable_cache),
+        "HF_HUB_OFFLINE": "1",
+        "HF_DATASETS_OFFLINE": "1",
+        "HF_EVALUATE_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "NLTK_DATA": str(test_data_root / "nltk_data"),
+    }
+    assert checked_nltk == [(test_data_root, str(test_data_root / "nltk_data"))]
+    assert observed_env == {
+        key: expected_env[key]
+        for key in (
+            "HF_HOME",
+            "HF_HUB_CACHE",
+            "HF_DATASETS_CACHE",
+            "HF_HUB_OFFLINE",
+            "HF_DATASETS_OFFLINE",
+            "NLTK_DATA",
+        )
+    }
+    assert {key: os.environ.get(key) for key in expected_env} == expected_env
+    cached_dataset = (
+        writable_cache
+        / "fixture"
+        / "default"
+        / "1.0.0"
+        / "abc123"
+        / "train.arrow"
+    )
+    assert cached_dataset.is_symlink()
+    assert cached_dataset.read_bytes() == b"prepared dataset"
+    assert (registry_dir / "tinyBenchmarks.pkl").read_bytes() == b"staged task-registry asset"
+
+
+@pytest.mark.integration
+def test_staged_job_reports_missing_nltk_before_registry_import(
+    adapter, mock_callbacks, tmp_path, monkeypatch
+):
+    """A disconnected job fails clearly before LightEval can fetch NLTK data."""
+    test_data_root = tmp_path / "test_data"
+    test_data_root.mkdir()
+    monkeypatch.setattr(adapter_main, "TEST_DATA_DIR", test_data_root)
+    monkeypatch.setattr(
+        adapter_main,
+        "build_hf_offline_environment",
+        lambda root: {"NLTK_DATA": str(root / "nltk_data")},
+    )
+    monkeypatch.setattr(
+        adapter_main,
+        "ensure_lighteval_registry_assets",
+        lambda root: pytest.fail("registry import must follow NLTK validation"),
+    )
+    monkeypatch.setenv("NLTK_DATA", "previous")
+
+    with pytest.raises(RuntimeError, match="Offline jobs will not download NLTK data"):
+        adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+
+    failed_status = mock_callbacks.report_status.call_args_list[-1].args[0]
+    assert "nltk_data/tokenizers" in failed_status.error_message.message
 
 
 @pytest.mark.integration
@@ -414,16 +558,18 @@ def test_generate_additional_info_fallback(adapter):
 
 @pytest.fixture
 def mock_hf_api(monkeypatch):
-    """Stub huggingface_hub so _resolve_dataset_shas never hits the network.
+    """Mock HfApi so _resolve_dataset_shas never hits the network.
 
     Returns the mock HfApi instance; SHA-specific tests can reconfigure
-    mock_api.dataset_info to return custom metadata.
+    mock_api.dataset_info to return custom metadata. Keep the real package
+    available because LightEval's registry imports datasets, which needs other
+    huggingface_hub exports.
     """
+    import huggingface_hub
+
     mock_api = MagicMock()
     mock_api.dataset_info.return_value = SimpleNamespace(sha="deterministic-sha")
-    stub = ModuleType("huggingface_hub")
-    stub.HfApi = MagicMock(return_value=mock_api)
-    monkeypatch.setitem(sys.modules, "huggingface_hub", stub)
+    monkeypatch.setattr(huggingface_hub, "HfApi", MagicMock(return_value=mock_api))
     return mock_api
 
 
@@ -771,6 +917,53 @@ def test_run_lighteval_cmd_formats_generation_parameters(adapter, tmp_path, monk
     assert ",system_prompt=You are a helpful math tutor." in model_args
 
 
+@pytest.mark.integration
+def test_run_lighteval_passes_staged_hf_environment_to_subprocess(
+    adapter, tmp_path, monkeypatch
+):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        results_dir = tmp_path / "output" / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "results_test.json").write_text(json.dumps(CANNED_RESULTS))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "main.resolve_model_credentials",
+        lambda: SimpleNamespace(api_key="test-key"),
+    )
+    monkeypatch.setattr(
+        adapter, "_with_sampling_temperature", lambda tasks, params: None
+    )
+    monkeypatch.setenv("HF_TOKEN", "fake")
+    staged_env = {
+        "HF_HOME": str(tmp_path / "test_data"),
+        "HF_HUB_CACHE": str(tmp_path / "test_data" / "hub"),
+        "HF_DATASETS_CACHE": str(tmp_path / "test_data" / "datasets"),
+        "HF_HUB_OFFLINE": "1",
+        "HF_DATASETS_OFFLINE": "1",
+        "HF_EVALUATE_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_TOKEN": "fake",
+    }
+
+    adapter._run_lighteval(
+        model_config=adapter.job_spec.model,
+        tasks=["boolq"],
+        output_dir=tmp_path / "output",
+        num_fewshot=0,
+        limit=1,
+        batch_size=1,
+        benchmark_config=adapter.job_spec.parameters,
+        subprocess_env=staged_env,
+    )
+
+    assert captured["env"] == staged_env
+
+
 # ── L1 fix: max_samples parameter forwarding ──────────────────────────────────
 
 @pytest.mark.integration
@@ -984,9 +1177,12 @@ def test_anthropic_allowed_for_generation_only_tasks(adapter, tasks):
     adapter._validate_provider_supports_tasks("anthropic", tasks)
 
 
-@pytest.mark.integration
-@pytest.mark.parametrize("provider", ["endpoint", "openai", "vllm"])
-def test_other_providers_never_rejected_for_loglikelihood_tasks(adapter, provider):
+@pytest.mark.parametrize(
+    "provider", ["endpoint", "openai", "litellm", "transformers", "vllm"]
+)
+def test_non_anthropic_providers_are_not_blocked_for_loglikelihood_tasks(
+    adapter, provider
+):
     adapter._validate_provider_supports_tasks(provider, ["arc:easy"])
 
 
@@ -1020,6 +1216,25 @@ def test_run_benchmark_job_anthropic_loglikelihood_task_fails_before_lighteval(
     )
     with pytest.raises(ValueError, match="arc:easy"):
         adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+
+
+@pytest.mark.integration
+def test_run_benchmark_job_endpoint_arc_reaches_lighteval(
+    adapter, mock_callbacks, monkeypatch, mock_hf_api
+):
+    """The merged echo+logprobs endpoint path must reach LightEval for ARC:Easy."""
+    adapter.job_spec.benchmark_id = "arc:easy"
+    adapter.job_spec.parameters["provider"] = "endpoint"
+    reached = {}
+
+    def fake_run_lighteval(**kwargs):
+        reached["tasks"] = kwargs["tasks"]
+        raise RuntimeError("stop after provider validation")
+
+    monkeypatch.setattr(adapter, "_run_lighteval", fake_run_lighteval)
+    with pytest.raises(RuntimeError, match="stop after provider validation"):
+        adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
+    assert reached["tasks"] == ["arc:easy"]
 
 
 # ── C4: Top-level generation_parameters forwarding ────────────────────────────
@@ -1579,6 +1794,54 @@ def test_loglikelihood_patch_output_tokens_feed_token_normalisation(monkeypatch)
     assert LoglikelihoodAcc(logprob_normalization=LogProbTokenNorm()).compute(doc, resp) == 1
 
 
+@pytest.mark.parametrize("count", [4, 8])
+@pytest.mark.parametrize("address", ["0x7f1b775f2e80", "0x7f8b077f6e80"])
+def test_math_majority_metrics_have_stable_names(adapter, count, address):
+    """Real math result keys must not depend on the Python process address."""
+    raw_name = (
+        f"maj@n:n={count}&strip_strings=True&"
+        f"normalize_pred=<function math_normalizer at {address}>&"
+        f"normalize_gold=<function math_normalizer at {address}>"
+    )
+    raw = {
+        "results": {
+            "math:algebra|0": {raw_name: 0.5, f"{raw_name}_stderr": 0.1},
+            "math:counting_and_probability|0": {raw_name: 0.0},
+            "math:_average|0": {raw_name: 0.25},
+            "all": {raw_name: 0.25},
+        }
+    }
+    results, schema = adapter._extract_evaluation_results(raw, "math")
+    expected = [
+        f"math:algebra.maj@{count}",
+        f"math:counting_and_probability.maj@{count}",
+        f"math:_average.maj@{count}",
+        f"all.maj@{count}",
+    ]
+    assert [r.metric_name for r in results] == expected
+    assert [s.name for s in schema] == expected
+    assert [r.metric_value for r in results] == [0.5, 0.0, 0.25, 0.25]
+    assert results[0].confidence_interval == pytest.approx((0.304, 0.696))
+    assert results[0].metadata["metric"] == f"maj@{count}"
+
+
+@pytest.mark.parametrize(
+    ("raw_name", "expected"),
+    [
+        ("em", "em"),
+        ("extractive_match", "extractive_match"),
+        ("pass@k:k=1&n=3", "pass@1"),
+        ("codegen_pass@1:16", "codegen_pass@1"),
+        ("maj@n:strip_strings=True&n=4", "maj@4"),
+        ("maj@n:strip_strings=True", "maj@n:strip_strings=True"),
+        ("maj@n:n=0", "maj@n:n=0"),
+        ("maj@n:n=4oops", "maj@n:n=4oops"),
+    ],
+)
+def test_normalise_metric_name_preserves_other_formats(raw_name, expected):
+    assert LightEvalAdapter._normalise_metric_name(raw_name) == expected
+
+
 # ── provider.yaml primary metrics must equal the keys the adapter emits ──────
 #
 # EvalHub resolves ``primary_score.metric`` with an exact lookup against the
@@ -1589,9 +1852,9 @@ def test_loglikelihood_patch_output_tokens_feed_token_normalisation(monkeypatch)
 # breaking the primary score.
 
 # Benchmarks whose primary metric cannot be asserted from the registry alone.
-# math:* emit a name that embeds a function repr, truthfulqa:mc emits one
-# metric object that fans out to several keys, and the group ids expand to
-# many tasks. They still declare bare metric names and need a live run to fix.
+# math:* provider declarations still need to select the normalized maj@N keys;
+# truthfulqa:mc emits one metric object that fans out to several keys, and the
+# group ids expand to many tasks. They need a provider-config follow-up.
 _PRIMARY_METRIC_KNOWN_GAPS = {
     "math",
     "math:algebra",

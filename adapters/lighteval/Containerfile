@@ -9,11 +9,15 @@ WORKDIR /app
 
 # Install the fully pinned dependency set. The resolver is skipped (--no-deps)
 # because pip 24.2 cannot resolve the unpinned requirements.txt (ResolutionTooDeep).
+# The lock carries no pip entry of its own, so upgrade the installer first: pip 26.2.2
+# verifies through truststore instead of the vendored bundle it ships with.
 COPY requirements.lock .
-RUN pip install --no-cache-dir --no-deps -r requirements.lock
+RUN pip install --no-cache-dir --upgrade pip==26.2.2 && \
+    pip install --no-cache-dir --no-deps -r requirements.lock
 
 # Copy adapter implementation and loglikelihood patch
 COPY main.py .
+COPY _hf_offline.py ./
 COPY lighteval_logprob_patch.py .
 COPY lighteval_memory_cap.py .
 COPY sample_results.py ./

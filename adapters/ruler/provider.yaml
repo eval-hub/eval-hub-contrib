@@ -207,13 +207,19 @@ parameters:
     type: string
     default: null
     description: >
-      HuggingFace model ID or tiktoken model name used for context-length-aware
-      dataset generation. Defaults to model.name from the JobSpec.
+      In connected jobs, a Hugging Face model ID or tiktoken encoding name used
+      for context-length-aware dataset generation; defaults to model.name. For
+      disconnected jobs, use a local Hugging Face tokenizer directory. A relative
+      path is resolved under /test_data; when omitted or equal to model.name, the
+      adapter uses /test_data/tokenizer.
 
   - name: tokenizer_type
     type: string
     default: hf
-    description: Tokenizer backend — "hf" (HuggingFace) or "openai" (tiktoken).
+    description: >
+      Tokenizer backend — "hf" (Hugging Face) or "openai" (tiktoken). Disconnected
+      jobs currently require "hf" and a complete local tokenizer staged under
+      /test_data.
 
   - name: model_template
     type: string

@@ -15,11 +15,10 @@ The auditing tools and scaffold integration include:
 
 ## Benchmarks
 
-The contrib `provider.yaml` registers **79 benchmark IDs**: 36 Petri alignment
-audits, 2 Bloom suites, 36 inspect-evals tasks, 4 Open-Telco tasks (TeleMath,
-TeleQnA, TeleLogs, 3GPP-TSG), and 1 custom task.
+The contrib `provider.yaml` registers **76 benchmark IDs**: 36 Petri alignment
+audits, 2 Bloom suites, 37 inspect-evals tasks, and 1 custom task.
 
-The adapter's task maps support **83 IDs**, including four additional IDs absent
+The adapter's task maps support **79 IDs**, including four additional IDs absent
 from this provider file: `inspect/hle`, `inspect/bfcl`, `inspect/docvqa`, and
 `inspect/cyberseceval-2-pi`. To expose these through EvalHub, the deployed provider
 configuration must register them.
@@ -83,15 +82,6 @@ All 38 Petri judge dimensions are captured as individual metrics.
 
 `inspect/gsm8k` · `inspect/math` · `inspect/aime2024` · `inspect/aime2025`
 
-### Telecom (GSMA Open-Telco)
-
-| Benchmark ID | Description |
-|---|---|
-| `telemath` | Telecom numerical math reasoning. Set `full=true` for `GSMA/ot-full` (500 Q&A); cap with `num_examples`. |
-| `teleqna` | Telecom multiple-choice domain knowledge. Set `full=true`; optional `subject` (default `full`). |
-| `telelogs` | 5G root-cause analysis. Set `full=true`; `eval_type` soft (default) or hard. |
-| `3gpp-tsg` | 3GPP working-group classification. Set `full=true`; cap with `num_examples`. |
-
 ### Knowledge & Reasoning
 
 `inspect/mmlu` · `inspect/mmlu-pro` · `inspect/gpqa` · `inspect/bbh` · `inspect/arc` · `inspect/hellaswag` · `inspect/winogrande` · `inspect/truthfulqa` · `inspect/simpleqa`
@@ -123,14 +113,17 @@ Petri and Bloom modes do not use a sandbox.
 
 ### HuggingFace datasets
 
-Some inspect-evals benchmarks (e.g. `humaneval`, `mmlu`) and Open-Telco tasks
-(`telemath`) load datasets from the HuggingFace Hub unless offline data is staged.
+Some inspect-evals benchmarks (e.g. `humaneval`, `mmlu`) load datasets from the
+HuggingFace Hub unless offline data is staged.
 
 On disconnected clusters, configure **`test_data_ref.s3`** (or PVC/git) on the
 benchmark so Eval Hub syncs a Hugging Face cache layout into **`/test_data`**.
-The adapter then sets **`HF_HOME`**, **`HF_HUB_OFFLINE`**, and related env vars
-for the `inspect eval` subprocess (same approach as the lm-evaluation-harness
-adapter). Disconnected FVT jobs also set **`parameters.tokenizer`** to
+The adapter reads the staged Hub snapshot from **`/test_data/hub`** and sets
+**`HF_HUB_OFFLINE`** and related flags for the `inspect eval` subprocess. The
+test-data mount is read-only, so generated Hugging Face state (including
+`datasets` lock files and processed Arrow caches) is written to the job's
+writable **`/data/huggingface`** volume. Disconnected FVT jobs also set
+**`parameters.tokenizer`** to
 `/test_data/tokenizer` alongside **`test_data_ref`**; either signal enables
 offline mode when `/test_data` is populated.
 
@@ -239,235 +232,37 @@ warning; `num_examples` wins if both are set. Note that Inspect's own
 `--max-samples` flag controls how many samples run *in parallel*, not how many
 are evaluated, which is why the name is being retired here.
 
-Open-Telco dataset size is controlled via `parameters.full`
-(`true` → `GSMA/ot-full`, `false` → `GSMA/ot-lite`). TeleQnA also accepts
-`parameters.subject` (default in the task is `full` = all subjects). TeleLogs
-accepts `parameters.eval_type` (`soft` or `hard`).
-
 ---
 
 ## Model and credential configuration
 
-The adapter detects which API to use from environment variables. Model names are passed
-as-is — bare (`claude-opus-4-7`, `granite3.3`) or org/model
-(`ibm-granite/granite-3.3-8b-instruct`, `meta-llama/Llama-3.3-70B-Instruct`).
+All auxiliary model credentials and endpoints come from `model.auth.secret_ref`.
+Use `<role>_api-key` and optional `<role>_url` entries in that Secret; model IDs
+remain benchmark parameters. When a role has no entries, it reuses `model.url`
+and the primary `api-key` from the same Secret. A role URL requires its matching
+role key, even when the real key equals the primary key. Kubernetes adapters see
+only projected references and localhost URLs; the sidecar selects the upstream
+and injects its credential. Local jobs use the SDK's `file:///` auth directory.
 
-### Global credentials (apply to all roles by default)
+Inline role URLs/keys are ignored. Role credentials and endpoints are not read
+from environment variables. See [model-role authentication](../../docs/model-role-auth.md)
+for the Secret layout, supported roles, migration, and sidecar limitations.
 
-| Env var | Used for |
-|---|---|
-| `OPENAI_BASE_URL` | OpenAI-compatible endpoint (vLLM, Ollama `/v1`, OpenRouter) |
-| `OPENAI_API_KEY` | API key for `OPENAI_BASE_URL` endpoint |
-| `ANTHROPIC_API_KEY` | Anthropic Messages API |
-| `ANTHROPIC_BASE_URL` | Anthropic API base URL override (proxies, on-prem) |
+Inspect supports `auditor`, `judge`, `scenarios`, `realism`, and arbitrary named
+roles in `parameters.model_roles`. Model-role values can be model name strings
+or legacy dictionaries containing `model`; inline connection settings are ignored.
+For example, `model_roles: {critic: deployed-critic}` uses `critic_api-key` and
+`critic_url`. HLE and CyberSecEval's `judge_model`, and StrongREJECT's
+`grader_model`, all use the `judge` Secret pair. Petri/Bloom use `auditor_model`
+and `judge_model`; `scenarios_model` and `realism_model` remain optional.
+Connection overrides in `model_args`, including nested dictionaries and lists,
+are removed before invoking Inspect; generation settings remain available.
 
-Global client selection priority for roles without explicit routing:
-1. `model.url` present → OpenAI-compatible client
-2. `ANTHROPIC_API_KEY` or `ANTHROPIC_BASE_URL` set → Anthropic client
-3. `OPENAI_BASE_URL` or `OPENAI_API_KEY` set → OpenAI-compatible client
-
-### Curated HLE and CyberSecEval 2 judge routing
-
-For `inspect/hle` and `inspect/cyberseceval-2-pi`, set flat benchmark parameters
-`judge_model`. The adapter maps it to
-Inspect's `grader` role. For CyberSecEval 2 it also disables the task's built-in
-`judge_llm` default, which would otherwise bypass that role. The existing
-`task_args` scorer settings remain in place.
-
-With no judge-specific fields in the Secret named by `model.auth.secret_ref`,
-the judge reuses the evaluated model endpoint and credential. `judge_api-key`
-selects a separate credential at the target endpoint, and optional `judge_url`
-selects a separate endpoint. `judge_url` alone is invalid because the sidecar
-routes `api-key:ref` only to the target; copy the target key into `judge_api-key`
-when only the URL differs. In Kubernetes the adapter receives projected
-references and loopback URLs; the sidecar injects the real key and selects the
-judge upstream. Do not put an endpoint or API key in job parameters for these
-collection jobs. Jobs without `judge_model` retain their existing `model_roles`
-and task-argument behavior.
-
-### Independent StrongREJECT grader
-
-For `inspect/strong-reject`, set `parameters.grader_model` to route scoring to
-Inspect's named `grader` role instead of StrongREJECT's built-in `judge_llm`
-default. For example, use `gpt-4o-mini` with `grader_base_url` set to
-`https://api.openai.com/v1`. The adapter routes that role through Inspect's
-isolated `openai-api/openai_judge/...` provider namespace, so the target keeps
-its own `OPENAI_BASE_URL` and `OPENAI_API_KEY`.
-
-The judge credential must be provided to the adapter process as
-`OPENAI_JUDGE_API_KEY` from a Kubernetes Secret. The adapter does not accept a
-judge key in evaluation parameters, and it never places the key in the Inspect
-command line. `OPENAI_JUDGE_BASE_URL` can supply the endpoint instead of
-`grader_base_url`; it defaults to `https://api.openai.com/v1`.
-
-This adapter support assumes the EvalHub runtime injects that Secret-backed
-environment variable into the job. If the job currently mounts only the
-target model Secret, a corresponding EvalHub core change is required before
-this route can be exercised in-cluster.
-
-### Per-role credential overrides
-
-Each role (target, auditor, judge, scenarios, realism) accepts its own endpoint and key.
-When set, only that role uses the override; all other roles continue using global credentials.
-
-| Parameter | Effect |
-|---|---|
-| `{role}_base_url` | OpenAI-compatible endpoint for this role only |
-| `{role}_api_key` | API key for the OpenAI-compatible endpoint |
-| `{role}_anthropic_base_url` | Anthropic endpoint for this role only |
-| `{role}_anthropic_api_key` | Anthropic API key for this role |
-
----
-
-## Deployment examples
-
-### Scenario 1 — All roles on the same vLLM, no authentication
-
-```json
-{
-  "model": {
-    "url": "http://vllm:8080/v1",
-    "name": "ibm-granite/granite-3.3-8b-instruct"
-  },
-  "parameters": {
-    "auditor_model": "ibm-granite/granite-3.3-8b-instruct",
-    "judge_model": "meta-llama/Llama-3.3-70B-Instruct"
-  }
-}
-```
-Environment: none required (vLLM does not require authentication by default).
-
----
-
-### Scenario 2 — Target on vLLM, auditor/judge on Anthropic
-
-```json
-{
-  "model": {
-    "url": "http://vllm:8080/v1",
-    "name": "ibm-granite/granite-3.3-8b-instruct"
-  },
-  "parameters": {
-    "auditor_model": "claude-sonnet-4-6",
-    "judge_model": "claude-opus-4-7"
-  }
-}
-```
-Environment: `ANTHROPIC_API_KEY=sk-ant-...`
-
-The adapter routes the target to the OpenAI-compatible client (via `model.url`) and the
-auditor/judge to Anthropic (via `ANTHROPIC_API_KEY`).
-
----
-
-### Scenario 3 — Target on vLLM-A, judge on a different vLLM-B
-
-Each vLLM instance is configured with an `EMPTY` placeholder key (set this when the
-server requires a token even if authentication is not enforced).
-
-```json
-{
-  "model": {
-    "url": "http://vllm-a:8080/v1",
-    "name": "ibm-granite/granite-3.3-8b-instruct"
-  },
-  "parameters": {
-    "auditor_model": "ibm-granite/granite-3.3-8b-instruct",
-    "judge_model": "meta-llama/Llama-3.3-70B-Instruct",
-    "judge_base_url": "http://vllm-b:8080/v1",
-    "judge_api_key": "EMPTY"
-  }
-}
-```
-Environment: `OPENAI_API_KEY=EMPTY` (for target and auditor on vLLM-A).
-
----
-
-### Scenario 4 — Target on vLLM, auditor on OpenRouter, judge on Anthropic
-
-```json
-{
-  "model": {
-    "url": "http://vllm:8080/v1",
-    "name": "ibm-granite/granite-3.3-8b-instruct"
-  },
-  "parameters": {
-    "auditor_model": "meta-llama/llama-3.3-70b-instruct",
-    "auditor_base_url": "https://openrouter.ai/api/v1",
-    "auditor_api_key": "sk-or-...",
-    "judge_model": "claude-opus-4-7"
-  }
-}
-```
-Environment: `ANTHROPIC_API_KEY=sk-ant-...`
-
-Each role uses a completely different provider and endpoint.
-
----
-
-### Scenario 5 — All roles on Ollama, no authentication
-
-Ollama exposes an OpenAI-compatible API at `/v1`. Model names follow the Ollama library
-format (`granite3.3:8b`, `llama3.3`, `qwen3:32b`), not HuggingFace IDs.
-
-```json
-{
-  "model": {
-    "url": "http://ollama:11434/v1",
-    "name": "granite3.3:8b"
-  },
-  "parameters": {
-    "auditor_model": "llama3.3",
-    "judge_model": "qwen3:32b"
-  }
-}
-```
-Environment: none required.
-
----
-
-### Scenario 6 — Anthropic for all roles
-
-```json
-{
-  "model": {
-    "name": "claude-haiku-4-5-20251001"
-  },
-  "parameters": {
-    "auditor_model": "claude-sonnet-4-6",
-    "judge_model": "claude-opus-4-7"
-  }
-}
-```
-Environment: `ANTHROPIC_API_KEY=sk-ant-...`
-
-No `model.url` needed. All roles resolve to Anthropic via `ANTHROPIC_API_KEY`.
-
----
-
-### Scenario 7 — Judge on a custom Anthropic proxy
-
-Use `judge_anthropic_base_url` to route only the judge to a non-default Anthropic
-endpoint while everything else uses the standard configuration.
-
-```json
-{
-  "model": {
-    "url": "http://vllm:8080/v1",
-    "name": "ibm-granite/granite-3.3-8b-instruct"
-  },
-  "parameters": {
-    "auditor_model": "claude-sonnet-4-6",
-    "judge_model": "claude-opus-4-7",
-    "judge_anthropic_base_url": "https://my-anthropic-proxy/v1",
-    "judge_anthropic_api_key": "sk-proxy-key"
-  }
-}
-```
-Environment: `ANTHROPIC_API_KEY=sk-ant-...` (for auditor), `OPENAI_BASE_URL` set from
-`model.url` (for target).
-
----
+OpenAI-compatible endpoints and Inspect's pinned `ollama` client support Bearer
+reference routing. Native `anthropic/` role models are rejected until the
+sidecar supports Anthropic's authentication headers. An OpenAI-compatible gateway
+can serve those models today. The sidecar requires no path allowlist additions
+for the currently supported OpenAI-compatible clients.
 
 ## Key Petri parameters
 
@@ -481,7 +276,7 @@ Environment: `ANTHROPIC_API_KEY=sk-ant-...` (for auditor), `OPENAI_BASE_URL` set
 | `num_examples` | `5` (Petri/Bloom) | Cap scenarios/samples via EvalHub `benchmarks[].parameters.num_examples` (JobSpec `num_examples` → Inspect `--limit`; Petri/Bloom default to 5 when unset, standard benchmarks are unbounded) |
 | `seed_instructions` | *(from benchmark_id)* | Override seed selection (`tags:deception`, `id:seed_name`, inline text) |
 | `judge_dimensions` | *(all 38)* | Filter judge dimensions (`tags:safety` or custom directory) |
-| `task_args` | `{}` | Escape hatch for non–first-class Inspect `-T` flags (e.g. Dish `dish_scaffold`). Not for Open-Telco `full`. |
+| `task_args` | `{}` | Escape hatch for Inspect `-T` flags that are not first-class parameters (e.g. Dish `dish_scaffold`). |
 
 ## Bloom-specific parameters
 

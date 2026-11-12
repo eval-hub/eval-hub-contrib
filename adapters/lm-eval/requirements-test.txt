@@ -1,0 +1,11 @@
+# Unit and integration tests. This file does NOT include lm_eval: in the "test" job
+# every framework subprocess call is monkeypatched, so only the SDK and pytest are
+# needed. Tests marked @pytest.mark.lmeval need the real framework and run in the
+# "registry" job, which installs requirements.txt as well:
+#   uv pip install --system -r requirements.txt -r requirements-test.txt
+# Local / live-endpoint tests (marked @pytest.mark.local) need the full
+# requirements.txt too.
+eval-hub-sdk[adapter]~=1.0.7
+pytest>=9.0
+pyyaml>=6.0
+pytest-cov>=7.0

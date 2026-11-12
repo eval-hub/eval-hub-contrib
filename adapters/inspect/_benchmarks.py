@@ -70,6 +70,8 @@ BLOOM_TEMPLATE_MAP: dict[str, str | None] = {
 # Standard inspect-evals benchmark → task spec mapping
 # ---------------------------------------------------------------------------
 
+DOCVQA_TASK_SPEC = "evalhub_docvqa.py@docvqa"
+
 STANDARD_TASK_MAP: dict[str, str | None] = {
     # Safety & alignment
     "inspect/agentharm":              "inspect_evals/agentharm",
@@ -100,11 +102,6 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     "inspect/math":                   "inspect_evals/math",
     "inspect/aime2024":               "inspect_evals/aime2024",
     "inspect/aime2025":               "inspect_evals/aime2025",
-    # Telecom (GSMA Open-Telco / gsma-labs/evals)
-    "telemath":                       "evals/telemath",
-    "teleqna":                        "evals/teleqna",
-    "telelogs":                       "evals/telelogs",
-    "3gpp-tsg":                       "evals/three_gpp",
     # Knowledge & reasoning
     "inspect/mmlu":                   "inspect_evals/mmlu",
     "inspect/mmlu-pro":               "inspect_evals/mmlu_pro",
@@ -121,7 +118,9 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     "inspect/agentdojo":              "inspect_evals/agentdojo",
     "inspect/theagentcompany":        "inspect_evals/theagentcompany",
     "inspect/bfcl":                   "inspect_evals/bfcl",
-    "inspect/docvqa":                 "inspect_evals/docvqa",
+    # EvalHub's wrapper applies the sample limit before materializing the
+    # image-heavy dataset; the upstream task converts the entire split first.
+    "inspect/docvqa":                 DOCVQA_TASK_SPEC,
     # Custom
     "inspect/custom":                 None,
 }

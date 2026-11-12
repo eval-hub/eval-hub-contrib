@@ -464,7 +464,7 @@ def test_promptfoo_redteam_passes_grader_when_generation_provider_set(monkeypatc
 
 
 def test_promptfoo_redteam_propagates_generation_provider_url(monkeypatch):
-    """generation_provider_url is injected as OPENAI_BASE_URL via _run_promptfoo_cli kwargs."""
+    """The Secret generation URL is passed to the CLI environment."""
     adapter = PromptfooAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
 
@@ -474,13 +474,15 @@ def test_promptfoo_redteam_propagates_generation_provider_url(monkeypatch):
         "plugins": ["sql-injection"],
         "num_tests_per_plugin": 1,
         "generation_provider": "openai:chat:granite-2b",
-        "generation_provider_url": "https://granite-2b-svc.models.svc:8000/v1",
+
     }
 
     eval_json = _eval_json(1, 0, 0)
     captured_kwargs = []
 
     import main as main_mod
+
+    monkeypatch.setattr(main_mod, "read_model_auth_key", {"generation_provider_url": "https://granite-2b-svc.models.svc:8000/v1", "generation_provider_api-key": "generation_provider_api-key:ref", "judge_url": "https://granite-2b-svc.models.svc:8000/v1", "judge_api-key": "generation_provider_api-key:ref"}.get)
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
         """Stub for _run_promptfoo_cli."""
@@ -850,7 +852,7 @@ def test_promptfoo_cli_exit_code_2_is_fatal(monkeypatch):
 
 
 def test_promptfoo_redteam_propagates_generation_provider_api_key(monkeypatch):
-    """Explicit generation_provider_api_key parameter takes precedence over target api_key."""
+    """The projected generation Secret connection takes precedence."""
     adapter = PromptfooAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
 
@@ -860,14 +862,16 @@ def test_promptfoo_redteam_propagates_generation_provider_api_key(monkeypatch):
         "plugins": ["sql-injection"],
         "num_tests_per_plugin": 1,
         "generation_provider": "openai:chat:external-model",
-        "generation_provider_url": "https://litellm.example.com/v1",
-        "generation_provider_api_key": "sk-gen-provider-key-123",
+
+
     }
 
     eval_json = _eval_json(1, 0, 0)
     captured_kwargs = []
 
     import main as main_mod
+
+    monkeypatch.setattr(main_mod, "read_model_auth_key", {"generation_provider_url": "https://litellm.example.com/v1", "generation_provider_api-key": "sk-gen-provider-key-123", "judge_url": "https://litellm.example.com/v1", "judge_api-key": "sk-gen-provider-key-123"}.get)
 
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
         """Stub for _run_promptfoo_cli."""
@@ -892,8 +896,8 @@ def test_promptfoo_redteam_propagates_generation_provider_api_key(monkeypatch):
     assert eval_call["api_key"] == "sk-gen-provider-key-123"
 
 
-def test_promptfoo_redteam_generation_provider_api_key_from_env(monkeypatch):
-    """GENERATION_PROVIDER_API_KEY env var is used when parameter is not set."""
+def test_promptfoo_redteam_generation_ignores_env_key(monkeypatch):
+    """Runtime generation credentials cannot override Secret resolution."""
     adapter = PromptfooAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
 
@@ -928,11 +932,11 @@ def test_promptfoo_redteam_generation_provider_api_key_from_env(monkeypatch):
     adapter.run_benchmark_job(config, callbacks)
 
     gen_call = captured_kwargs[0]
-    assert gen_call["api_key"] == "sk-from-env-456"
+    assert gen_call["api_key"] == "not-required"
 
 
-def test_promptfoo_redteam_generation_provider_api_key_falls_back_to_target(monkeypatch):
-    """Without explicit key or env, generation_provider uses the target model's api_key."""
+def test_promptfoo_redteam_generation_ignores_target_env_key(monkeypatch):
+    """The target runtime environment is not a generation credential source."""
     adapter = PromptfooAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
 
@@ -968,46 +972,43 @@ def test_promptfoo_redteam_generation_provider_api_key_falls_back_to_target(monk
     adapter.run_benchmark_job(config, callbacks)
 
     gen_call = captured_kwargs[0]
-    assert gen_call["api_key"] == "sk-target-model-key"
+    assert gen_call["api_key"] == "not-required"
 
 
-def test_promptfoo_redteam_explicit_gen_url_does_not_leak_target_key(monkeypatch):
-    """When generation_provider_url points elsewhere, the target key must NOT be forwarded."""
+@pytest.mark.parametrize("role_entries", [False, True])
+def test_promptfoo_redteam_ignores_inline_connections(monkeypatch, role_entries):
     adapter = PromptfooAdapter(job_spec_path="meta/job.json")
-    callbacks = create_autospec(JobCallbacks)
-
     config = copy.deepcopy(adapter.job_spec)
     config.benchmark_id = "promptfoo-redteam"
     config.parameters = {
-        "plugins": ["sql-injection"],
-        "num_tests_per_plugin": 1,
-        "generation_provider": "openai:chat:external-model",
-        "generation_provider_url": "https://external-llm.example.com/v1",
+        "generation_provider": "openai:chat:generation-model",
+        "judge_model": "openai:chat:judge-model",
+        "generation_provider_url": "https://legacy.example/gen/v1",
+        "generation_provider_api_key": "legacy-key",
+        "judge_url": "https://legacy.example/judge/v1", "judge_api_key": "legacy-key",
+        "strategies": [{"id": "basic", "config": {"apiKey": "legacy-key", "apiBaseUrl": "https://legacy.example/v1"}}],
     }
+    entries = {"api-key": "api-key:ref"}
+    if role_entries:
+        for role in ("judge", "generation_provider"):
+            entries[f"{role}_api-key"] = f"{role}_api-key:ref"
+            entries[f"{role}_url"] = f"http://localhost:8080/{role}/v1"
+    monkeypatch.setattr("main.read_model_auth_key", entries.get)
+    calls = []
 
-    eval_json = _eval_json(1, 0, 0)
-    captured_kwargs = []
+    def run(args, cwd, **kwargs):
+        import yaml
 
-    import main as main_mod
-
-    monkeypatch.delenv("GENERATION_PROVIDER_API_KEY", raising=False)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-managed-target-secret")
-
-    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
-        """Stub for _run_promptfoo_cli."""
-        captured_kwargs.append(kwargs)
-        if args[0] == "redteam" and args[1] == "generate":
-            return _FakeCompletedProcess(0, "")
+        calls.append(kwargs)
+        generated = yaml.safe_load((cwd / "promptfooconfig.yaml").read_text())
+        assert "legacy" not in json.dumps(generated)
         if args[0] == "eval":
-            out_path = Path(args[args.index("-o") + 1])
-            out_path.write_text(json.dumps(eval_json))
-            return _FakeCompletedProcess(0, "")
-        raise AssertionError(f"unexpected promptfoo invocation: {args}")
+            Path(args[args.index("-o") + 1]).write_text(json.dumps(_eval_json(1, 0, 0)))
+        return _FakeCompletedProcess(0, "")
 
-    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
-
-    adapter.run_benchmark_job(config, callbacks)
-
-    gen_call = captured_kwargs[0]
-    assert gen_call["api_key"] == "not-required"
-    assert gen_call["api_key"] != "sk-managed-target-secret"
+    monkeypatch.setattr("main._run_promptfoo_cli", run)
+    result = adapter.run_benchmark_job(config, create_autospec(JobCallbacks))
+    assert result.num_examples_evaluated == 1
+    for call, role in zip(calls, ("generation_provider", "judge"), strict=True):
+        assert call["api_key"] == entries.get(f"{role}_api-key", "api-key:ref")
+        assert call["base_url"].rstrip("/") == entries.get(f"{role}_url", config.model.url).rstrip("/")
