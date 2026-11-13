@@ -56,6 +56,11 @@ benchmarks:
       - curated
 
 parameters:
+  - name: save_sample_results
+    type: boolean
+    default: false
+    description: Persist native per-sample scores and identifiers for post-processing.
+
   - name: judge_model
     type: string
     description: Judge model identifier. Required for the bundled collection.

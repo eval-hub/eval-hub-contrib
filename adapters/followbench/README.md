@@ -116,3 +116,13 @@ The expected output contains `hsr`, `ssr`, `csl`, and `n_evaluated`. HSR and
 SSR are fractions in `0.0–1.0`; CSL is the average number of consecutive
 satisfied levels on the five-level scale. The proposed HSR smoke floor is
 `0.20`, pending calibration against reference results.
+
+## Per-sample results
+
+Set `parameters.save_sample_results: true` to persist `sample_results.jsonl` for
+confidence-interval post-processing. Each observation retains a stable `sample_id`
+and the native primary metric. Records include category, example ID, level,
+instruction, response, HSR, and SSR; the ID combines category, example ID, and
+level. Configured OCI exports receive the file and a metric manifest; configured
+MLflow persistence receives the sample file as well.
+Persistence errors fail the evaluation. The export is disabled by default.

@@ -434,6 +434,7 @@ class FollowBenchAdapter(FrameworkAdapter):
             )
 
             scored_results: list[ScoredConstraint] = []
+            sample_records: list[dict[str, Any]] = []
             evaluated_records = [
                 (group, example)
                 for group in groups
@@ -464,6 +465,22 @@ class FollowBenchAdapter(FrameworkAdapter):
                         temperature=temperature,
                     )
                 )
+
+                # Each evaluated constraint level is one observation for CI computation.
+                if config.parameters.get("save_sample_results"):
+                    score = scored_results[-1]
+                    sample_records.append(
+                        {
+                            "sample_id": f"{score.group_id}:{score.level}",
+                            "example_id": score.example_id,
+                            "category": example.category,
+                            "level": score.level,
+                            "instruction": example.instruction,
+                            "response": response,
+                            "hsr": float(score.hard_satisfied),
+                            "ssr": score.soft_satisfied,
+                        }
+                    )
 
                 if index == total or index % 10 == 0:
                     progress = 0.25 + (0.55 * index / total)
@@ -554,6 +571,13 @@ class FollowBenchAdapter(FrameworkAdapter):
                     ),
                 )
             )
+
+            if config.parameters.get("save_sample_results"):
+                from sample_results import persist_sample_results
+
+                persist_sample_results(
+                    config, callbacks, results, sample_records, "hsr"
+                )
 
             return results
 
