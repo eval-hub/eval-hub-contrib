@@ -23,6 +23,7 @@ Evaluates a model endpoint against [IFBench](https://github.com/allenai/IFBench)
 | `scoring_mode` | string | `loose` | Primary scoring mode (`loose` or `strict`) |
 | `num_examples` | integer | _(full set)_ | Cap prompts evaluated |
 | `max_concurrent` | integer | `4` | Concurrent API calls |
+| `save_sample_results` | bool | `true` | Persist samples when an export destination is configured; set `false` to disable sample export. |
 | `max_tokens` | integer | `2048` | Max generation tokens per prompt |
 | `temperature` | number | `0.0` | Sampling temperature |
 | `request_timeout` | integer | `120` | Per-request API timeout (seconds) |
@@ -80,6 +81,7 @@ EvalHub local runtime sets `EVALHUB_MODE=local` and still expects sidecar report
 post-processing. Set `parameters.save_sample_results: false` to disable it.
 Each observation retains a stable `sample_id`
 and the native primary metric. Configured OCI exports receive the file and a
-metric manifest; configured MLflow persistence receives the sample file as well.
-Persistence errors fail the evaluation. An OCI export or MLflow experiment must
-be configured unless persistence is explicitly disabled.
+metric manifest; configured MLflow persistence receives the sample file and metric manifest as well.
+Configured upload failures fail the evaluation. Without an OCI export or MLflow
+experiment, export is skipped and the evaluation completes normally. Disabling
+sample persistence preserves MLflow metrics and parameters for configured experiments.

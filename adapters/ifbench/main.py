@@ -15,7 +15,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
-from typing import Any, Optional
+from typing import Any
 
 from evalhub.adapter import (
     DefaultCallbacks,
@@ -32,7 +32,11 @@ from evalhub.adapter import (
     configure_telemetry,
 )
 from evalhub.adapter.auth import resolve_model_credentials
-from evalhub.adapter.models.cards import CapabilityEvalEntry, EvalCardMetadata, EnvironmentCardMetadata
+from evalhub.adapter.models.cards import (
+    CapabilityEvalEntry,
+    EnvironmentCardMetadata,
+    EvalCardMetadata,
+)
 
 from _evaluation import (
     InputExample,
@@ -83,7 +87,7 @@ def _call_model(
 
 
 def _load_test_data(num_examples: int | None) -> list[InputExample]:
-    from ifbench import data_path  # noqa: PLC0415
+    from ifbench import data_path
 
     examples = read_prompt_list(data_path())
     if num_examples is not None:
@@ -131,7 +135,7 @@ def _build_env_card(model_name: str) -> EnvironmentCardMetadata:
 class IFBenchAdapter(FrameworkAdapter):
     """eval-hub FrameworkAdapter for the IFBench instruction-following benchmark."""
 
-    def __init__(self, job_spec_path: Optional[str] = None) -> None:
+    def __init__(self, job_spec_path: str | None = None) -> None:
         super().__init__(job_spec_path=job_spec_path)
 
     def generate_additional_info(self, results: JobResults) -> dict[str, Any] | None:
@@ -165,6 +169,10 @@ class IFBenchAdapter(FrameworkAdapter):
 
             if config.benchmark_id != _BENCHMARK_ID:
                 raise ValueError(f"Unsupported benchmark_id: {config.benchmark_id}")
+
+            from sample_results import persist_sample_results, sample_results_enabled
+
+            save_samples = sample_results_enabled(config)
 
             scoring_mode = str(config.parameters.get("scoring_mode", "loose")).lower()
             if scoring_mode not in {"loose", "strict"}:
@@ -216,7 +224,7 @@ class IFBenchAdapter(FrameworkAdapter):
                 )
             )
 
-            import openai  # noqa: PLC0415
+            import openai
 
             client = openai.OpenAI(base_url=model_url, api_key=api_key, timeout=request_timeout)
             prompt_to_response: dict[str, str] = {}
@@ -351,9 +359,8 @@ class IFBenchAdapter(FrameworkAdapter):
                 )
             )
 
-            if config.parameters.get("save_sample_results") is not False:
-                from sample_results import persist_sample_results
-
+            records = None
+            if save_samples:
                 # Keep the selected primary score and strict/loose outcomes per prompt.
                 records = [
                     {
@@ -374,9 +381,7 @@ class IFBenchAdapter(FrameworkAdapter):
                         examples, strict_outputs, loose_outputs, strict=True
                     )
                 ]
-                persist_sample_results(
-                    config, callbacks, job_results, records, "accuracy"
-                )
+            persist_sample_results(config, callbacks, job_results, records, "accuracy")
 
             logger.info(
                 "Done %s score=%.4f n=%d %.2fs",

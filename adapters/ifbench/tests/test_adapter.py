@@ -12,9 +12,10 @@ import types
 from unittest.mock import MagicMock, create_autospec
 
 import pytest
-
 from evalhub.adapter import EvaluationResult, JobCallbacks, JobPhase, JobStatus
-from evalhub.adapter.models.cards import EvalCardMetadata, EnvironmentCardMetadata
+from evalhub.adapter.models.cards import EnvironmentCardMetadata, EvalCardMetadata
+
+from _evaluation import InputExample, compute_scores
 from main import (
     IFBenchAdapter,
     _build_env_card,
@@ -22,8 +23,6 @@ from main import (
     _local_only_run,
     _resolve_api_key,
 )
-from _evaluation import InputExample, compute_scores
-
 
 CANNED_EXAMPLES = [
     InputExample(
@@ -160,7 +159,7 @@ def test_ifbench_happy_path(monkeypatch, save_samples):
         assert [row["accuracy"] for row in samples] == [1.0, 1.0]
         assert samples[0]["response"] == "hello zebra"
     else:
-        callbacks.mlflow.save.assert_not_called()
+        assert callbacks.mlflow.save.call_args.kwargs["artifacts"] == []
 
     phases = [c.args[0].phase for c in callbacks.report_status.call_args_list]
     assert phases[0] == JobPhase.INITIALIZING
@@ -212,3 +211,15 @@ def test_generate_additional_info():
     assert info is not None
     assert info["zero_shot"] == pytest.approx(0.34)
     assert info["scoring_mode"] == "loose"
+
+
+@pytest.mark.parametrize("value", ["false", 0, None])
+def test_invalid_sample_flag_fails_before_inference(value, monkeypatch):
+    adapter = IFBenchAdapter(job_spec_path="meta/job.json")
+    config = copy.deepcopy(adapter.job_spec)
+    config.parameters["save_sample_results"] = value
+    callbacks = create_autospec(JobCallbacks)
+    with pytest.raises(ValueError, match="must be a boolean"):
+        adapter.run_benchmark_job(config, callbacks)
+    phases = [call.args[0].phase for call in callbacks.report_status.call_args_list]
+    assert JobPhase.RUNNING_EVALUATION not in phases

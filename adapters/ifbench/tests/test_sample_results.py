@@ -6,7 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from evalhub.adapter import JobResults, JobSpec, OCIArtifactResult
-from sample_results import persist_sample_results
+
+from sample_results import persist_sample_results, sample_results_enabled
 
 
 def objects():
@@ -80,8 +81,8 @@ def test_failed_upload_is_not_reported_as_success():
     callbacks.mlflow.save.assert_not_called()
 
 
-@pytest.mark.parametrize("records", [[], [{"sample_id": "a"}, {"sample_id": "a"}]])
-def test_empty_or_duplicate_observations_are_rejected(records):
+@pytest.mark.parametrize("records", [[{"sample_id": "a"}, {"sample_id": "a"}]])
+def test_duplicate_observations_are_rejected(records):
     config, result, callbacks = objects()
     with pytest.raises(ValueError, match="unique sample IDs"):
         persist_sample_results(config, callbacks, result, records, "metric")
@@ -111,13 +112,38 @@ def test_oci_only_does_not_require_an_experiment():
     callbacks.mlflow.save.assert_not_called()
 
 
-def test_missing_persistence_destination_is_rejected():
+def test_missing_persistence_destination_is_skipped():
     config, result, callbacks = objects()
     config.experiment_name = None
     config.exports = None
-    with pytest.raises(ValueError, match="OCI exports or MLflow persistence"):
-        persist_sample_results(
-            config, callbacks, result, [{"sample_id": "a", "metric": 1}], "metric"
-        )
+    persist_sample_results(
+        config, callbacks, result, [{"sample_id": "a", "metric": 1}], "metric"
+    )
     callbacks.create_oci_artifact.assert_not_called()
     callbacks.mlflow.save.assert_not_called()
+
+
+@pytest.mark.parametrize("value", ["false", 0, None, 1, "true"])
+def test_invalid_sample_flag_is_rejected(value):
+    config, _, _ = objects()
+    config.parameters["save_sample_results"] = value
+    with pytest.raises(ValueError, match="must be a boolean"):
+        sample_results_enabled(config)
+
+
+def test_disabled_samples_preserve_mlflow_metrics():
+    config, result, callbacks = objects()
+    persist_sample_results(config, callbacks, result, None, "metric")
+    callbacks.create_oci_artifact.assert_not_called()
+    assert callbacks.mlflow.save.call_args.kwargs["artifacts"] == []
+    assert result.mlflow_run_id == "run-1"
+
+
+def test_empty_observations_and_mlflow_manifest():
+    config, result, callbacks = objects()
+    config.exports = None
+    assert persist_sample_results(config, callbacks, result, [], "metric") == b""
+    artifacts = callbacks.mlflow.save.call_args.kwargs["artifacts"]
+    assert artifacts[0].content == b""
+    assert artifacts[1].path == "manifest.json"
+    assert json.loads(artifacts[1].content)["primary_score"] == {"metric": "metric"}
