@@ -232,7 +232,13 @@ def matching(table: Table, row: dict, target: dict, *, shared: bool) -> bool:
     for role, value in selectors.items():
         if value is None or value == "":
             continue
-        if str(value) != str(target.get(role, "")):
+        # Explicit selections filter external rows too, even without a source job.
+        row_value = table.get(row, role)
+        if role in selection and row_value not in (None, "") and str(row_value) != str(value):
+            return False
+        # External inputs have no authoritative job identity. Preserve their native
+        # metadata; only compare identities supplied by an eval_job target.
+        if role in target and str(value) != str(target[role]):
             return False
     return True
 
@@ -255,9 +261,21 @@ def ppi_arrays(
     """Pair trusted labels with predictions and exclude them from unlabeled data."""
     metric = target["metric"]
     scores: dict[str, float] = {}
+    # External data may retain metadata, but must identify at most one benchmark
+    # and provider after selection; otherwise one CI would silently pool groups.
+    identities = {role: set() for role in ("benchmark_id", "provider_id") if role not in target}
     for row in results.rows:
         if not matching(results, row, target, shared=False):
             continue
+        for role, values in identities.items():
+            value = results.config.get("selection", {}).get(role, results.get(row, role))
+            if value not in (None, ""):
+                values.add(str(value))
+            if len(values) > 1:
+                raise ValueError(
+                    f"Results data contains multiple {role} values; use "
+                    "results_data_ref.data_config.selection or path to select one group"
+                )
         key = sample_id(results, row)
         if key in scores:
             raise ValueError(f"Duplicate evaluation sample_id {key!r}")
