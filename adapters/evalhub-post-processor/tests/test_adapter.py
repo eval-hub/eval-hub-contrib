@@ -513,14 +513,20 @@ def test_oci_reference_uses_benchmark_digest():
 
 
 @pytest.mark.parametrize("mapped", [False, True])
-def test_external_data_uses_manifest_primary_metric(runtime, tmp_path, monkeypatch, mapped):
+@pytest.mark.parametrize("native_identity", [False, True])
+def test_external_data_uses_manifest_primary_metric(
+    runtime, tmp_path, monkeypatch, mapped, native_identity
+):
     results = tmp_path / "external-results"
     results.mkdir()
     if mapped:
         for row in runtime["data"]["samples"]:
             row["external_id"] = row.pop("sample_id")
+    if native_identity:
+        for row in runtime["data"]["samples"]:
+            row.update(benchmark_id="native-benchmark", provider_id="native-provider")
     (results / "samples.json").write_text(json.dumps(runtime["data"]))
-    # A single external source has no source benchmark identities.
+    # External native files can carry identities without a source eval_job target.
     calibration = [
         {"sample_id": "c1", "label": 1, "prediction": 0.8},
         {"sample_id": "c2", "label": 0, "prediction": 0.3},

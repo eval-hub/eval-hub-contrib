@@ -232,7 +232,13 @@ def matching(table: Table, row: dict, target: dict, *, shared: bool) -> bool:
     for role, value in selectors.items():
         if value is None or value == "":
             continue
-        if str(value) != str(target.get(role, "")):
+        # Explicit selections filter external rows too, even without a source job.
+        row_value = table.get(row, role)
+        if role in selection and row_value not in (None, "") and str(row_value) != str(value):
+            return False
+        # External inputs have no authoritative job identity. Preserve their native
+        # metadata; only compare identities supplied by an eval_job target.
+        if role in target and str(value) != str(target[role]):
             return False
     return True
 
