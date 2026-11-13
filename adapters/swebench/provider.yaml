@@ -65,6 +65,11 @@ benchmarks:
       - patches
       - full
 parameters:
+  - name: save_sample_results
+    type: boolean
+    default: true
+    description: Persist completed per-instance observations for confidence-interval post-processing.
+
   - name: predictions_path
     type: string
     required: false
