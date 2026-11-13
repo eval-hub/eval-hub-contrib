@@ -114,7 +114,7 @@ def _inject_call_model(monkeypatch, responses: dict[str, str]):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("save_samples", [False, True])
+@pytest.mark.parametrize("save_samples", [None, False, True])
 def test_ifbench_happy_path(monkeypatch, save_samples):
     adapter = IFBenchAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
@@ -123,7 +123,10 @@ def test_ifbench_happy_path(monkeypatch, save_samples):
     config.parameters["num_examples"] = 2
     config.parameters["max_concurrent"] = 1
     config.parameters["scoring_mode"] = "loose"
-    config.parameters["save_sample_results"] = save_samples
+    if save_samples is None:
+        config.parameters.pop("save_sample_results", None)
+    else:
+        config.parameters["save_sample_results"] = save_samples
     config.experiment_name = "sample-test"
     callbacks.mlflow = MagicMock()
     callbacks.mlflow.save.return_value = "run-1"
@@ -150,7 +153,7 @@ def test_ifbench_happy_path(monkeypatch, save_samples):
     assert results.overall_score == pytest.approx(1.0)
     assert results.eval_card is not None
     assert results.env_card is not None
-    if save_samples:
+    if save_samples is not False:
         artifact = callbacks.mlflow.save.call_args.kwargs["artifacts"][0]
         samples = [json.loads(line) for line in artifact.content.splitlines()]
         assert [row["sample_id"] for row in samples] == ["0", "1"]
@@ -175,6 +178,7 @@ def test_ifbench_api_errors_are_nonfatal(monkeypatch):
     config = copy.deepcopy(adapter.job_spec)
     config.parameters["num_examples"] = 1
     config.parameters["max_concurrent"] = 1
+    config.parameters["save_sample_results"] = False
 
     _inject_fake_ifbench_data(monkeypatch, CANNED_EXAMPLES[:1])
     _inject_fake_openai(monkeypatch)

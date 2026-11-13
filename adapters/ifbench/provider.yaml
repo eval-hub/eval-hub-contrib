@@ -58,7 +58,7 @@ benchmarks:
 parameters:
   - name: save_sample_results
     type: boolean
-    default: false
+    default: true
     description: Persist native per-sample scores and identifiers for post-processing.
 
   - name: scoring_mode

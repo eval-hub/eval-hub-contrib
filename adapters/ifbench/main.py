@@ -351,7 +351,7 @@ class IFBenchAdapter(FrameworkAdapter):
                 )
             )
 
-            if config.parameters.get("save_sample_results"):
+            if config.parameters.get("save_sample_results") is not False:
                 from sample_results import persist_sample_results
 
                 # Keep the selected primary score and strict/loose outcomes per prompt.
