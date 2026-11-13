@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import openai
-
 from evalhub.adapter import (
     DefaultCallbacks,
     ErrorInfo,
@@ -40,7 +39,6 @@ from rules import (
     evaluate_rule_constraint,
     rule_evaluation_format,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +154,7 @@ def _build_judge_prompt(
             "",
             "Evaluation requirements:",
             f"1. Identify the {level} added constraint(s).",
-            f"2. Determine whether the response satisfies each added constraint.",
+            "2. Determine whether the response satisfies each added constraint.",
             (
                 f"3. Return only a Python-style list with {level} values. "
                 "Each value must be YES, NO, PARTIAL, MAYBE, UNKNOWN, or N/A."
@@ -373,6 +371,10 @@ class FollowBenchAdapter(FrameworkAdapter):
                     f"Unsupported benchmark_id: {config.benchmark_id}"
                 )
 
+            from sample_results import persist_sample_results, sample_results_enabled
+
+            save_samples = sample_results_enabled(config)
+
             max_tokens = int(parameters.get("max_tokens", 2048))
             temperature = float(parameters.get("temperature", 0.0))
             request_timeout = int(parameters.get("request_timeout", 120))
@@ -434,6 +436,7 @@ class FollowBenchAdapter(FrameworkAdapter):
             )
 
             scored_results: list[ScoredConstraint] = []
+            sample_records: list[dict[str, Any]] = []
             evaluated_records = [
                 (group, example)
                 for group in groups
@@ -464,6 +467,20 @@ class FollowBenchAdapter(FrameworkAdapter):
                         temperature=temperature,
                     )
                 )
+
+                # Each evaluated constraint level is one observation for CI computation.
+                if save_samples:
+                    score = scored_results[-1]
+                    sample_records.append(
+                        {
+                            "sample_id": f"{score.group_id}:{score.level}",
+                            "example_id": score.example_id,
+                            "category": example.category,
+                            "level": score.level,
+                            "hsr": float(score.hard_satisfied),
+                            "ssr": score.soft_satisfied,
+                        }
+                    )
 
                 if index == total or index % 10 == 0:
                     progress = 0.25 + (0.55 * index / total)
@@ -553,6 +570,10 @@ class FollowBenchAdapter(FrameworkAdapter):
                         message_code="persisting_artifacts",
                     ),
                 )
+            )
+
+            persist_sample_results(
+                config, callbacks, results, sample_records if save_samples else None, "hsr"
             )
 
             return results

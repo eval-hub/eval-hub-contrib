@@ -1,0 +1,28 @@
+name: Test FollowBench
+
+on:
+  push:
+    branches: [main]
+    paths: ['adapters/followbench/**', '.github/workflows/test-followbench.yml']
+  pull_request:
+    branches: [main]
+    paths: ['adapters/followbench/**', '.github/workflows/test-followbench.yml']
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        working-directory: adapters/followbench
+        run: uv pip install --system -r requirements.txt -r requirements-test.txt
+      - name: Run tests
+        working-directory: adapters/followbench
+        run: pytest tests/ -v
