@@ -190,7 +190,7 @@ def test_malformed_judge_response_is_scored_as_no(monkeypatch):
     assert score.soft_satisfied == 0.0
 
 
-@pytest.mark.parametrize("save_samples", [False, True])
+@pytest.mark.parametrize("save_samples", [None, False, True])
 def test_followbench_judge_and_callbacks_integration(monkeypatch, save_samples):
     adapter = main_module.FollowBenchAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
@@ -198,7 +198,10 @@ def test_followbench_judge_and_callbacks_integration(monkeypatch, save_samples):
     # EvalHub serializes this standard limit to the JobSpec root field.
     config.parameters.pop("num_examples", None)
     config.num_examples = 1
-    config.parameters["save_sample_results"] = save_samples
+    if save_samples is None:
+        config.parameters.pop("save_sample_results", None)
+    else:
+        config.parameters["save_sample_results"] = save_samples
     config.experiment_name = "sample-test"
     callbacks.mlflow = MagicMock()
     callbacks.mlflow.save.return_value = "run-1"
@@ -238,7 +241,7 @@ def test_followbench_judge_and_callbacks_integration(monkeypatch, save_samples):
     assert metrics["csl"] == 5.0
     assert metrics["n_evaluated"] == 5
     assert results.overall_score == 1.0
-    if save_samples:
+    if save_samples is not False:
         artifact = callbacks.mlflow.save.call_args.kwargs["artifacts"][0]
         samples = [json.loads(line) for line in artifact.content.splitlines()]
         assert len({row["sample_id"] for row in samples}) == 5

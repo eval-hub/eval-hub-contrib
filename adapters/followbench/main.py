@@ -467,7 +467,7 @@ class FollowBenchAdapter(FrameworkAdapter):
                 )
 
                 # Each evaluated constraint level is one observation for CI computation.
-                if config.parameters.get("save_sample_results"):
+                if config.parameters.get("save_sample_results") is not False:
                     score = scored_results[-1]
                     sample_records.append(
                         {
@@ -572,7 +572,7 @@ class FollowBenchAdapter(FrameworkAdapter):
                 )
             )
 
-            if config.parameters.get("save_sample_results"):
+            if config.parameters.get("save_sample_results") is not False:
                 from sample_results import persist_sample_results
 
                 persist_sample_results(

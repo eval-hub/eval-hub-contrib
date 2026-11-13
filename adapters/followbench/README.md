@@ -119,10 +119,12 @@ satisfied levels on the five-level scale. The proposed HSR smoke floor is
 
 ## Per-sample results
 
-Set `parameters.save_sample_results: true` to persist `sample_results.jsonl` for
-confidence-interval post-processing. Each observation retains a stable `sample_id`
+`sample_results.jsonl` is persisted by default for confidence-interval
+post-processing. Set `parameters.save_sample_results: false` to disable it.
+Each observation retains a stable `sample_id`
 and the native primary metric. Records include category, example ID, level,
 instruction, response, HSR, and SSR; the ID combines category, example ID, and
 level. Configured OCI exports receive the file and a metric manifest; configured
 MLflow persistence receives the sample file as well.
-Persistence errors fail the evaluation. The export is disabled by default.
+Persistence errors fail the evaluation. An OCI export or MLflow experiment must
+be configured unless persistence is explicitly disabled.
