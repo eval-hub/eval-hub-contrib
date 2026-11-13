@@ -247,9 +247,10 @@ def test_followbench_judge_and_callbacks_integration(monkeypatch, save_samples):
         assert len({row["sample_id"] for row in samples}) == 5
         assert [row["level"] for row in samples] == [1, 2, 3, 4, 5]
         assert [row["hsr"] for row in samples] == [1.0] * 5
-        assert samples[0]["response"] == "model response"
+        assert "response" not in samples[0]
+        assert "instruction" not in samples[0]
     else:
-        callbacks.mlflow.save.assert_not_called()
+        assert callbacks.mlflow.save.call_args.kwargs["artifacts"] == []
     callbacks.report_results.assert_called_once_with(results)
 
     phases = [call.args[0].phase for call in callbacks.report_status.call_args_list]
@@ -258,3 +259,15 @@ def test_followbench_judge_and_callbacks_integration(monkeypatch, save_samples):
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
     assert JobPhase.PERSISTING_ARTIFACTS in phases
+
+
+@pytest.mark.parametrize("value", ["false", 0, None])
+def test_invalid_sample_flag_fails_before_inference(value, monkeypatch):
+    adapter = main_module.FollowBenchAdapter(job_spec_path="meta/job.json")
+    config = copy.deepcopy(adapter.job_spec)
+    config.parameters["save_sample_results"] = value
+    callbacks = create_autospec(JobCallbacks)
+    with pytest.raises(ValueError, match="must be a boolean"):
+        adapter.run_benchmark_job(config, callbacks)
+    phases = [call.args[0].phase for call in callbacks.report_status.call_args_list]
+    assert JobPhase.RUNNING_EVALUATION not in phases

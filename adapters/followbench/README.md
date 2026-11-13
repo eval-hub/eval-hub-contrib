@@ -123,8 +123,11 @@ satisfied levels on the five-level scale. The proposed HSR smoke floor is
 post-processing. Set `parameters.save_sample_results: false` to disable it.
 Each observation retains a stable `sample_id`
 and the native primary metric. Records include category, example ID, level,
-instruction, response, HSR, and SSR; the ID combines category, example ID, and
+HSR and SSR; the ID combines category, example ID, and
 level. Configured OCI exports receive the file and a metric manifest; configured
-MLflow persistence receives the sample file as well.
-Persistence errors fail the evaluation. An OCI export or MLflow experiment must
-be configured unless persistence is explicitly disabled.
+MLflow persistence receives both files as well.
+Configured upload failures fail the evaluation. Without an export destination,
+export is skipped. Disabling sample export preserves configured MLflow metrics
+and parameters. Raw instructions and responses are excluded from sample exports.
+
+`parameters.save_sample_results` accepts only a boolean and defaults to `true`.
