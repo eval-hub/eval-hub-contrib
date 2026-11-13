@@ -1,0 +1,32 @@
+# Job file for `evalhub eval run --config examples/skill-eval.yaml`.
+# Replace the provider id, repository, ref and sub_path. `model` is required by the job schema but unused.
+name: skill-gate
+model:
+  url: http://unused/v1
+  name: unused
+benchmarks:
+  - id: skill-quality
+    provider_id: skillevaluator
+    parameters:
+      min_score: 80
+    test_data_ref:
+      git:
+        url: https://github.com/example-org/agent-skills.git
+        ref: main                          # branch, tag or full commit SHA
+        sub_path: skills/changelog-formatter
+  - id: skill-security
+    provider_id: skillevaluator
+    parameters:
+      on_incomplete: fail                  # fail (default) | report
+    test_data_ref:
+      git:
+        url: https://github.com/example-org/agent-skills.git
+        ref: main
+        sub_path: skills/changelog-formatter
+  - id: skill-pii
+    provider_id: skillevaluator
+    test_data_ref:
+      git:
+        url: https://github.com/example-org/agent-skills.git
+        ref: main
+        sub_path: skills/changelog-formatter

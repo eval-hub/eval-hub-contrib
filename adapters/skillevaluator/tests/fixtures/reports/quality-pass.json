@@ -1,0 +1,319 @@
+{
+  "benchmark_policy": {
+    "tier2_required": true,
+    "tier3_required": true
+  },
+  "contributors": [
+    {
+      "author": "Unknown",
+      "failed_count": 0,
+      "items": [
+        {
+          "issue_count": 4,
+          "name": "good-skill",
+          "passed": true
+        }
+      ],
+      "passed_count": 1,
+      "total_issues": 4,
+      "total_items": 1
+    }
+  ],
+  "evaluated_source": null,
+  "generated_at": "2026-10-20T20:33:04.156835+00:00",
+  "incomplete_scans": [],
+  "overall_passed": true,
+  "overall_status": "passed",
+  "publication": {
+    "eligible": false,
+    "reasons": [
+      "Tier 1 did not run every required check: code-integrity, license, lint, pii, schema, security, unicode, version.",
+      "Required recognized built-in Tier 2 evidence is missing.",
+      "Tier 3 lacks publication-complete execution evidence."
+    ],
+    "status": "incomplete",
+    "tier3": {
+      "evidence_complete": false,
+      "execution_status": "not_run",
+      "reason": "Tier 3 lacks publication-complete execution evidence.",
+      "status": "not_run",
+      "verdict": "not_run"
+    }
+  },
+  "publication_status": "incomplete",
+  "quality_summary": [
+    {
+      "dimensions": {
+        "correctness": {
+          "issues": [],
+          "issues_count": 0,
+          "score": 100.0,
+          "weight": 0.35
+        },
+        "discoverability": {
+          "issues": [],
+          "issues_count": 0,
+          "score": 100.0,
+          "weight": 0.25
+        },
+        "efficiency": {
+          "issues": [
+            {
+              "deduction": 15,
+              "message": "Instructions lack clear action verbs",
+              "severity": "warning",
+              "suggestion": "Use imperative: 'Use run_script with...', 'Call activate_skill...'"
+            }
+          ],
+          "issues_count": 1,
+          "score": 85.0,
+          "weight": 0.15
+        },
+        "reliability": {
+          "issues": [
+            {
+              "deduction": 5,
+              "message": "No prerequisites/requirements documented",
+              "severity": "info",
+              "suggestion": "Document dependencies, API keys, or setup needed"
+            },
+            {
+              "deduction": 5,
+              "message": "No limitations documented",
+              "severity": "info",
+              "suggestion": "Add '## Limitations' section with known issues/constraints"
+            },
+            {
+              "deduction": 5,
+              "message": "No troubleshooting section documented",
+              "severity": "info",
+              "suggestion": "Add '## Troubleshooting' with Error/Cause/Solution patterns"
+            }
+          ],
+          "issues_count": 3,
+          "score": 85.0,
+          "weight": 0.25
+        }
+      },
+      "grade": "A",
+      "metrics": {
+        "frontmatter_tokens": 59,
+        "has_error_handling": true,
+        "has_examples": true,
+        "has_frontmatter": true,
+        "has_instructions": true,
+        "has_lib_module": false,
+        "has_scripts": false,
+        "instructions_tokens": 203,
+        "recommended_max_tokens": 5000,
+        "script_count": 0,
+        "total_tokens": 264
+      },
+      "overall_score": 94.0,
+      "skill_name": "good-skill",
+      "skill_type": "guide-only"
+    }
+  ],
+  "results": [
+    {
+      "description": "Skill quality scoring across Correctness (35%), Discoverability (25%), Reliability (25%), and Efficiency (15%)",
+      "findings": [
+        {
+          "category": "QUALITY",
+          "check_name": "quality_reliability",
+          "file_path": "/test_data/good-skill/SKILL.md",
+          "line_content": null,
+          "line_number": null,
+          "message": "<redacted>",
+          "metadata": {
+            "deduction": 5,
+            "dimension": "reliability"
+          },
+          "severity": "low",
+          "suggestion": "<redacted>"
+        },
+        {
+          "category": "QUALITY",
+          "check_name": "quality_reliability",
+          "file_path": "/test_data/good-skill/SKILL.md",
+          "line_content": null,
+          "line_number": null,
+          "message": "<redacted>",
+          "metadata": {
+            "deduction": 5,
+            "dimension": "reliability"
+          },
+          "severity": "low",
+          "suggestion": "<redacted>"
+        },
+        {
+          "category": "QUALITY",
+          "check_name": "quality_reliability",
+          "file_path": "/test_data/good-skill/SKILL.md",
+          "line_content": null,
+          "line_number": null,
+          "message": "<redacted>",
+          "metadata": {
+            "deduction": 5,
+            "dimension": "reliability"
+          },
+          "severity": "low",
+          "suggestion": "<redacted>"
+        },
+        {
+          "category": "QUALITY",
+          "check_name": "quality_efficiency",
+          "file_path": "/test_data/good-skill/SKILL.md",
+          "line_content": null,
+          "line_number": null,
+          "message": "<redacted>",
+          "metadata": {
+            "deduction": 15,
+            "dimension": "efficiency"
+          },
+          "severity": "medium",
+          "suggestion": "<redacted>"
+        }
+      ],
+      "incomplete_scans": [],
+      "legacy": {
+        "errors": [],
+        "messages": [
+          "[OK] quality_score: Score: 94.0/100 (Grade: A)"
+        ],
+        "warnings": [
+          "[QUALITY-LOW] <redacted>",
+          "[QUALITY-LOW] <redacted>",
+          "[QUALITY-LOW] <redacted>",
+          "[QUALITY-MEDIUM] <redacted>"
+        ]
+      },
+      "passed": true,
+      "publication_evidence": {
+        "check_id": "quality",
+        "producer": "skillevaluator.tier1",
+        "schema_version": 1,
+        "tier": 1
+      },
+      "publication_target": {
+        "skill_digest": "sha256:65c0a26a0b227a3352f3a48473e41d565c55aec71c2d5a2dc86cc8a85ec42cd1",
+        "skill_digest_algorithm": "skill-evaluator-source-tree/2",
+        "skill_name": "good-skill"
+      },
+      "quality": {
+        "dimensions": {
+          "correctness": {
+            "issues": [],
+            "issues_count": 0,
+            "score": 100.0,
+            "weight": 0.35
+          },
+          "discoverability": {
+            "issues": [],
+            "issues_count": 0,
+            "score": 100.0,
+            "weight": 0.25
+          },
+          "efficiency": {
+            "issues": [
+              {
+                "deduction": 15,
+                "message": "Instructions lack clear action verbs",
+                "severity": "warning",
+                "suggestion": "Use imperative: 'Use run_script with...', 'Call activate_skill...'"
+              }
+            ],
+            "issues_count": 1,
+            "score": 85.0,
+            "weight": 0.15
+          },
+          "reliability": {
+            "issues": [
+              {
+                "deduction": 5,
+                "message": "No prerequisites/requirements documented",
+                "severity": "info",
+                "suggestion": "Document dependencies, API keys, or setup needed"
+              },
+              {
+                "deduction": 5,
+                "message": "No limitations documented",
+                "severity": "info",
+                "suggestion": "Add '## Limitations' section with known issues/constraints"
+              },
+              {
+                "deduction": 5,
+                "message": "No troubleshooting section documented",
+                "severity": "info",
+                "suggestion": "Add '## Troubleshooting' with Error/Cause/Solution patterns"
+              }
+            ],
+            "issues_count": 3,
+            "score": 85.0,
+            "weight": 0.25
+          }
+        },
+        "grade": "A",
+        "metrics": {
+          "frontmatter_tokens": 59,
+          "has_error_handling": true,
+          "has_examples": true,
+          "has_frontmatter": true,
+          "has_instructions": true,
+          "has_lib_module": false,
+          "has_scripts": false,
+          "instructions_tokens": 203,
+          "recommended_max_tokens": 5000,
+          "script_count": 0,
+          "total_tokens": 264
+        },
+        "overall_score": 94.0,
+        "skill_name": "good-skill",
+        "skill_type": "guide-only"
+      },
+      "skip_reason": null,
+      "skipped": false,
+      "status": "passed",
+      "success_details": [
+        {
+          "check": "quality_score",
+          "message": "Score: 94.0/100 (Grade: A)",
+          "metadata": {
+            "grade": "A",
+            "overall_score": 94.0,
+            "skill_type": "guide-only"
+          }
+        }
+      ],
+      "summary": {
+        "checks_performed": 1,
+        "critical_count": 0,
+        "errors": 0,
+        "files_scanned": 0,
+        "high_count": 0,
+        "low_count": 3,
+        "medium_count": 1,
+        "warnings": 4
+      },
+      "validator": "QUALITY"
+    }
+  ],
+  "severity_counts": {
+    "critical": 0,
+    "high": 0,
+    "low": 3,
+    "medium": 1
+  },
+  "skills": [
+    {
+      "issue_count": 4,
+      "name": "good-skill",
+      "passed": true
+    }
+  ],
+  "total_advisory_skipped": 0,
+  "total_errors": 0,
+  "total_skipped": 0,
+  "total_validators": 1,
+  "total_warnings": 4
+}
