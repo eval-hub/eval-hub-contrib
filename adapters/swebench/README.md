@@ -143,3 +143,18 @@ make image-swebench
 EVALHUB_JOB_SPEC_PATH=adapters/swebench/meta/job.json \
   python adapters/swebench/main.py
 ```
+
+## Per-instance results
+
+Completed instances are persisted by default in `sample_results.jsonl`, with a
+stable instance ID as `sample_id` and a numeric `resolve_rate` observation.
+Their mean matches the aggregate resolve rate: incomplete infrastructure runs
+remain in diagnostic artifacts and are excluded from scored observations.
+OCI exports include a metric manifest; MLflow receives the same JSONL bytes.
+Set `parameters.save_sample_results: false` to disable this additional export.
+
+SWE-bench's Kubernetes client honors `KUBECONFIG` when no in-cluster token is
+mounted. Set `SWE_BENCH_SERVICE_ACCOUNT` to a dedicated child-job service account
+when using that configuration, rather than inheriting the namespace default.
+All such credentials must be provisioned by the cluster, not copied from a laptop.
+Configured OCI upload errors fail the evaluation instead of discarding the export.

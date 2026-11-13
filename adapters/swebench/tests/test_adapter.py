@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from main import SWEBenchAdapter
+from main import OCICoordinates, SWEBenchAdapter
 
 # -- Sample data -------------------------------------------------------------
 
@@ -56,8 +56,8 @@ def predictions_jsonl(tmp_path):
 
 # -- Tests -------------------------------------------------------------------
 
-class TestResultsProcessing:
 
+class TestResultsProcessing:
     def test_all_resolved(self, adapter):
         results = {
             "a": {"completed": True, "resolved": True},
@@ -91,8 +91,8 @@ class TestResultsProcessing:
         assert score == 0.0
         assert summary["total"] == 0
 
-class TestPredictionsLoading:
 
+class TestPredictionsLoading:
     def test_load_json_format(self, adapter, predictions_json):
         """Load predictions from a JSON dict file."""
         preds = adapter._load_predictions(predictions_json, "", "test")
@@ -117,16 +117,18 @@ class TestPredictionsLoading:
         (test_data / "predictions.jsonl").write_text(
             "\n".join(json.dumps(v) for v in SAMPLE_PREDICTIONS.values())
         )
-        preds = adapter._load_predictions(str(test_data / "predictions.jsonl"), "", "test")
+        preds = adapter._load_predictions(
+            str(test_data / "predictions.jsonl"), "", "test"
+        )
         assert "astropy__astropy-7336" in preds
         assert "django__django-11099" in preds
 
-class TestEmptyResults:
 
+class TestEmptyResults:
     def test_empty_results(self, adapter):
-        
+
         job_result = adapter._empty_results(adapter.job_spec, 1.0)
-        
+
         assert job_result.id == "swebench-eval-001"
         assert job_result.benchmark_id == "swebench_verified"
         assert job_result.benchmark_index == 0
@@ -136,8 +138,47 @@ class TestEmptyResults:
         assert job_result.results[0].metric_type == "accuracy"
         assert job_result.overall_score == 0.0
         assert job_result.num_examples_evaluated == 0
-    
-        
 
 
+@pytest.mark.parametrize("save_samples", [None, True, False])
+def test_sample_artifacts_match_completed_instance_resolve_rate(
+    adapter, tmp_path, monkeypatch, save_samples
+):
+    monkeypatch.setattr(adapter, "_get_results_dir", lambda config: tmp_path)
+    config = adapter.job_spec.model_copy(deep=True)
+    if save_samples is not None:
+        config.parameters["save_sample_results"] = save_samples
+    results = {
+        "a": {"completed": True, "resolved": True},
+        "b": {"completed": True, "resolved": False},
+        "error": {"completed": False, "resolved": True},
+    }
+    _, score, summary = adapter._process_results(results, config)
+    files = adapter._save_artifacts(results, summary, config)
+    if save_samples is False:
+        assert {p.name for p in files} == {"summary.json", "results.json"}
+        return
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "sample_results.jsonl").read_text().splitlines()
+    ]
+    assert [row["sample_id"] for row in rows] == ["a", "b"]
+    assert sum(row["resolve_rate"] for row in rows) / len(rows) == score == 0.5
+    assert (
+        json.loads((tmp_path / "manifest.json").read_text())["primary_score"]["metric"]
+        == "resolve_rate"
+    )
 
+
+def test_child_runner_service_account_can_be_isolated(adapter, monkeypatch):
+    monkeypatch.setenv("SWE_BENCH_SERVICE_ACCOUNT", "swebench-ci-runner")
+    assert adapter._current_service_account() == "swebench-ci-runner"
+
+
+def test_configured_oci_export_failure_is_fatal(adapter, tmp_path):
+    callbacks = MagicMock()
+    callbacks.create_oci_artifact.side_effect = RuntimeError("upload failed")
+    with pytest.raises(RuntimeError, match="upload failed"):
+        adapter._persist_oci_artifact(
+            [tmp_path / "sample_results.jsonl"], OCICoordinates(oci_host="quay.io", oci_repository="test/results", oci_tag="test"), callbacks
+        )

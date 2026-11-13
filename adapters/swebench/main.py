@@ -194,14 +194,16 @@ class SWEBenchAdapter(FrameworkAdapter):
             summary_bytes = json.dumps(summary, indent=2).encode()            
             result_bytes =  json.dumps(results, indent=2).encode()
 
-            callbacks.mlflow.save(
-               job_results,
-                config,
-                artifacts= [
-                    MlflowArtifact("summary.json", summary_bytes, "application/json"),
-                    MlflowArtifact("results.json", result_bytes, "application/json")
-                ]
-            )
+            artifacts = [
+                MlflowArtifact("summary.json", summary_bytes, "application/json"),
+                MlflowArtifact("results.json", result_bytes, "application/json"),
+            ]
+            if config.parameters.get("save_sample_results") is not False:
+                sample_file = next(path for path in artifact_files if path.name == "sample_results.jsonl")
+                artifacts.append(MlflowArtifact("sample_results.jsonl", sample_file.read_bytes(), "application/x-ndjson"))
+            run_id = callbacks.mlflow.save(job_results, config, artifacts=artifacts)
+            if run_id:
+                job_results.mlflow_run_id = run_id
 
             return job_results
 
@@ -242,7 +244,11 @@ class SWEBenchAdapter(FrameworkAdapter):
 
     @staticmethod
     def _current_service_account() -> str | None:
-        """Read the pod's own SA name from the mounted service account token."""
+        """Select the configured child runner or infer the pod's service account."""
+        # Isolate child-job privileges when the adapter uses a dedicated kubeconfig.
+        configured = os.getenv("SWE_BENCH_SERVICE_ACCOUNT")
+        if configured:
+            return configured
         try:
             with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
                 token = f.read().strip()
@@ -390,8 +396,22 @@ class SWEBenchAdapter(FrameworkAdapter):
         results_path = base_path / "results.json"
         results_path.write_text(json.dumps(results, indent=2))
 
+        files = [summary_path, results_path]
+        if config.parameters.get("save_sample_results") is not False:
+            # resolve_rate divides by completed instances; infrastructure failures are
+            # diagnostics, not scored observations, and must not alter that denominator.
+            records = [
+                {"sample_id": instance_id, "instance_id": instance_id,
+                 "resolve_rate": float(bool(result.get("resolved"))), "completed": True}
+                for instance_id, result in results.items() if result.get("completed")
+            ]
+            sample_path = base_path / "sample_results.jsonl"
+            sample_path.write_text("".join(json.dumps(row, allow_nan=False) + "\n" for row in records))
+            manifest_path = base_path / "manifest.json"
+            manifest_path.write_text(json.dumps({"primary_score": {"metric": "resolve_rate"}, "estimand": "mean"}))
+            files.extend([sample_path, manifest_path])
         logger.info("Artifacts saved to %s", base_path)
-        return [summary_path, results_path]
+        return files
 
     def _get_results_dir(self, config: JobSpec) -> Path:
         """Get the results directory, respecting local_jobs_base_path."""
@@ -409,19 +429,13 @@ class SWEBenchAdapter(FrameworkAdapter):
         if not files:
             return None
 
-        try:
-            artifact_dir = files[0].parent
-            result = callbacks.create_oci_artifact(
-                OCIArtifactSpec(
-                    files_path=artifact_dir,
-                    coordinates=coordinates,
-                )
-            )
-            logger.info("OCI artifact created from %s", artifact_dir)
-            return result
-        except Exception as e:
-            logger.warning("Failed to create OCI artifact: %s", e)
-            return None
+        # A configured export must finish successfully before results are reported.
+        artifact_dir = files[0].parent
+        result = callbacks.create_oci_artifact(
+            OCIArtifactSpec(files_path=artifact_dir, coordinates=coordinates)
+        )
+        logger.info("OCI artifact created from %s", artifact_dir)
+        return result
 
     def _empty_results(self, config: JobSpec, start_time: float) -> JobResults:
         """Return empty results when no instances to evaluate."""
