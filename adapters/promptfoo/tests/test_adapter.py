@@ -239,7 +239,7 @@ def test_build_redteam_config_custom_plugins():
 
 
 def test_build_redteam_config_quick_preset():
-    """promptfoo-redteam-quick uses the tiny TP smoke plugin set and 1 test/plugin."""
+    """promptfoo-redteam-quick uses the tiny smoke plugin set and 1 test/plugin."""
     config = MagicMock()
     config.id = "job-1"
     config.benchmark_id = "promptfoo-redteam-quick"
@@ -254,7 +254,7 @@ def test_build_redteam_config_quick_preset():
 
 
 def test_build_redteam_config_rag_preset():
-    """promptfoo-redteam-rag uses the RAG-focused TP plugin set."""
+    """promptfoo-redteam-rag uses the RAG-focused plugin set."""
     config = MagicMock()
     config.id = "job-1"
     config.benchmark_id = "promptfoo-redteam-rag"
@@ -434,7 +434,7 @@ def test_promptfoo_eval_happy_path(monkeypatch, tmp_path):
 
 @pytest.mark.integration
 def test_promptfoo_redteam_quick_happy_path(monkeypatch):
-    """End-to-end promptfoo-redteam-quick uses the TP smoke preset and safety EvalCard."""
+    """End-to-end promptfoo-redteam-quick uses the smoke preset and safety EvalCard."""
     adapter = PromptfooAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
 

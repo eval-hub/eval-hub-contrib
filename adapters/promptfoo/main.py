@@ -2,7 +2,7 @@
 """promptfoo framework adapter for eval-hub.
 
 Wraps promptfoo (https://github.com/promptfoo/promptfoo, MIT license), an
-open-source LLM testing tool, exposing Tech Preview benchmarks:
+open-source LLM testing tool, exposing these benchmarks:
 
 - promptfoo-eval: assertion-based prompt/model regression testing
 - promptfoo-rag-quality: RAG grounding/relevance asserts (thin eval preset)
@@ -119,7 +119,7 @@ _OWASP_DEFAULT_PLUGINS = [
     "indirect-prompt-injection",
 ]
 
-# Tech Preview red-team presets. Job parameters (plugins / strategies /
+# Named red-team presets. Job parameters (plugins / strategies /
 # num_tests_per_plugin) always override these defaults when supplied.
 _REDTEAM_PRESETS: dict[str, dict[str, Any]] = {
     "promptfoo-redteam": {

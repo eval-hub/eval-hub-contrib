@@ -1,7 +1,7 @@
-# promptfoo — provider definition for eval-hub (Tech Preview).
+# promptfoo — provider definition for eval-hub.
 #
 # promptfoo (github.com/promptfoo/promptfoo, MIT license) is an open-source
-# LLM testing tool. This Tech Preview exposes:
+# LLM testing tool. This provider exposes:
 #   1. Assertion-based prompt/model regression testing (promptfoo-eval)
 #   2. RAG quality asserts with a built-in smoke fixture (promptfoo-rag-quality)
 #   3. Named red-team suites (quick / owasp / rag) plus a customizable
@@ -31,12 +31,12 @@
 id: promptfoo
 name: promptfoo
 description: >
-  promptfoo (MIT license) is an open-source LLM testing tool. Tech Preview
-  benchmarks cover assertion-based regression (promptfoo-eval), RAG quality
-  smoke/asserts (promptfoo-rag-quality), and named red-team suites
-  (promptfoo-redteam-quick / -owasp / -rag) plus a customizable escape hatch
-  (promptfoo-redteam). Every job persists promptfoo's native eval.json as a
-  retained artifact so results can be reopened via `promptfoo import`.
+  promptfoo (MIT license) is an open-source LLM testing tool. This adapter wraps
+  assertion-based regression (promptfoo-eval), RAG quality smoke/asserts
+  (promptfoo-rag-quality), and named red-team suites (promptfoo-redteam-quick /
+  -owasp / -rag) plus a customizable escape hatch (promptfoo-redteam). Every job
+  persists promptfoo's native eval.json as a retained artifact so results can be
+  reopened via `promptfoo import`.
   Reference: https://github.com/promptfoo/promptfoo
 type: community
 
@@ -112,7 +112,6 @@ benchmarks:
       - prompt-testing
       - promptfoo
       - ci
-      - tech-preview
     agent:
       result_interpretation: >-
         pass_rate is successes / total test cases. HIGHER is better.
@@ -129,8 +128,8 @@ benchmarks:
   - id: promptfoo-rag-quality
     name: promptfoo RAG Quality
     description: >
-      Tech Preview RAG quality suite using promptfoo asserts for grounding and
-      answer relevance. Ships a tiny built-in context/query fixture for smoke;
+      RAG quality suite using promptfoo asserts for grounding and answer
+      relevance. Ships a tiny built-in context/query fixture for smoke;
       supply prompts+tests or config_yaml (with context vars and asserts such as
       llm-rubric, factuality, context-faithfulness, answer-relevance) for real
       RAG evaluation. Complements promptfoo-redteam-rag (adversarial) and RAGAS.
@@ -146,7 +145,6 @@ benchmarks:
       - grounding
       - faithfulness
       - promptfoo
-      - tech-preview
     agent:
       result_interpretation: >-
         pass_rate is successes / total RAG test cases. HIGHER is better.
@@ -163,7 +161,7 @@ benchmarks:
   - id: promptfoo-redteam-quick
     name: promptfoo Red-Team Quick Smoke
     description: >
-      Tech Preview CI-friendly red-team smoke. Runs a tiny plugin set
+      CI-friendly red-team smoke. Runs a tiny plugin set
       (prompt-extraction, harmful:privacy) with 1 test per plugin and no
       attack strategies. Use before fuller OWASP/RAG suites.
     category: safety
@@ -179,7 +177,6 @@ benchmarks:
       - quick
       - ci
       - promptfoo
-      - tech-preview
     primary_score:
       metric: pass_rate
       lower_is_better: false
@@ -200,7 +197,7 @@ benchmarks:
   - id: promptfoo-redteam-owasp
     name: promptfoo Red-Team OWASP LLM Top 10
     description: >
-      Tech Preview named OWASP LLM Top 10 red-team suite (prompt injection,
+      Named OWASP LLM Top 10 red-team suite (prompt injection,
       insecure output / injection, sensitive disclosure / PII, excessive agency,
       SSRF, system-prompt override, cross-session leak, and related plugins).
       Same default plugin set as promptfoo-redteam; prefer this ID for clear
@@ -218,7 +215,6 @@ benchmarks:
       - owasp-llm-top-10
       - jailbreak
       - promptfoo
-      - tech-preview
     primary_score:
       metric: pass_rate
       lower_is_better: false
@@ -240,7 +236,7 @@ benchmarks:
   - id: promptfoo-redteam-rag
     name: promptfoo Red-Team RAG
     description: >
-      Tech Preview RAG-focused adversarial suite: rag-poisoning,
+      RAG-focused adversarial suite: rag-poisoning,
       rag-document-exfiltration, rag-source-attribution,
       indirect-prompt-injection, and cross-session-leak. Targets retrieval-
       augmented applications that Garak covers less directly. Pair with
@@ -258,7 +254,6 @@ benchmarks:
       - rag
       - prompt-injection
       - promptfoo
-      - tech-preview
     primary_score:
       metric: pass_rate
       lower_is_better: false
@@ -284,7 +279,7 @@ benchmarks:
       (170+ plugins as of promptfoo 0.123.1, including industry-vertical packs).
       Defaults match promptfoo-redteam-owasp; override plugins/strategies/
       num_tests_per_plugin for bespoke scans. Prefer named suites (-quick /
-      -owasp / -rag) for standard Tech Preview gates.
+      -owasp / -rag) for standard release gates.
     category: safety
     metrics:
       - pass_rate
@@ -298,7 +293,6 @@ benchmarks:
       - owasp-llm-top-10
       - jailbreak
       - promptfoo
-      - tech-preview
     primary_score:
       metric: pass_rate
       lower_is_better: false
@@ -361,7 +355,7 @@ parameters:
     default: null
     description: >
       Optional override of promptfoo red-team plugin IDs. When unset, each
-      named suite uses its Tech Preview preset (quick / owasp / rag) or the
+      named suite uses its preset (quick / owasp / rag) or the
       OWASP default set for promptfoo-redteam. Run `promptfoo redteam plugins`
       for the full catalog (170+ as of 0.123.1), including industry packs
       (financial:*, medical:*, insurance:*, telecom:*, ecommerce:*).
@@ -372,7 +366,7 @@ parameters:
     description: >
       Optional override of promptfoo red-team attack strategies (e.g.
       jailbreak, base64, rot13). When unset, presets use no strategies to
-      keep Tech Preview runs fast and deterministic — each strategy multiplies
+      keep runs fast and deterministic — each strategy multiplies
       test count. Set to ["default"] to include promptfoo's default jailbreak
       strategies.
 

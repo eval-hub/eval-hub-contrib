@@ -1,7 +1,7 @@
 # promptfoo Adapter
 
 Wraps [promptfoo](https://github.com/promptfoo/promptfoo) (MIT license), an open-source
-LLM testing tool, exposing Tech Preview benchmarks against an EvalHub-provided model
+LLM testing tool, exposing these benchmarks against an EvalHub-provided model
 endpoint:
 
 - **`promptfoo-eval`** — assertion-based prompt/model regression testing
@@ -174,7 +174,7 @@ See `provider.yaml` for the full annotated list. Key ones:
 |---|---|---|
 | `prompts` / `tests` | promptfoo-eval, promptfoo-rag-quality | Generate a config from these instead of `config_yaml` (rag-quality has a built-in smoke fixture if unset) |
 | `config_yaml` | promptfoo-eval, promptfoo-rag-quality | Pass through an existing promptfoo project config verbatim (providers are always overwritten with the EvalHub model endpoint) |
-| `plugins` | all `promptfoo-redteam*` | Optional override; when unset, each named suite uses its TP preset |
+| `plugins` | all `promptfoo-redteam*` | Optional override; when unset, each named suite uses its preset |
 | `generation_provider` | all `promptfoo-redteam*` | Provider used to generate adversarial content and grade responses; unset falls back to promptfoo's default (requires `OPENAI_API_KEY`) |
 
 ## Local testing
