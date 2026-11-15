@@ -133,7 +133,7 @@ def _save_mlflow_best_effort(
     try:
         mlflow._callbacks = None
         return mlflow.save(results, config, artifacts=artifacts)
-    except Exception:
+    except Exception:  # noqa: BLE001 — optional exports must not fail the evaluation
         # Exception text and tracebacks may contain credentials from the server.
         logger.warning("MLflow export failed; continuing with evaluation results")
         return None
