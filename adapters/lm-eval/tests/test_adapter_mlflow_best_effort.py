@@ -1,6 +1,7 @@
 """MLflow export failures must not discard results (adapted from PR #244)."""
 
 import json
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
@@ -44,7 +45,7 @@ def export_setup(adapter, monkeypatch):
 )
 def test_mlflow_failure_still_reports_results(export_setup, caplog, operation):
     _, callbacks, client = export_setup
-    getattr(client, operation).side_effect = RuntimeError("token=SECRET")
+    getattr(client, operation).side_effect = RuntimeError("MLflow service unavailable")
 
     with pytest.raises(SystemExit) as exc:
         main.main()
@@ -60,9 +61,23 @@ def test_mlflow_failure_still_reports_results(export_setup, caplog, operation):
         call.args[0].status != JobStatus.FAILED
         for call in callbacks.report_status.call_args_list
     )
-    warnings = [r for r in caplog.records if r.name == main.logger.name]
-    assert any("continuing with evaluation results" in r.message for r in warnings)
-    assert all("SECRET" not in r.message and not r.exc_info for r in warnings)
+    # Verify the adapter's generic warning only. SDK diagnostic redaction belongs
+    # in SDK tests; this assertion does not establish credential-free logging.
+    warnings = [
+        r
+        for r in caplog.records
+        if r.name == main.logger.name and r.levelno == logging.WARNING
+    ]
+    assert any(
+        r.getMessage() == "MLflow export failed; continuing with evaluation results"
+        for r in warnings
+    )
+    assert all(
+        "MLflow service unavailable" not in r.getMessage()
+        and not r.exc_info
+        and not r.exc_text
+        for r in warnings
+    )
 
 
 def test_success_retains_run_id_and_restores_callback(export_setup):
@@ -77,6 +92,27 @@ def test_success_retains_run_id_and_restores_callback(export_setup):
     assert callbacks.mlflow._callbacks is callbacks
     client.log_batch.assert_called_once()
     client.upload_artifact_file.assert_called_once()
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_sdk_logging_restored_after_export(export_setup, caplog, fails):
+    _, _, client = export_setup
+    if fails:
+        client.log_batch.side_effect = RuntimeError("MLflow service unavailable")
+    sdk_logger = logging.getLogger("evalhub.adapter.callbacks")
+    original_filters = sdk_logger.filters[:]
+
+    with pytest.raises(SystemExit) as exc:
+        main.main()
+
+    assert exc.value.code == 0
+    assert sdk_logger.filters == original_filters
+    try:
+        raise RuntimeError("non-export diagnostic")
+    except RuntimeError:
+        sdk_logger.exception("Logging outside export is unchanged")
+    assert caplog.records[-1].exc_info
+    assert "non-export diagnostic" in caplog.text
 
 
 def test_no_experiment_skips_mlflow(export_setup):
