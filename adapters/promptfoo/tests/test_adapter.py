@@ -26,6 +26,8 @@ from evalhub.adapter.models.job import (
 from evalhub.models.api import OCICoordinates
 from main import (
     PromptfooAdapter,
+    _OWASP_DEFAULT_PLUGINS,
+    _REDTEAM_PRESETS,
     _build_eval_config,
     _build_evaluate_options,
     _build_redteam_config,
@@ -140,6 +142,7 @@ def test_build_eval_config_from_prompts_and_tests():
 def test_build_eval_config_missing_params_raises():
     """ValueError is raised when neither config_yaml nor prompts+tests are provided."""
     config = MagicMock()
+    config.benchmark_id = "promptfoo-eval"
     config.parameters = {}
     with pytest.raises(ValueError, match="config_yaml"):
         _build_eval_config(config, {"id": "p"}, {})
@@ -203,6 +206,7 @@ def test_build_redteam_config_defaults():
     """Default redteam config uses OWASP plugin set, purpose='An AI assistant', numTests=5."""
     config = MagicMock()
     config.id = "job-1"
+    config.benchmark_id = "promptfoo-redteam"
     config.parameters = {}
     provider = {"id": "openai:chat:m"}
     pf_config = _build_redteam_config(
@@ -214,12 +218,16 @@ def test_build_redteam_config_defaults():
     assert len(pf_config["redteam"]["plugins"]) > 0
     assert all(p["numTests"] == 5 for p in pf_config["redteam"]["plugins"])
     assert pf_config["evaluateOptions"] == {"maxConcurrency": 4, "timeoutMs": 120_000}
+    assert [p["id"] for p in pf_config["redteam"]["plugins"]] == list(
+        _OWASP_DEFAULT_PLUGINS
+    )
 
 
 def test_build_redteam_config_custom_plugins():
     """Custom plugins, num_tests_per_plugin, and purpose are propagated to the config."""
     config = MagicMock()
     config.id = "job-1"
+    config.benchmark_id = "promptfoo-redteam-owasp"
     config.parameters = {
         "plugins": ["sql-injection"],
         "num_tests_per_plugin": 2,
@@ -228,6 +236,64 @@ def test_build_redteam_config_custom_plugins():
     pf_config = _build_redteam_config(config, {"id": "p"}, {})
     assert pf_config["redteam"]["plugins"] == [{"id": "sql-injection", "numTests": 2}]
     assert pf_config["redteam"]["purpose"] == "a bank assistant"
+
+
+def test_build_redteam_config_quick_preset():
+    """promptfoo-redteam-quick uses the tiny TP smoke plugin set and 1 test/plugin."""
+    config = MagicMock()
+    config.id = "job-1"
+    config.benchmark_id = "promptfoo-redteam-quick"
+    config.parameters = {}
+    pf_config = _build_redteam_config(config, {"id": "p"}, {})
+    assert pf_config["redteam"]["numTests"] == 1
+    assert [p["id"] for p in pf_config["redteam"]["plugins"]] == list(
+        _REDTEAM_PRESETS["promptfoo-redteam-quick"]["plugins"]
+    )
+    assert all(p["numTests"] == 1 for p in pf_config["redteam"]["plugins"])
+    assert pf_config["redteam"]["strategies"] == []
+
+
+def test_build_redteam_config_rag_preset():
+    """promptfoo-redteam-rag uses the RAG-focused TP plugin set."""
+    config = MagicMock()
+    config.id = "job-1"
+    config.benchmark_id = "promptfoo-redteam-rag"
+    config.parameters = {}
+    pf_config = _build_redteam_config(config, {"id": "p"}, {})
+    assert [p["id"] for p in pf_config["redteam"]["plugins"]] == list(
+        _REDTEAM_PRESETS["promptfoo-redteam-rag"]["plugins"]
+    )
+    assert pf_config["redteam"]["numTests"] == 5
+
+
+def test_build_redteam_config_owasp_preset_matches_default():
+    """Named OWASP suite matches the customizable escape-hatch defaults."""
+    owasp = MagicMock()
+    owasp.id = "job-1"
+    owasp.benchmark_id = "promptfoo-redteam-owasp"
+    owasp.parameters = {}
+    custom = MagicMock()
+    custom.id = "job-1"
+    custom.benchmark_id = "promptfoo-redteam"
+    custom.parameters = {}
+    owasp_cfg = _build_redteam_config(owasp, {"id": "p"}, {})
+    custom_cfg = _build_redteam_config(custom, {"id": "p"}, {})
+    assert owasp_cfg["redteam"]["plugins"] == custom_cfg["redteam"]["plugins"]
+
+
+def test_build_eval_config_rag_quality_default_fixture():
+    """promptfoo-rag-quality falls back to the built-in smoke fixture."""
+    config = MagicMock()
+    config.id = "job-1"
+    config.benchmark_id = "promptfoo-rag-quality"
+    config.parameters = {}
+    pf_config = _build_eval_config(
+        config, {"id": "openai:chat:m"}, {"maxConcurrency": 4, "timeoutMs": 120_000}
+    )
+    assert len(pf_config["prompts"]) == 1
+    assert len(pf_config["tests"]) == 2
+    assert "context" in pf_config["tests"][0]["vars"]
+    assert pf_config["providers"] == [{"id": "openai:chat:m"}]
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +430,77 @@ def test_promptfoo_eval_happy_path(monkeypatch, tmp_path):
     assert JobPhase.LOADING_DATA in phases
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
+
+
+@pytest.mark.integration
+def test_promptfoo_redteam_quick_happy_path(monkeypatch):
+    """End-to-end promptfoo-redteam-quick uses the TP smoke preset and safety EvalCard."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam-quick"
+    config.parameters = {}
+
+    eval_json = _eval_json(1, 0, 0)
+    import main as main_mod
+
+    written_config: dict = {}
+
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
+        if args[0] == "redteam" and args[1] == "generate":
+            cfg_path = Path(cwd) / "promptfooconfig.yaml"
+            written_config.update(__import__("yaml").safe_load(cfg_path.read_text()))
+            return _FakeCompletedProcess(0, "")
+        if args[0] == "eval":
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.write_text(json.dumps(eval_json))
+            return _FakeCompletedProcess(0, "")
+        raise AssertionError(f"unexpected promptfoo invocation: {args}")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    results = adapter.run_benchmark_job(config, callbacks)
+
+    assert results.benchmark_id == "promptfoo-redteam-quick"
+    assert results.overall_score == pytest.approx(1.0)
+    assert len(results.eval_card.safety_evaluations) == 1
+    assert [p["id"] for p in written_config["redteam"]["plugins"]] == list(
+        _REDTEAM_PRESETS["promptfoo-redteam-quick"]["plugins"]
+    )
+    assert written_config["redteam"]["numTests"] == 1
+
+
+@pytest.mark.integration
+def test_promptfoo_rag_quality_happy_path(monkeypatch):
+    """End-to-end promptfoo-rag-quality uses the built-in fixture and capability EvalCard."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-rag-quality"
+    config.parameters = {}
+
+    eval_json = _eval_json(2, 0, 0)
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        """Stub for _run_promptfoo_cli."""
+        if args[0] == "eval":
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.write_text(json.dumps(eval_json))
+            return _FakeCompletedProcess(0, "")
+        raise AssertionError(f"unexpected promptfoo invocation: {args}")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+
+    results = adapter.run_benchmark_job(config, callbacks)
+
+    assert results.benchmark_id == "promptfoo-rag-quality"
+    assert results.overall_score == pytest.approx(1.0)
+    assert results.eval_card.capability_evaluations[0].ability.startswith("RAG")
+    assert len(results.eval_card.safety_evaluations) == 0
 
 
 @pytest.mark.integration

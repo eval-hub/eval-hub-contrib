@@ -1,13 +1,18 @@
 # promptfoo Adapter
 
 Wraps [promptfoo](https://github.com/promptfoo/promptfoo) (MIT license), an open-source
-LLM testing tool, exposing two benchmarks against an EvalHub-provided model endpoint:
+LLM testing tool, exposing Tech Preview benchmarks against an EvalHub-provided model
+endpoint:
 
 - **`promptfoo-eval`** — assertion-based prompt/model regression testing
-- **`promptfoo-redteam`** — promptfoo's red-team plugin catalog (170+ plugins as of
-  promptfoo 0.123.1), mapped to the OWASP LLM Top 10 plus industry-vertical packs
-  (financial, medical, insurance, telecom, real estate) that complement rather than
-  duplicate Garak's probe set — see "Garak overlap" below.
+- **`promptfoo-rag-quality`** — RAG grounding/relevance asserts (built-in smoke fixture;
+  override with prompts/tests or `config_yaml`)
+- **`promptfoo-redteam-quick`** — CI smoke (tiny plugin set, 1 test/plugin)
+- **`promptfoo-redteam-owasp`** — named OWASP LLM Top 10 red-team suite
+- **`promptfoo-redteam-rag`** — RAG adversarial plugins (poisoning, exfil, attribution, …)
+- **`promptfoo-redteam`** — customizable escape hatch over promptfoo's 170+ plugin
+  catalog (defaults match `-owasp`), including industry-vertical packs that complement
+  rather than duplicate Garak — see "Garak overlap" below.
 
 Every completed job persists promptfoo's own native `eval.json` (written directly via
 `promptfoo eval -o eval.json` — verified byte-identical to `promptfoo export eval <id>
@@ -157,9 +162,9 @@ duplicate-adapter situation.
 | `n_failed` | int | Test cases with a failed assertion |
 | `n_errors` | int | Test cases where the provider call itself failed (not an assertion failure) |
 
-`overall_score` is set to `pass_rate`. `promptfoo-redteam` additionally reports
-`pass_rate_by_plugin` and `severity_by_plugin` in `additional_info` (best-effort; empty
-if promptfoo's result metadata shape changes).
+`overall_score` is set to `pass_rate`. All `promptfoo-redteam*` suites additionally
+report `pass_rate_by_plugin` and `severity_by_plugin` in `additional_info`
+(best-effort; empty if promptfoo's result metadata shape changes).
 
 ## Parameters
 
@@ -167,10 +172,10 @@ See `provider.yaml` for the full annotated list. Key ones:
 
 | Parameter | Benchmark | Description |
 |---|---|---|
-| `prompts` / `tests` | promptfoo-eval | Generate a config from these instead of `config_yaml` |
-| `config_yaml` | promptfoo-eval | Pass through an existing promptfoo project config verbatim (providers are always overwritten with the EvalHub model endpoint) |
-| `plugins` | promptfoo-redteam | Plugin IDs to run; defaults to an OWASP LLM Top 10-mapped subset |
-| `generation_provider` | promptfoo-redteam | Provider used to generate adversarial content; unset falls back to promptfoo's default (requires `OPENAI_API_KEY`) |
+| `prompts` / `tests` | promptfoo-eval, promptfoo-rag-quality | Generate a config from these instead of `config_yaml` (rag-quality has a built-in smoke fixture if unset) |
+| `config_yaml` | promptfoo-eval, promptfoo-rag-quality | Pass through an existing promptfoo project config verbatim (providers are always overwritten with the EvalHub model endpoint) |
+| `plugins` | all `promptfoo-redteam*` | Optional override; when unset, each named suite uses its TP preset |
+| `generation_provider` | all `promptfoo-redteam*` | Provider used to generate adversarial content and grade responses; unset falls back to promptfoo's default (requires `OPENAI_API_KEY`) |
 
 ## Local testing
 

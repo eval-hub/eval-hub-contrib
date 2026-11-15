@@ -2,11 +2,14 @@
 """promptfoo framework adapter for eval-hub.
 
 Wraps promptfoo (https://github.com/promptfoo/promptfoo, MIT license), an
-open-source LLM testing tool, exposing two benchmarks:
+open-source LLM testing tool, exposing Tech Preview benchmarks:
 
 - promptfoo-eval: assertion-based prompt/model regression testing
-- promptfoo-redteam: promptfoo's red-team plugin catalog (OWASP LLM Top 10
-  and beyond)
+- promptfoo-rag-quality: RAG grounding/relevance asserts (thin eval preset)
+- promptfoo-redteam: customizable red-team escape hatch (OWASP defaults)
+- promptfoo-redteam-owasp: named OWASP LLM Top 10 red-team suite
+- promptfoo-redteam-quick: CI smoke (tiny plugin set, 1 test/plugin)
+- promptfoo-redteam-rag: RAG-focused adversarial plugins
 
 Every completed job persists promptfoo's own native eval.json (written
 directly via ``promptfoo eval -o eval.json`` — verified byte-identical to
@@ -49,6 +52,7 @@ alternative.
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import logging
 import os
@@ -113,6 +117,81 @@ _OWASP_DEFAULT_PLUGINS = [
     "system-prompt-override",
     "cross-session-leak",
     "indirect-prompt-injection",
+]
+
+# Tech Preview red-team presets. Job parameters (plugins / strategies /
+# num_tests_per_plugin) always override these defaults when supplied.
+_REDTEAM_PRESETS: dict[str, dict[str, Any]] = {
+    "promptfoo-redteam": {
+        "plugins": list(_OWASP_DEFAULT_PLUGINS),
+        "num_tests_per_plugin": 5,
+        "strategies": [],
+    },
+    "promptfoo-redteam-owasp": {
+        "plugins": list(_OWASP_DEFAULT_PLUGINS),
+        "num_tests_per_plugin": 5,
+        "strategies": [],
+    },
+    "promptfoo-redteam-quick": {
+        # Fast smoke: one deterministic-ish plugin + one privacy plugin.
+        "plugins": ["prompt-extraction", "harmful:privacy"],
+        "num_tests_per_plugin": 1,
+        "strategies": [],
+    },
+    "promptfoo-redteam-rag": {
+        "plugins": [
+            "rag-poisoning",
+            "rag-document-exfiltration",
+            "rag-source-attribution",
+            "indirect-prompt-injection",
+            "cross-session-leak",
+        ],
+        "num_tests_per_plugin": 5,
+        "strategies": [],
+    },
+}
+
+_REDTEAM_BENCHMARKS = frozenset(_REDTEAM_PRESETS)
+_EVAL_BENCHMARKS = frozenset({"promptfoo-eval", "promptfoo-rag-quality"})
+_SUPPORTED_BENCHMARKS = _REDTEAM_BENCHMARKS | _EVAL_BENCHMARKS
+
+# Minimal built-in RAG fixture used when promptfoo-rag-quality is run without
+# customer prompts/tests/config_yaml. Deterministic string asserts keep the
+# smoke path grader-free; customers should replace via parameters for real runs.
+_DEFAULT_RAG_QUALITY_PROMPTS = [
+    (
+        "Answer using only the provided context. If the context is "
+        "insufficient, say you do not know.\n\n"
+        "Context:\n{{context}}\n\nQuestion: {{query}}"
+    )
+]
+_DEFAULT_RAG_QUALITY_TESTS = [
+    {
+        "vars": {
+            "context": "Paris is the capital of France.",
+            "query": "What is the capital of France?",
+        },
+        "assert": [
+            {"type": "icontains", "value": "paris"},
+            {
+                "type": "llm-rubric",
+                "value": "The answer correctly identifies Paris as the capital and stays grounded in the provided context.",
+            },
+        ],
+    },
+    {
+        "vars": {
+            "context": "The refund window is 30 days from the purchase date.",
+            "query": "How long do customers have to request a refund?",
+        },
+        "assert": [
+            {"type": "icontains", "value": "30"},
+            {
+                "type": "llm-rubric",
+                "value": "The answer states a 30-day refund window and does not invent policy details absent from the context.",
+            },
+        ],
+    },
 ]
 
 
@@ -185,7 +264,12 @@ def _build_evaluate_options(
 def _build_eval_config(
     config: JobSpec, provider: dict[str, Any], evaluate_options: dict[str, Any]
 ) -> dict[str, Any]:
-    """Assemble a promptfoo config dict for the promptfoo-eval benchmark."""
+    """Assemble a promptfoo config dict for eval-family benchmarks.
+
+    Used by ``promptfoo-eval`` and ``promptfoo-rag-quality``. The RAG preset
+    falls back to a tiny built-in fixture when the caller supplies neither
+    ``config_yaml`` nor ``prompts``+``tests``.
+    """
     params = config.parameters or {}
 
     config_yaml = params.get("config_yaml")
@@ -210,10 +294,14 @@ def _build_eval_config(
     prompts = params.get("prompts")
     tests = params.get("tests")
     if not prompts or not tests:
-        raise ValueError(
-            "promptfoo-eval requires either parameters.config_yaml, or both "
-            "parameters.prompts and parameters.tests"
-        )
+        if config.benchmark_id == "promptfoo-rag-quality":
+            prompts = list(_DEFAULT_RAG_QUALITY_PROMPTS)
+            tests = copy.deepcopy(_DEFAULT_RAG_QUALITY_TESTS)
+        else:
+            raise ValueError(
+                "promptfoo-eval requires either parameters.config_yaml, or both "
+                "parameters.prompts and parameters.tests"
+            )
 
     return {
         "description": f"eval-hub job {config.id}",
@@ -227,13 +315,23 @@ def _build_eval_config(
 def _build_redteam_config(
     config: JobSpec, provider: dict[str, Any], evaluate_options: dict[str, Any]
 ) -> dict[str, Any]:
-    """Assemble a promptfoo config dict for the promptfoo-redteam benchmark."""
+    """Assemble a promptfoo config dict for red-team preset benchmarks.
+
+    Preset defaults come from ``_REDTEAM_PRESETS[benchmark_id]``. Explicit job
+    parameters always win when provided.
+    """
     params = config.parameters or {}
+    preset = _REDTEAM_PRESETS.get(config.benchmark_id, _REDTEAM_PRESETS["promptfoo-redteam"])
 
     purpose = params.get("purpose", "An AI assistant")
-    plugin_ids = params.get("plugins") or list(_OWASP_DEFAULT_PLUGINS)
-    strategies = params.get("strategies", [])
-    num_tests = int(params.get("num_tests_per_plugin", 5))
+    plugin_ids = params.get("plugins") or list(preset["plugins"])
+    if "strategies" in params:
+        strategies = params.get("strategies") or []
+    else:
+        strategies = list(preset["strategies"])
+    num_tests = int(
+        params.get("num_tests_per_plugin", preset["num_tests_per_plugin"])
+    )
 
     plugins = [{"id": pid, "numTests": num_tests} for pid in plugin_ids]
 
@@ -406,15 +504,22 @@ def _build_eval_card(
     config: JobSpec, pass_rate: float | None, n_evaluated: int
 ) -> EvalCardMetadata:
     """Build an EvalCardMetadata describing benchmark type, score, and footnote."""
-    is_redteam = config.benchmark_id == "promptfoo-redteam"
+    is_redteam = config.benchmark_id in _REDTEAM_BENCHMARKS
+    is_rag_quality = config.benchmark_id == "promptfoo-rag-quality"
     footnote = (
         "promptfoo (MIT license) red-team plugin catalog. pass_rate is the "
         "fraction of adversarial probes the model correctly resisted. "
         "Reference: https://github.com/promptfoo/promptfoo"
         if is_redteam
-        else "promptfoo (MIT license) assertion-based regression testing. "
-        "pass_rate is the fraction of test cases whose assertions all passed. "
-        "Reference: https://github.com/promptfoo/promptfoo"
+        else (
+            "promptfoo (MIT license) RAG quality asserts (grounding / relevance). "
+            "pass_rate is the fraction of RAG test cases whose assertions all passed. "
+            "Reference: https://github.com/promptfoo/promptfoo"
+            if is_rag_quality
+            else "promptfoo (MIT license) assertion-based regression testing. "
+            "pass_rate is the fraction of test cases whose assertions all passed. "
+            "Reference: https://github.com/promptfoo/promptfoo"
+        )
     )
     benchmark_label = (
         f"{config.benchmark_id} (promptfoo {PROMPTFOO_VERSION}), n={n_evaluated}"
@@ -440,6 +545,11 @@ def _build_eval_card(
             ],
             developer_footnotes=footnote,
         )
+    ability = (
+        "RAG grounding and answer relevance"
+        if is_rag_quality
+        else "prompt/model regression testing"
+    )
     return EvalCardMetadata(
         modalities_input=["text"],
         modalities_output=["text"],
@@ -447,7 +557,7 @@ def _build_eval_card(
         languages=["en"],
         capability_evaluations=[
             CapabilityEvalEntry(
-                ability="prompt/model regression testing",
+                ability=ability,
                 benchmark=benchmark_label,
                 metric="pass_rate",
                 zero_shot=zero_shot,
@@ -489,7 +599,7 @@ class PromptfooAdapter(FrameworkAdapter):
         }
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
-        """Run a promptfoo-eval or promptfoo-redteam benchmark and return results."""
+        """Run a promptfoo eval or red-team preset benchmark and return results."""
         start_time = time.time()
         logger.info(
             "Starting promptfoo job %s, benchmark=%s, model=%s",
@@ -498,9 +608,10 @@ class PromptfooAdapter(FrameworkAdapter):
             config.model.name,
         )
 
-        if config.benchmark_id not in ("promptfoo-eval", "promptfoo-redteam"):
+        if config.benchmark_id not in _SUPPORTED_BENCHMARKS:
             raise ValueError(
-                f"Unsupported benchmark_id for promptfoo adapter: {config.benchmark_id}"
+                f"Unsupported benchmark_id for promptfoo adapter: {config.benchmark_id}. "
+                f"Supported: {sorted(_SUPPORTED_BENCHMARKS)}"
             )
 
         work_dir: Path | None = None
@@ -538,7 +649,7 @@ class PromptfooAdapter(FrameworkAdapter):
                 )
             )
 
-            is_redteam = config.benchmark_id == "promptfoo-redteam"
+            is_redteam = config.benchmark_id in _REDTEAM_BENCHMARKS
             pf_config = (
                 _build_redteam_config(config, provider, evaluate_options)
                 if is_redteam
