@@ -95,6 +95,7 @@ class LightEvalAdapter(FrameworkAdapter):
         "language_understanding": ["glue:cola", "glue:sst2", "glue:mrpc"],
     }
     CUSTOM_TASK_ALIASES = CUSTOM_TASK_ALIASES
+    LOG_LIKELIHOOD_UNSUPPORTED_PROVIDERS = {"anthropic"}
 
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         """Execute a LightEval benchmark evaluation job.
@@ -429,18 +430,19 @@ class LightEvalAdapter(FrameworkAdapter):
         """Reject a provider only for the tasks that need a capability it lacks.
 
         Log-likelihood scoring is served through ``/v1/completions`` with
-        ``echo=True`` and ``logprobs``, which Anthropic's API does not offer.
-        Generation-only tasks do not use it and run fine on Anthropic.
+        ``echo=True`` and ``logprobs``. Anthropic does not implement that API;
+        generation-only tasks remain supported.
         """
-        if provider != "anthropic":
+        if provider not in self.LOG_LIKELIHOOD_UNSUPPORTED_PROVIDERS:
             return
         needing = self._loglikelihood_tasks(tasks)
         if needing:
             raise ValueError(
-                "provider: anthropic cannot run log-likelihood benchmarks "
+                f"provider: {provider} cannot run log-likelihood benchmarks "
                 f"({', '.join(needing)}): they are scored through /v1/completions with "
                 "echo=True and logprobs=1, which Anthropic's API does not implement. "
-                "Use provider: endpoint with a vLLM-compatible server for these tasks."
+                "For an API-backed model, use an OpenAI-compatible endpoint that "
+                "supports echo and logprobs, or use lm-evaluation-harness."
             )
 
     @classmethod

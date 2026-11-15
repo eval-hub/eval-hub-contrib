@@ -1750,13 +1750,13 @@ def test_k8s_proxy_uses_job_model_and_reference_credential(job_spec, monkeypatch
     assert json.loads(request.content)["model"] == "cluster-judge"
 
 
-def test_k8s_judge_proxy_url_overrides_job_model_url(monkeypatch):
+def test_k8s_judge_proxy_url_env_is_ignored(monkeypatch):
     adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
     monkeypatch.setenv("EVALHUB_MODE", "k8s")
     monkeypatch.setenv("EVALHUB_JUDGE_PROXY_URL", "http://judge-proxy.cluster.test")
 
     with respx.mock(assert_all_called=True) as mock:
-        route = mock.post("http://judge-proxy.cluster.test/v1/chat/completions").mock(
+        route = mock.post("http://localhost:8080/v1/chat/completions").mock(
             return_value=Response(200, json={"score": 0.7})
         )
         response = asyncio.run(adapter._judge_call({"request": "score"}))

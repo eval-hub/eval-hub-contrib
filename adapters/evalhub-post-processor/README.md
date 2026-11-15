@@ -227,14 +227,13 @@ credentials. HTTP redirects fail instead of bypassing the sidecar.
 | `eval_job` | `id` | Sidecar GET `/api/v1/evaluations/jobs/{id}`; parent and every benchmark must be completed |
 | `mlflow` | `run_id`, `artifact_path` (empty for all) | Sidecar MLflow run metadata, paginated artifact listing, and artifact download APIs |
 | `oci` | `coordinates` (`oci_host`, `oci_repository`, `oci_tag`) or a `digest` alongside host/repository; `artifact_path` | Sidecar `/v2/{repository}/manifests/...` and `/blobs/...`; digest/size verification and safe tar extraction |
-| `s3` | `bucket`, `key`, optional `secret_ref` | Download an object or prefix with projected credentials or the normal AWS credential chain |
-| `pvc` | `claim_name`, optional `sub_path` | Copy from a declared read-only mount |
-| `git` | HTTP(S) `url`, `ref`, optional `sub_path`, `secret_ref` | Fetch the revision and copy data; no repository code execution |
-| `hf` | `repo_id`, optional `revision`, `sub_path`, `secret_ref` | Download a Hugging Face dataset snapshot |
+| `s3` | `bucket`, `key`, optional `secret_ref` | Kubernetes: existing eval-runtime-init stages data; adapter reads the staged path |
+| `pvc` | `claim_name`, optional `sub_path` | Kubernetes: direct read-only mount; Kubernetes applies sub_path |
+| `git` | HTTP(S) `url`, `ref`, optional `sub_path`, `secret_ref` | Kubernetes: existing eval-runtime-init clones/checks out and stages data |
+| `hf` | `repo_id`, optional `revision`, `sub_path`, `secret_ref` | Kubernetes: existing eval-runtime-init downloads and stages the selected revision |
 
 Calibration supports the API's `s3`, `pvc`, `git`, and `hf` references. Each
-reference must contain exactly one source. Data is materialized in temporary
-directories and removed when job execution finishes or fails.
+reference must contain exactly one source. In Kubernetes, S3/Git/HF data is staged before the adapter starts; PVC data is mounted directly. MLflow/OCI downloads stay on demand through the sidecar. Local mode retains its existing download/copy fallback.
 
 For source jobs, `results.benchmarks[]` is authoritative for both collections
 and explicit submissions. MLflow uses `experiment` plus each `mlflow_run_id`;
@@ -261,29 +260,37 @@ runtime must arrange these before launching the post-processing pod:
    per pod, so source coordinates must match. Merely placing OCI coordinates in
    `parameters.operations` does not enable that proxy. A mismatch fails before
    any OCI request. Registry redirects must be resolved/served by the sidecar.
-2. Mount referenced PVCs read-only and set
-   `EVALHUB_POST_PROCESSOR_PVC_MOUNTS` to a JSON object, for example
-   `{"calibration-data":"/mnt/calibration"}`. A claim name is never interpreted
-   as a host filesystem path.
-3. Project named S3/git/Hugging Face Secrets under
-   `${EVALHUB_POST_PROCESSOR_SECRET_ROOT:-/var/run/secrets/post-processor}/<secret_ref>/`.
-   S3 uses `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`,
-   `AWS_S3_ENDPOINT`, and optionally `AWS_SESSION_TOKEN`. Git uses `username`
-   and `password`; Hugging Face uses `token`. OCI's `k8s.connection` is for the
-   runtime/sidecar to resolve; this adapter never reads that registry Secret.
-4. Preserve `operations` and the data-format configurations in the benchmark
-   parameters, including `results_data_ref.data_config` and each calibration
-   reference's `data_config`. The Eval Hub standalone API carries these into
-   the generated execution job.
-5. Restrict egress from post-processing pods with a NetworkPolicy or egress
-   proxy when using Git sources. `git.url` accepts HTTP(S) hosts, including
-   in-cluster hosts; the network policy must allow only approved repository
-   endpoints and the required sidecar traffic.
+2. Reuse the existing `/app/eval-runtime-init` executable and configured eval
+   init image. Its single `init` container consumes `/meta/data-sources.json`
+   through `EVALHUB_DATA_STAGING_PLAN`, stages each S3/Git/HF reference separately,
+   and finishes before the adapter starts. Source credentials are mounted only
+   in init, not in the computation container.
+3. Mount each PVC reference read-only with Kubernetes applying its `sub_path`.
+   References may share a claim while selecting different subpaths.
+4. Set `EVALHUB_POST_PROCESSOR_DATA_PATHS` on the adapter to a JSON mapping:
 
-The Eval Hub runtime mounts calibration PVCs for its internal post-processing
-job using the dedicated PVC mapping above. Other source types need their own
-credential/download setup; accepting a data reference does not provision that
-setup automatically.
+   ```json
+   {
+     "results": "/mnt/evalhub/post-processing/staged/results",
+     "calibration-0": "/mnt/evalhub/post-processing/pvc/calibration-0",
+     "calibration-1": "/mnt/evalhub/post-processing/staged/calibration-1"
+   }
+   ```
+
+   Names are `results` and `calibration-N`, where N is the zero-based index in
+   `calibration_data_ref`. Staged data is read-only in the adapter. PVC paths
+   already select the requested subpath; the adapter neither reapplies it nor
+   copies the mounted data. HF caches and per-source revision metadata stay
+   outside consumed dataset directories.
+5. Preserve operation parameters and `data_config` mappings unchanged. The
+   adapter continues resolving `eval_job` artifacts and downloading MLflow/OCI
+   data on demand through the sidecar. No MLflow/OCI init downloaders are added.
+
+Deploy this adapter together with the eval-hub staging implementation. Missing
+or malformed Kubernetes staged-path mappings fail explicitly instead of silently
+falling back to direct S3/Git/HF downloads. The public API reference shapes are
+unchanged. Local mode retains the legacy PVC/Secret mapping and source downloaders,
+so it continues working without Kubernetes init containers.
 
 ## Events
 

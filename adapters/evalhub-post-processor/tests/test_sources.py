@@ -95,6 +95,8 @@ def archive(name="samples.json", content=b'[{"sample_id":"a","prediction":0.8}]'
 def test_mlflow_uses_only_sidecar_even_with_tracking_url_and_redirect_enabled(
     tmp_path, monkeypatch
 ):
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    monkeypatch.setenv("EVALHUB_POST_PROCESSOR_DATA_PATHS", "{}")
     monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://tracking.example")
     monkeypatch.setenv("MLFLOW_TRACKING_TOKEN", "upstream-secret")
     requests = []
@@ -157,7 +159,9 @@ def test_mlflow_refuses_upstream_redirects(tmp_path, stage):
 
 
 @pytest.mark.parametrize("corrupt", [None, "manifest", "blob", "size", "redirect"])
-def test_oci_downloads_verified_layers_only_through_sidecar(tmp_path, corrupt):
+def test_oci_downloads_verified_layers_only_through_sidecar(tmp_path, corrupt, monkeypatch):
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    monkeypatch.setenv("EVALHUB_POST_PROCESSOR_DATA_PATHS", "{}")
     blob = archive()
     manifest = json.dumps(
         {

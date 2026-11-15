@@ -416,6 +416,12 @@ class GuideLLMAdapter(FrameworkAdapter):
         """
         try:
             env = os.environ.copy()
+            # The GuideLLM pod is limited to one CPU. Its default worker pool
+            # can exceed the container's available resources on clusters where
+            # CPU count is reported from the node, causing worker startup to
+            # fail before any requests reach the model. Keep the default in
+            # line with the pod limit while allowing deployments to override it.
+            env.setdefault("GUIDELLM__MAX_WORKER_PROCESSES", "1")
             processor = cmd[cmd.index("--processor") + 1] if "--processor" in cmd else None
             if self._offline_enabled(processor):
                 for name in self.OFFLINE_ENV_VARS:

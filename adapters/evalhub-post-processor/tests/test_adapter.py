@@ -541,6 +541,44 @@ def test_external_data_uses_manifest_primary_metric(runtime, tmp_path, monkeypat
     assert not runtime["gets"]
 
 
+@pytest.mark.parametrize("source_kind", ["s3", "git", "hf", "pvc"])
+def test_kubernetes_ci_consumes_init_staged_data(runtime, tmp_path, monkeypatch, source_kind):
+    from post_processor.sources import Sources
+
+    results = tmp_path / "staged-results"
+    results.mkdir()
+    (results / "samples.json").write_text(json.dumps(runtime["data"]))
+    calibration = [
+        {"sample_id": "c1", "label": 1, "prediction": 0.8},
+        {"sample_id": "c2", "label": 0, "prediction": 0.3},
+    ]
+    (runtime["cal"] / "labels.jsonl").write_text("\n".join(json.dumps(row) for row in calibration))
+    config = runtime["spec"]["parameters"]["operations"]["confidence_interval"]
+    config["results_data_ref"] = {source_kind: {}}
+    config["calibration_data_ref"] = [{source_kind: {}}]
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    monkeypatch.setenv(
+        "EVALHUB_POST_PROCESSOR_DATA_PATHS",
+        json.dumps(
+            {
+                "results": str(results),
+                "calibration-0": str(runtime["cal"]),
+            }
+        ),
+    )
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("post-processor attempted direct source materialization")
+
+    monkeypatch.setattr(Sources, "_" + source_kind, unexpected)
+    result = runtime["run"]()
+    bounds = result.additional_info["confidence_interval"]["confidence_interval"]
+    assert bounds["n_labeled"] == 2
+    assert bounds["n_unlabeled"] == 4
+    assert bounds["lower"] < bounds["upper"]
+    assert not runtime["gets"]
+
+
 @pytest.mark.parametrize("broken", [False, True])
 def test_cli_exit_code_and_terminal_event(runtime, monkeypatch, broken):
     if broken:

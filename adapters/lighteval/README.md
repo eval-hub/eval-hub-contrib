@@ -86,25 +86,36 @@ The adapter supports all LightEval tasks, organised by category:
 - **endpoint**: Custom OpenAI-compatible endpoints
 - **litellm**: LiteLLM proxy
 
-## How endpoint scoring works
+## API log-likelihood compatibility
 
-Against an OpenAI-compatible endpoint (`endpoint`, `openai`, `litellm`) benchmarks are scored one of two ways:
+For OpenAI-compatible API providers (`endpoint`, `openai`, and `litellm`),
+log-likelihood tasks such as ARC, WinoGrande, GLUE multiple-choice tasks, and
+TruthfulQA multiple choice are scored through `/v1/completions` with
+`echo=true` and `logprobs=1`. The server must support these parameters. A
+request that cannot be scored fails the job instead of producing an accuracy.
+Anthropic does not implement this API and is rejected for these tasks; its
+generation-only tasks remain available.
 
-- **Generation benchmarks** (GSM8K, MATH-500, AIME, GPQA Diamond, HellaSwag, PIQA, OpenBookQA, MMLU, TriviaQA, TruthfulQA generation, LiveCodeBench) send chat requests and need nothing special from the endpoint.
-- **Log-likelihood benchmarks** (ARC Easy/Challenge, WinoGrande, GLUE CoLA/SST-2/MRPC, TruthfulQA multiple choice, and the suites that include them: `commonsense_reasoning`, `scientific_reasoning`, `language_understanding`, `truthfulness`) compare the probability the model gives each answer choice. lighteval's LiteLLM backend does not implement this (`NotImplementedError` in `loglikelihood`), so `lighteval_logprob_patch.py` implements it through `/v1/completions` with `echo=true` and `logprobs=1`. vLLM supports both. 
+The scoring path uses LightEval's plain-text prompt and separately tokenizes
+the question and each answer choice. When supported, the adapter requests the
+server's token IDs so it can preserve LightEval's question/choice token
+boundary. For other compatible servers, set
+`EVALHUB_LIGHTEVAL_LOGLIKELIHOOD_TOKENIZATION=joint` to score the joined text
+using `echo`; scores can differ from the Transformers backend when tokenization
+merges across that boundary. The path does not support PMI-normalized metrics
+(`Doc.unconditioned_query`).
 
-The log-likelihood path is designed to give the same per-choice scores as lighteval's own `transformers` backend for the same model and prompt settings:
+HellaSwag and MMLU use generation-based task definitions in the pinned
+LightEval 0.13.0 registry: they set `generation_size` and use exact-match
+metrics. They run through API providers as generated-answer tasks, so their
+scores are not log-likelihood scores. Other generation tasks such as GSM8K,
+MATH-500, AIME, TriviaQA, TruthfulQA generation, and LiveCodeBench also run
+against compatible API endpoints.
 
-- The scored text is lighteval's plain-text prompt: system prompt, task instruction, `num_few_shot` examples and the question, followed by the choice.
-- The question and each choice are tokenized separately, and the concatenated token ids are what the model scores, as in the `transformers` backend (`tok_encode_pair(..., pairwise=True)`). Whitespace at the end of the question moves to the front of the choice. The patch asks the vLLM server for the token ids (`return_token_ids`) and sends the joined ids back as a token prompt, so the model's own tokenizer does the splitting. Scoring the text as one string instead gives different tokens wherever a token would merge across the question/answer boundary (for example a question ending in a newline, or `2+2=` followed by `=4`), and more often with SentencePiece tokenizers such as Llama and Mistral. This costs one extra request per question and one per choice.
-- A request that cannot be scored (HTTP error, timeout, missing `logprobs`) fails the job. It is never turned into a score, so a broken endpoint cannot produce an accuracy. Timeouts, connection errors and HTTP 408/429/5xx are retried up to 3 times first.
-- Known limits: lighteval's PMI-normalised metrics (`Doc.unconditioned_query`) are not supported, and a context that ends in the tokenizer's literal EOS text is not trimmed the way the reference does.
-
-If the endpoint is not a vLLM server that supports `return_token_ids`, the job fails with a message that says so. Set `EVALHUB_LIGHTEVAL_LOGLIKELIHOOD_TOKENIZATION=joint` to score the text as one string instead. That works with any server that supports `echo`. Like lighteval's own `vllm` backend, which also tokenizes the question and choice together by default, it can differ slightly from the `transformers` backend where a token merges across the boundary. In this mode the patch also corrects for a leading BOS token shifting vLLM's `text_offset` before it splits question from answer.
-
-`tests/test_logprob_reference.py` checks this against lighteval's `TransformersModel` using a small local model, with no network.
-
-**Anthropic** has no `echo`/`logprobs`, so it is rejected only for the log-likelihood benchmarks above, with an error that names them. Generation benchmarks run normally.
+If an API-backed model's server does not support `echo` and `logprobs`, use
+`lm-evaluation-harness` for log-likelihood benchmarks. `transformers` and `vllm`
+load model weights locally; they are alternatives when local model execution is
+intended.
 
 **Majority-vote benchmarks** (`math:algebra`, `math:counting_and_probability`, which score `maj@4`) need several samples per question, which lighteval refuses at `temperature=0`. When you do not set `generation_parameters.temperature`, the adapter uses `0.7` for the run and logs it. A temperature you set, including `0`, is never overridden. The `math` suite contains these tasks, so the whole suite then runs at that temperature unless you set one.
 

@@ -1,17 +1,15 @@
 # LightEval Adapter — Provider Configuration
 #
 # Wraps HuggingFace LightEval (https://github.com/huggingface/lighteval) as an
-# EvalHub community provider. Evaluates any OpenAI-compatible inference endpoint
-# against the benchmark suite without loading model weights locally.
+# EvalHub community provider. Supports local model backends and OpenAI-compatible
+# inference endpoints.
 
 id: lighteval
 name: LightEval
 description: >
-  HuggingFace LightEval — endpoint-only evaluation against any OpenAI-compatible
-  server (vLLM, Ollama, OpenRouter). Supports loglikelihood (multiple-choice) and
-  generative tasks across reasoning, math, knowledge, coding, and safety benchmarks.
-  Loglikelihood scoring uses the /v1/completions echo+logprobs path; no local
-  model weights required.
+  HuggingFace LightEval evaluates models through local Transformers/vLLM
+  backends or API providers. OpenAI-compatible APIs can run generation tasks
+  and loglikelihood tasks when the server supports echo and logprobs.
 type: community
 
 # ── Agent Discoverability ──────────────────────────────────────────────────────
@@ -25,14 +23,15 @@ agent:
     - safety
     - truthfulness
   recommended_when:
-    - "User wants GSM8K, HellaSwag, ARC, WinoGrande, or TruthfulQA via endpoint"
+    - "User wants generation benchmarks through an API endpoint"
     - "Competition math benchmarks: AIME 2024/2025, MATH-500"
-    - "User wants GLUE language-understanding subtasks via a custom endpoint"
-    - "Lightweight truth-checking: TruthfulQA MC against an API model"
+    - >-
+      User wants ARC, WinoGrande, GLUE, or TruthfulQA multiple choice through an
+      API that supports echo and logprobs.
   target_type: model
   summary: >-
     HuggingFace LightEval — 28 benchmarks across reasoning, math, knowledge, coding,
-    and safety. Evaluates any OpenAI-compatible endpoint; no local GPU needed.
+    and safety. Supports compatible API endpoints without local model weights.
   complements:
     - inspect
     - lm-eval
@@ -42,23 +41,17 @@ agent:
       {"max_samples": 50}). Without it the full dataset runs, which can take
       hours for large benchmarks.
     - >-
-      Log-likelihood benchmarks (arc:easy, arc:challenge, winogrande, glue:cola,
-      glue:sst2, glue:mrpc, truthfulqa:mc and the suites that include them:
-      commonsense_reasoning, scientific_reasoning, language_understanding,
-      truthfulness) are scored through /v1/completions with echo=True and
-      logprobs=1. The endpoint must support these parameters (vLLM does by
-      default); a request that cannot be scored fails the job instead of
-      producing an accuracy. If your endpoint does not expose them, use
-      lm-evaluation-harness instead.
+      OpenAI-compatible API providers (endpoint, openai, and litellm) can run
+      log-likelihood benchmarks such as arc:easy, winogrande, glue:cola, and
+      truthfulqa:mc when the server supports /v1/completions with echo=true and
+      logprobs=1. A request that cannot be scored fails the job. Anthropic does
+      not support this scoring path and is rejected for these tasks. For an API
+      model whose server lacks these capabilities, use lm-evaluation-harness.
     - >-
-      The scored text is the one lighteval's own backends use: system prompt,
-      task instruction, few-shot examples (num_few_shot) and the question, then
-      each answer choice. Per-choice log-likelihoods match lighteval's
-      transformers backend for the same model and prompt settings.
-    - >-
-      Generation-only benchmarks (gsm8k, math*, aime*, gpqa:diamond, hellaswag,
-      piqa, openbookqa, mmlu, triviaqa, truthfulqa:gen, lcb:codegeneration_v6)
-      do not need /v1/completions logprobs.
+      Generation benchmarks (gsm8k, math*, aime*, gpqa:diamond, hellaswag,
+      mmlu, triviaqa, truthfulqa:gen, lcb:codegeneration_v6) do not need
+      logprobs. In LightEval 0.13.0, HellaSwag and MMLU use generation-based
+      task definitions with exact-match metrics.
 
 parameters:
   - name: provider
@@ -67,10 +60,10 @@ parameters:
     description: >
       Model provider backend. Use "endpoint" (default) for any OpenAI-compatible
       API server (vLLM, Ollama, OpenRouter, etc.). Other valid values are
-      "transformers", "vllm", "openai", "anthropic". "anthropic" runs the
-      generation-only benchmarks; log-likelihood benchmarks are rejected for it
-      because they need /v1/completions with echo+logprobs, which Anthropic's API
-      does not implement.
+      "transformers", "vllm", "openai", "anthropic", or "litellm".
+      OpenAI-compatible API providers need a server with /v1/completions echo+logprobs
+      support for log-likelihood tasks. Anthropic is generation-only because its
+      API does not implement that scoring path.
 
   - name: max_samples
     type: integer
@@ -236,7 +229,7 @@ benchmarks:
 
   - id: hellaswag
     name: HellaSwag
-    description: Everyday activity completion — commonsense NLI via loglikelihood scoring.
+    description: Everyday activity completion — commonsense multiple choice scored by generated answers.
     category: reasoning
     metrics: [hellaswag.em]
     tags: [reasoning, commonsense, lighteval]
@@ -460,4 +453,3 @@ benchmarks:
     pass_criteria:
       # Placeholder: strict exact match on free-form text scores low by design.
       threshold: 0.1
-
