@@ -121,8 +121,7 @@ def test_oci_export_persists_artifacts(tmp_path, mock_callbacks, monkeypatch):
     phases = [c.args[0].phase for c in mock_callbacks.report_status.call_args_list]
     assert JobPhase.PERSISTING_ARTIFACTS in phases
 
-    # files_path is the temp output_dir, cleaned up in finally after the job
-    # completes. Verify it was a Path object with the correct OCI coordinates.
+    # Verify the runtime output path and the requested OCI coordinates.
     spec = mock_callbacks.create_oci_artifact.call_args.args[0]
     assert isinstance(spec.files_path, Path)
     assert spec.coordinates.oci_repository == "test-org/test-repo"
