@@ -1,15 +1,8 @@
 # promptfoo adapter image — ships the promptfoo CLI alongside the Python adapter.
 #
-# Node.js 24 is installed from RHEL 9 / UBI9 AppStream. Prefer a RHEL 9 base for
-# product/Konflux builds (longer 9.8 support than UBI); upstream CI defaults to
-# UBI9 (no entitlement).
-#
-# Override the base for product builds, e.g.:
-#   podman build --build-arg BASE_IMAGE=registry.redhat.io/rhel9/rhel-minimal:latest ...
-#
-# We intentionally do NOT use ubi9/python-311 here: that image already enables
-# the nodejs:22 module stream, and switching to nodejs:24 fails with
-# "It is not possible to switch enabled streams of a module".
+# Uses ubi-minimal so we can enable the nodejs:24 AppStream module. The
+# ubi9/python-* images already enable nodejs:22, and switching streams fails
+# with "It is not possible to switch enabled streams of a module".
 
 ARG BASE_IMAGE=registry.access.redhat.com/ubi9/ubi-minimal:latest
 FROM ${BASE_IMAGE}
@@ -24,11 +17,11 @@ USER 0
 RUN microdnf -y module enable nodejs:24 \
     && microdnf -y install \
         nodejs \
-        python3.11 \
-        python3.11-pip \
+        python3.12 \
+        python3.12-pip \
         shadow-utils \
     && microdnf clean all \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && ln -sf /usr/bin/python3.12 /usr/bin/python \
     && npm install -g "promptfoo@${PROMPTFOO_VERSION}" \
     && npm cache clean --force \
     && useradd -u 1001 -g 0 -M -d /app -s /sbin/nologin default
