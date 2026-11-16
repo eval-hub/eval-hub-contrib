@@ -115,14 +115,20 @@ def test_sdk_logging_restored_after_export(export_setup, caplog, fails):
     assert "non-export diagnostic" in caplog.text
 
 
-def test_no_experiment_skips_mlflow(export_setup):
+def test_no_experiment_skips_mlflow(export_setup, monkeypatch):
     adapter, callbacks, client = export_setup
     adapter.job_spec.experiment_name = None
+    collect_artifact = Mock()
+    monkeypatch.setattr(main, "MlflowFileArtifact", collect_artifact)
+    save_mlflow = Mock()
+    monkeypatch.setattr(main, "_save_mlflow_best_effort", save_mlflow)
 
     with pytest.raises(SystemExit) as exc:
         main.main()
 
     assert exc.value.code == 0
+    collect_artifact.assert_not_called()
+    save_mlflow.assert_not_called()
     client.__enter__.assert_not_called()
     callbacks.report_results.assert_called_once()
     assert callbacks.mlflow._callbacks is callbacks

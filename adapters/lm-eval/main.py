@@ -427,7 +427,7 @@ class LMEvalAdapter(FrameworkAdapter):
             # that drops all metrics (same sidecar behaviour as inspect adapter).
             experiment_name = (
                 getattr(config, "experiment_name", None) or ""
-            ).strip() or params.get("mlflow_experiment_name", "")
+            ).strip()
             if experiment_name:
                 artifacts = [
                     MlflowFileArtifact(
