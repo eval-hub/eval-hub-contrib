@@ -141,12 +141,18 @@ use `selection: {"benchmark_id": "niah-single-noise"}` even if the evaluation se
 uses a different benchmark name. Null or empty-string selector values are treated
 as omitted; they do not erase native metadata or disable consistency checks.
 A nonempty selection matching no rows raises a direct error naming the results
-or calibration reference. Files without identity metadata remain supported.
+or indexed calibration reference. Identity-conflict errors also identify the
+calibration reference index. When selectors match but the target metric rejects
+the rows, the error names the metric mismatch rather than blaming selection.
+Files without identity metadata remain supported.
 
 For `eval_job` references, the source job supplies the target identity. Explicit
 selection retains its existing override behavior for framework-native row names;
 the resulting identity must still match the source job's benchmark, provider,
 and selected metric. Without an override, conflicting row identities are filtered.
+Zero-match diagnostics distinguish a conflicting eval-job override from native
+identity fields excluded by the target. Shared calibration references that select
+another benchmark are still skipped for the current benchmark.
 
 The standalone Eval Hub API exposes result mappings alongside the result source:
 

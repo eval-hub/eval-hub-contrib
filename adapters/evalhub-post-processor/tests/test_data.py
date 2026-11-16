@@ -806,3 +806,87 @@ def test_empty_selectors_preserve_single_group_and_eval_job_filtering(empty):
     table = Table([], {"selection": {"benchmark_id": empty}})
     assert matching(table, {"benchmark_id": "native"}, {}, shared=False)
     assert not matching(table, {"benchmark_id": "other"}, {"benchmark_id": "native"}, shared=False)
+
+
+def test_calibration_conflict_error_names_reference_index():
+    results = Table(
+        [{"sample_id": str(i), "prediction": i, "benchmark_id": "chosen"} for i in range(4)]
+    )
+    calibration = [
+        Table([{"sample_id": "0", "label": 1, "benchmark_id": "chosen"}]),
+        Table([{"sample_id": "1", "label": 0, "benchmark_id": "wrong"}]),
+    ]
+    with pytest.raises(
+        ValueError, match=r"Calibration data contains multiple .*calibration_data_ref\[1\]"
+    ):
+        ppi_arrays(results, calibration, {"metric": "score"}, shared=False)
+
+
+@pytest.mark.parametrize("source", ["results", "calibration"])
+def test_matching_selector_reports_target_metric_mismatch(source):
+    results = Table([{"sample_id": str(i), "prediction": i} for i in range(4)])
+    calibration = Table([{"sample_id": "0", "label": 1}, {"sample_id": "1", "label": 0}])
+    table = results if source == "results" else calibration
+    table.config = {"selection": {"benchmark_id": "chosen"}}
+    for row in table.rows:
+        row.update(benchmark_id="chosen", metric="different-score")
+    with pytest.raises(
+        ValueError, match="rows match data_config.selection but none match the target metric"
+    ):
+        ppi_arrays(results, [calibration], {"metric": "score"}, shared=False)
+
+
+@pytest.mark.parametrize("source", ["results", "calibration"])
+@pytest.mark.parametrize("role", ["benchmark_id", "provider_id", "metric"])
+def test_wrong_eval_job_selector_reports_target_conflict(source, role):
+    results = Table([{"sample_id": str(i), "prediction": i} for i in range(4)])
+    calibration = Table([{"sample_id": "0", "label": 1}, {"sample_id": "1", "label": 0}])
+    table = results if source == "results" else calibration
+    table.config = {"selection": {role: "wrong"}}
+    reference = "results_data_ref" if source == "results" else r"calibration_data_ref\[0\]"
+    with pytest.raises(
+        ValueError,
+        match=reference + r".data_config.selection conflicts with the evaluation-job target",
+    ):
+        ppi_arrays(
+            results,
+            [calibration],
+            {"metric": "score", "benchmark_id": "b", "provider_id": "p"},
+            shared=False,
+        )
+
+
+def test_shared_calibration_can_select_another_benchmark():
+    results = Table([{"sample_id": str(i), "prediction": i} for i in range(4)])
+    calibration = [
+        Table(
+            [{"sample_id": "0", "label": 100}],
+            {"selection": {"benchmark_id": "other", "provider_id": "p"}},
+        ),
+        Table(
+            [{"sample_id": "0", "label": 1}, {"sample_id": "1", "label": 0}],
+            {"selection": {"benchmark_id": "b", "provider_id": "p"}},
+        ),
+    ]
+    labels, predicted, unlabeled = ppi_arrays(
+        results,
+        calibration,
+        {"metric": "score", "benchmark_id": "b", "provider_id": "p"},
+        shared=True,
+    )
+    np.testing.assert_array_equal(labels, [1, 0])
+    np.testing.assert_array_equal(predicted, [0, 1])
+    np.testing.assert_array_equal(unlabeled, [2, 3])
+
+
+def test_eval_job_target_filter_does_not_blame_valid_override():
+    results = Table(
+        [{"sample_id": str(i), "prediction": i, "provider_id": "wrong"} for i in range(4)],
+        {"selection": {"benchmark_id": "b"}},
+    )
+    with pytest.raises(
+        ValueError, match="no rows match the evaluation-job target after selection overrides"
+    ):
+        ppi_arrays(
+            results, [], {"metric": "score", "benchmark_id": "b", "provider_id": "p"}, shared=False
+        )
