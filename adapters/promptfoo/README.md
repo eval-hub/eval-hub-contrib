@@ -172,6 +172,23 @@ See `provider.yaml` for the full annotated list. Key ones:
 | `plugins` | promptfoo-redteam | Plugin IDs to run; defaults to an OWASP LLM Top 10-mapped subset |
 | `generation_provider` | promptfoo-redteam | Provider used to generate adversarial content; unset falls back to promptfoo's default (requires `OPENAI_API_KEY`) |
 
+## Container image
+
+Promptfoo is a Node.js CLI shipped in the adapter image:
+
+1. Uses a **UBI9** minimal base
+2. Installs **Node.js 24** from UBI AppStream (`microdnf module enable nodejs:24`)
+3. Installs the pinned `promptfoo@0.123.1` CLI globally via npm
+4. Installs Python 3.12 + the adapter (`main.py`) so EvalHub can keep calling
+   promptfoo as a subprocess
+
+```sh
+make image-promptfoo
+```
+
+We avoid `ubi9/python-*` as the base: those images already enable the
+`nodejs:22` module stream, and switching to `nodejs:24` fails.
+
 ## Local testing
 
 ```sh
