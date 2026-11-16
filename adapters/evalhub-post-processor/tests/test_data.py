@@ -269,3 +269,61 @@ def test_external_mixed_identities_are_rejected_or_selected(tmp_path, role):
     np.testing.assert_array_equal(unlabeled, [2, 3])
     narrowed = read_table(tmp_path, {"path": "first.jsonl"})
     assert len(ppi_arrays(narrowed, [calibration], {"metric": "score"}, shared=False)[2]) == 2
+
+
+@pytest.mark.parametrize("role", ["benchmark_id", "provider_id"])
+@pytest.mark.parametrize("result_identity", [None, "chosen"])
+@pytest.mark.parametrize("separate_files", [False, True])
+def test_external_calibration_mixed_groups_fail_before_join(role, result_identity, separate_files):
+    """Neither overlapping sample IDs nor separate files may hide conflicting labels."""
+    metadata = {role: result_identity} if result_identity else {}
+    results = Table([{"sample_id": str(i), "prediction": i, **metadata} for i in range(4)])
+    rows = [
+        {"sample_id": "0", "label": 1, role: "other"},
+        {"sample_id": "1", "label": 0, role: "chosen"},
+    ]
+    calibration = [Table([row]) for row in rows] if separate_files else [Table(rows)]
+    with pytest.raises(ValueError, match=f"Calibration data contains multiple {role}"):
+        ppi_arrays(results, calibration, {"metric": "score"}, shared=False)
+
+
+@pytest.mark.parametrize("role", ["benchmark_id", "provider_id"])
+def test_external_calibration_selection_filters_conflicting_labels(role):
+    """An explicit calibration selector narrows labels to the result group."""
+    results = Table([{"sample_id": str(i), "prediction": i, role: "chosen"} for i in range(4)])
+    calibration = Table(
+        [
+            {"sample_id": "0", "label": 100, role: "other"},
+            {"sample_id": "0", "label": 1, role: "chosen"},
+            {"sample_id": "1", "label": 0, role: "chosen"},
+        ],
+        {"selection": {role: "chosen"}},
+    )
+    labels, predicted, unlabeled = ppi_arrays(
+        results, [calibration], {"metric": "score"}, shared=False
+    )
+    np.testing.assert_array_equal(labels, [1, 0])
+    np.testing.assert_array_equal(predicted, [0, 1])
+    np.testing.assert_array_equal(unlabeled, [2, 3])
+
+
+@pytest.mark.parametrize("role", ["benchmark_id", "provider_id", "metric"])
+def test_eval_job_selection_retains_native_identity_override(role):
+    """An eval-job selector translates native identities for both results and labels."""
+    target = {"benchmark_id": "job-b", "provider_id": "job-p", "metric": "score"}
+    config = {"selection": {role: target[role]}}
+    results = Table(
+        [{"sample_id": str(i), "prediction": i, role: "native"} for i in range(4)], config
+    )
+    calibration = Table(
+        [
+            {"sample_id": "0", "label": 1, role: "native"},
+            {"sample_id": "1", "label": 0, role: "native"},
+        ],
+        config,
+    )
+    labels, predicted, unlabeled = ppi_arrays(results, [calibration], target, shared=False)
+    np.testing.assert_array_equal(labels, [1, 0])
+    np.testing.assert_array_equal(predicted, [0, 1])
+    np.testing.assert_array_equal(unlabeled, [2, 3])
+    assert not matching(Table([], {"selection": {role: "wrong-job"}}), {}, target, shared=False)

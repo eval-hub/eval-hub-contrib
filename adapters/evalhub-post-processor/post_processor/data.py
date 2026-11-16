@@ -232,9 +232,16 @@ def matching(table: Table, row: dict, target: dict, *, shared: bool) -> bool:
     for role, value in selectors.items():
         if value is None or value == "":
             continue
-        # Explicit selections filter external rows too, even without a source job.
+        # External selections filter native metadata; eval-job selections retain
+        # their existing role as overrides for framework-native identity names.
+        external = not any(key in target for key in ("benchmark_id", "provider_id"))
         row_value = table.get(row, role)
-        if role in selection and row_value not in (None, "") and str(row_value) != str(value):
+        if (
+            external
+            and role in selection
+            and row_value not in (None, "")
+            and str(row_value) != str(value)
+        ):
             return False
         # External inputs have no authoritative job identity. Preserve their native
         # metadata; only compare identities supplied by an eval_job target.
@@ -255,6 +262,22 @@ def prediction(table: Table, row: dict, metric: str) -> Any:
     return None
 
 
+def validate_external_identity(
+    table: Table, row: dict, identities: dict[str, set[str]], reference: str
+) -> None:
+    """Require one consistent external group across results and all calibration inputs."""
+    for role, values in identities.items():
+        value = table.config.get("selection", {}).get(role, table.get(row, role))
+        if value not in (None, ""):
+            values.add(str(value))
+        if len(values) > 1:
+            source = "Results" if reference == "results_data_ref" else "Calibration"
+            raise ValueError(
+                f"{source} data contains multiple {role} values across results and calibration; "
+                f"use {reference}.data_config.selection or path to select a consistent group"
+            )
+
+
 def ppi_arrays(
     results: Table, calibration: list[Table], target: dict, *, shared: bool
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -267,15 +290,7 @@ def ppi_arrays(
     for row in results.rows:
         if not matching(results, row, target, shared=False):
             continue
-        for role, values in identities.items():
-            value = results.config.get("selection", {}).get(role, results.get(row, role))
-            if value not in (None, ""):
-                values.add(str(value))
-            if len(values) > 1:
-                raise ValueError(
-                    f"Results data contains multiple {role} values; use "
-                    "results_data_ref.data_config.selection or path to select one group"
-                )
+        validate_external_identity(results, row, identities, "results_data_ref")
         key = sample_id(results, row)
         if key in scores:
             raise ValueError(f"Duplicate evaluation sample_id {key!r}")
@@ -287,6 +302,8 @@ def ppi_arrays(
         for row in table.rows:
             if not matching(table, row, target, shared=shared):
                 continue
+            # Reuse result identities across every calibration file before joining IDs.
+            validate_external_identity(table, row, identities, "calibration_data_ref[]")
             key = sample_id(table, row)
             if key in seen:
                 raise ValueError(f"Duplicate calibration sample_id {key!r}")
