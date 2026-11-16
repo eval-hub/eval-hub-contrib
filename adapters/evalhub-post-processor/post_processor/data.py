@@ -336,11 +336,29 @@ def sample_id(table: Table, row: dict) -> str:
     return str(value)
 
 
+def selected_identity(table: Table, row: dict, role: str) -> Any:
+    """Treat null/empty selectors as omitted so they cannot erase native identity."""
+    value = table.config.get("selection", {}).get(role)
+    return table.get(row, role) if value in (None, "") else value
+
+
+def require_selection_match(table: Table, count: int, reference: str) -> None:
+    """Explain unmatched external selections before calibration or PPI checks obscure them."""
+    if not count and any(
+        value not in (None, "") for value in table.config.get("selection", {}).values()
+    ):
+        raise ValueError(
+            f"{reference}.data_config.selection matched no rows; "
+            "use the file's native benchmark_id/provider_id/metric values, "
+            "not the evaluation service's benchmark names"
+        )
+
+
 def matching(table: Table, row: dict, target: dict, *, shared: bool) -> bool:
     """Check whether a record belongs to the selected benchmark and metric."""
     selection = table.config.get("selection", {})
     selectors = {
-        role: selection.get(role, table.get(row, role))
+        role: selected_identity(table, row, role)
         for role in ("benchmark_id", "provider_id", "metric")
     }
     if shared and any(selectors[role] in (None, "") for role in ("benchmark_id", "provider_id")):
@@ -386,7 +404,7 @@ def validate_external_identity(
 ) -> None:
     """Require one consistent external group across results and all calibration inputs."""
     for role, values in identities.items():
-        value = table.config.get("selection", {}).get(role, table.get(row, role))
+        value = selected_identity(table, row, role)
         if value not in (None, ""):
             values.add(str(value))
         if len(values) > 1:
@@ -414,13 +432,18 @@ def ppi_arrays(
         if key in scores:
             raise ValueError(f"Duplicate evaluation sample_id {key!r}")
         scores[key] = numeric(prediction(results, row, metric), f"{metric} prediction")
+    external = not any(role in target for role in ("benchmark_id", "provider_id"))
+    if external:
+        require_selection_match(results, len(scores), "results_data_ref")
     labels: list[float] = []
     predicted: list[float] = []
     seen: set[str] = set()
-    for table in calibration:
+    for index, table in enumerate(calibration):
+        matched = 0
         for row in table.rows:
             if not matching(table, row, target, shared=shared):
                 continue
+            matched += 1
             # Reuse result identities across every calibration file before joining IDs.
             validate_external_identity(table, row, identities, "calibration_data_ref[]")
             key = sample_id(table, row)
@@ -444,6 +467,8 @@ def ppi_arrays(
                 )
             labels.append(label)
             predicted.append(estimate)
+        if external:
+            require_selection_match(table, matched, f"calibration_data_ref[{index}]")
     # Calibration rows are labeled observations, never also unlabeled observations.
     unlabeled = [score for key, score in scores.items() if key not in seen]
     if len(labels) < 2 or len(unlabeled) < 2:

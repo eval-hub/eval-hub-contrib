@@ -767,3 +767,42 @@ def test_eval_job_selection_retains_native_identity_override(role):
     np.testing.assert_array_equal(predicted, [0, 1])
     np.testing.assert_array_equal(unlabeled, [2, 3])
     assert not matching(Table([], {"selection": {role: "wrong-job"}}), {}, target, shared=False)
+
+
+@pytest.mark.parametrize("role", ["benchmark_id", "provider_id"])
+@pytest.mark.parametrize("empty", [None, ""])
+@pytest.mark.parametrize("source", ["results", "calibration"])
+def test_empty_selection_cannot_hide_mixed_native_groups(role, empty, source):
+    """Null/empty selectors behave as omitted instead of masking native metadata."""
+    results = Table([{"sample_id": str(i), "prediction": i} for i in range(4)])
+    calibration = Table([{"sample_id": "0", "label": 1}, {"sample_id": "1", "label": 0}])
+    table = results if source == "results" else calibration
+    table.config = {"selection": {role: empty}}
+    for i, row in enumerate(table.rows):
+        row[role] = "first" if i == 0 else "second"
+    with pytest.raises(ValueError, match=f"data contains multiple {role}"):
+        ppi_arrays(results, [calibration], {"metric": "score"}, shared=False)
+
+
+@pytest.mark.parametrize("source", ["results", "calibration"])
+@pytest.mark.parametrize("role", ["benchmark_id", "provider_id", "metric"])
+def test_unmatched_external_selection_names_reference_and_native_values(source, role):
+    """A wrong native selector must not masquerade as missing calibration samples."""
+    metadata = {"benchmark_id": "native-b", "provider_id": "native-p", "metric": "score"}
+    results = Table([{"sample_id": str(i), "prediction": i, **metadata} for i in range(4)])
+    calibration = Table(
+        [{"sample_id": "0", "label": 1, **metadata}, {"sample_id": "1", "label": 0, **metadata}]
+    )
+    table = results if source == "results" else calibration
+    table.config = {"selection": {role: "service-name"}}
+    reference = "results_data_ref" if source == "results" else r"calibration_data_ref\[0\]"
+    with pytest.raises(ValueError, match=reference + r".data_config.selection matched no .*native"):
+        ppi_arrays(results, [calibration], {"metric": "score"}, shared=False)
+
+
+@pytest.mark.parametrize("empty", [None, ""])
+def test_empty_selectors_preserve_single_group_and_eval_job_filtering(empty):
+    """Treating an empty selector as omitted preserves native filtering and valid input."""
+    table = Table([], {"selection": {"benchmark_id": empty}})
+    assert matching(table, {"benchmark_id": "native"}, {}, shared=False)
+    assert not matching(table, {"benchmark_id": "other"}, {"benchmark_id": "native"}, shared=False)

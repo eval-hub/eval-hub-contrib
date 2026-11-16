@@ -135,7 +135,13 @@ must be consistent with those result identities and with each other. Conflicting
 metadata raises a `Results data contains multiple ...` or `Calibration data
 contains multiple ...` error before calibration labels are joined by sample ID.
 Narrow the appropriate reference using `data_config.selection` or `data_config.path`.
-Files without identity metadata remain supported.
+External selectors must use the values stored in the file, rather than service
+benchmark names. For example, for rows containing `benchmark_id: niah-single-noise`,
+use `selection: {"benchmark_id": "niah-single-noise"}` even if the evaluation service
+uses a different benchmark name. Null or empty-string selector values are treated
+as omitted; they do not erase native metadata or disable consistency checks.
+A nonempty selection matching no rows raises a direct error naming the results
+or calibration reference. Files without identity metadata remain supported.
 
 For `eval_job` references, the source job supplies the target identity. Explicit
 selection retains its existing override behavior for framework-native row names;
