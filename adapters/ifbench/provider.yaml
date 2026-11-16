@@ -56,6 +56,11 @@ benchmarks:
       - curated
 
 parameters:
+  - name: save_sample_results
+    type: boolean
+    default: true
+    description: Persist native per-sample scores and identifiers for post-processing.
+
   - name: scoring_mode
     type: string
     default: loose

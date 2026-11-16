@@ -497,11 +497,17 @@ images: image-evalhub-post-processor
 push-images: push-evalhub-post-processor
 clean-images: clean-evalhub-post-processor
 tests: test-evalhub-post-processor
+# Optional override for product builds, e.g.
+#   make image-promptfoo BASE_IMAGE=registry.redhat.io/rhel9/rhel-minimal:latest
+BASE_IMAGE ?=
+
 .PHONY: image-promptfoo
 image-promptfoo:
 	@echo "Building promptfoo adapter image..."
 	cd adapters/promptfoo && \
-	$(BUILD_TOOL) build -t $(IMAGE_PROMPTFOO) -f Containerfile .
+	$(BUILD_TOOL) build \
+		$(if $(BASE_IMAGE),--build-arg BASE_IMAGE=$(BASE_IMAGE),) \
+		-t $(IMAGE_PROMPTFOO) -f Containerfile .
 	@echo "✅ Built: $(IMAGE_PROMPTFOO)"
 
 .PHONY: push-promptfoo
@@ -653,8 +659,18 @@ test-lm-eval:
 	cd adapters/lm-eval && \
 	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \
 	uv pip install --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/python -m ruff check --config 'src = ["."]' . && \
 	.venv/bin/python -m pytest tests/ -m "not local" -v
 images: image-lm-eval
 push-images: push-lm-eval
 clean-images: clean-lm-eval
 tests: test-lm-eval
+
+.PHONY: test-followbench
+test-followbench:
+	cd adapters/followbench && \
+	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/python -m pytest tests/ -v
+
+tests: test-followbench

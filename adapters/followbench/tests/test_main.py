@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from unittest.mock import MagicMock, create_autospec
 
@@ -189,13 +190,21 @@ def test_malformed_judge_response_is_scored_as_no(monkeypatch):
     assert score.soft_satisfied == 0.0
 
 
-def test_followbench_judge_and_callbacks_integration(monkeypatch):
+@pytest.mark.parametrize("save_samples", [None, False, True])
+def test_followbench_judge_and_callbacks_integration(monkeypatch, save_samples):
     adapter = main_module.FollowBenchAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
     config = copy.deepcopy(adapter.job_spec)
     # EvalHub serializes this standard limit to the JobSpec root field.
     config.parameters.pop("num_examples", None)
     config.num_examples = 1
+    if save_samples is None:
+        config.parameters.pop("save_sample_results", None)
+    else:
+        config.parameters["save_sample_results"] = save_samples
+    config.experiment_name = "sample-test"
+    callbacks.mlflow = MagicMock()
+    callbacks.mlflow.save.return_value = "run-1"
 
     model_client = MagicMock(name="model_client")
     judge_client = MagicMock(name="judge_client")
@@ -232,6 +241,16 @@ def test_followbench_judge_and_callbacks_integration(monkeypatch):
     assert metrics["csl"] == 5.0
     assert metrics["n_evaluated"] == 5
     assert results.overall_score == 1.0
+    if save_samples is not False:
+        artifact = callbacks.mlflow.save.call_args.kwargs["artifacts"][0]
+        samples = [json.loads(line) for line in artifact.content.splitlines()]
+        assert len({row["sample_id"] for row in samples}) == 5
+        assert [row["level"] for row in samples] == [1, 2, 3, 4, 5]
+        assert [row["hsr"] for row in samples] == [1.0] * 5
+        assert "response" not in samples[0]
+        assert "instruction" not in samples[0]
+    else:
+        assert callbacks.mlflow.save.call_args.kwargs["artifacts"] == []
     callbacks.report_results.assert_called_once_with(results)
 
     phases = [call.args[0].phase for call in callbacks.report_status.call_args_list]
@@ -240,3 +259,15 @@ def test_followbench_judge_and_callbacks_integration(monkeypatch):
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
     assert JobPhase.PERSISTING_ARTIFACTS in phases
+
+
+@pytest.mark.parametrize("value", ["false", 0, None])
+def test_invalid_sample_flag_fails_before_inference(value, monkeypatch):
+    adapter = main_module.FollowBenchAdapter(job_spec_path="meta/job.json")
+    config = copy.deepcopy(adapter.job_spec)
+    config.parameters["save_sample_results"] = value
+    callbacks = create_autospec(JobCallbacks)
+    with pytest.raises(ValueError, match="must be a boolean"):
+        adapter.run_benchmark_job(config, callbacks)
+    phases = [call.args[0].phase for call in callbacks.report_status.call_args_list]
+    assert JobPhase.RUNNING_EVALUATION not in phases

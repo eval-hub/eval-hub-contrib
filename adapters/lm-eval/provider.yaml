@@ -5977,10 +5977,3 @@ parameters:
       Fallback base URL for the inference endpoint when model.url is not set in
       the job spec. Identical semantics to model.url — provide one or the other,
       not both. Example: 'http://vllm-server:8000'.
-
-  - name: mlflow_experiment_name
-    type: string
-    default: null
-    description: >
-      Fallback MLflow experiment name when JobSpec.experiment_name is unset.
-      MLflow logging is skipped unless at least one of these is configured.

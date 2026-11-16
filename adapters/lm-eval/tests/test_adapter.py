@@ -121,8 +121,7 @@ def test_oci_export_persists_artifacts(tmp_path, mock_callbacks, monkeypatch):
     phases = [c.args[0].phase for c in mock_callbacks.report_status.call_args_list]
     assert JobPhase.PERSISTING_ARTIFACTS in phases
 
-    # files_path is the temp output_dir, cleaned up in finally after the job
-    # completes. Verify it was a Path object with the correct OCI coordinates.
+    # Verify the runtime output path and the requested OCI coordinates.
     spec = mock_callbacks.create_oci_artifact.call_args.args[0]
     assert isinstance(spec.files_path, Path)
     assert spec.coordinates.oci_repository == "test-org/test-repo"
@@ -288,7 +287,9 @@ def test_missing_model_url_raises(tmp_path, mock_callbacks):
 
 
 @pytest.mark.integration
-def test_base_url_param_used_when_model_url_empty(tmp_path, mock_callbacks, monkeypatch):
+def test_base_url_param_used_when_model_url_empty(
+    tmp_path, mock_callbacks, monkeypatch
+):
     """params['base_url'] is accepted as a fallback when model.url is empty."""
     meta_dir = tmp_path / "meta"
     meta_dir.mkdir()
@@ -604,10 +605,10 @@ def test_compute_overall_score_empty_returns_none():
 
 # ── LMEvalJob parity ──────────────────────────────────────────────────────────
 
-import yaml  # noqa: E402
+import yaml
 
-from _execution import build_cmd, build_env  # noqa: E402
-from _tasks import (  # noqa: E402
+from _execution import build_cmd, build_env
+from _tasks import (
     UNSUPPORTED_BENCHMARKS,
     is_code_execution,
     requires_completions_endpoint,
@@ -642,7 +643,9 @@ def test_unsupported_benchmarks_are_catalog_ids_and_not_exposed():
     exposed = {b["id"] for b in provider["benchmarks"]}
     assert set(UNSUPPORTED_BENCHMARKS) <= set(_LMEVALJOB_IDS)
     assert not set(UNSUPPORTED_BENCHMARKS) & exposed
-    assert len(_OFFERED_LMEVALJOB_IDS) == len(_LMEVALJOB_IDS) - len(UNSUPPORTED_BENCHMARKS)
+    assert len(_OFFERED_LMEVALJOB_IDS) == len(_LMEVALJOB_IDS) - len(
+        UNSUPPORTED_BENCHMARKS
+    )
 
 
 @pytest.mark.parametrize("benchmark_id", sorted(UNSUPPORTED_BENCHMARKS))
@@ -692,15 +695,26 @@ def test_code_execution_ids():
     for b in ("humaneval", "humaneval_instruct", "mbpp", "lm-eval/mbpp"):
         assert is_code_execution(b)
     assert not is_code_execution("gsm8k")
-    assert resolve_tasks("lm-eval/humaneval", None, allow_code_execution=True) == "humaneval"
+    assert (
+        resolve_tasks("lm-eval/humaneval", None, allow_code_execution=True)
+        == "humaneval"
+    )
 
 
 def _cmd(**kw):
-    base = dict(
-        model_type="local-completions", model_args="m", tasks="t", output_dir=Path("/o"),
-        batch_size=1, num_fewshot=None, limit=2, gen_kwargs=None, include_path=None,
-        apply_chat_template=False, system_instruction=None,
-    )
+    base = {
+        "model_type": "local-completions",
+        "model_args": "m",
+        "tasks": "t",
+        "output_dir": Path("/o"),
+        "batch_size": 1,
+        "num_fewshot": None,
+        "limit": 2,
+        "gen_kwargs": None,
+        "include_path": None,
+        "apply_chat_template": False,
+        "system_instruction": None,
+    }
     return build_cmd(**{**base, **kw})
 
 
@@ -717,8 +731,14 @@ def test_build_cmd_safety_flags_opt_in():
 
 
 def test_build_env_code_eval_opt_in():
-    kw = dict(api_key="k", hf_datasets_cache=None, dataset_source="hub",
-              s3_endpoint=None, aws_access_key_id=None, aws_secret_access_key=None)
+    kw = {
+        "api_key": "k",
+        "hf_datasets_cache": None,
+        "dataset_source": "hub",
+        "s3_endpoint": None,
+        "aws_access_key_id": None,
+        "aws_secret_access_key": None,
+    }
     assert build_env(**kw, allow_code_execution=True)["HF_ALLOW_CODE_EVAL"] == "1"
 
 
@@ -749,7 +769,7 @@ def test_code_execution_job_passes_flags(tmp_path, mock_callbacks, monkeypatch):
 
 # ── Result naming: filters, bare primary names, effective few-shot ────────────
 
-from _results import effective_num_fewshot  # noqa: E402
+from _results import effective_num_fewshot
 
 CANNED_GSM8K_FILTERS = {
     "results": {
@@ -775,7 +795,9 @@ def test_filters_keep_metric_names_distinct():
         "gsm8k.exact_match,flexible-extract",
     }
     assert by_name["gsm8k.exact_match,strict-match"].metric_value == pytest.approx(0.72)
-    assert by_name["gsm8k.exact_match,flexible-extract"].metric_value == pytest.approx(0.75)
+    assert by_name["gsm8k.exact_match,flexible-extract"].metric_value == pytest.approx(
+        0.75
+    )
     assert by_name["gsm8k.exact_match,strict-match"].confidence_interval is not None
 
 
@@ -807,7 +829,9 @@ def test_bare_alias_prefers_unfiltered_then_flexible_extract_then_first_filter()
     # first (a zero-shot chat model scores 0 on the strict template, 0.75 here).
     assert bare["exact_match"].metric_value == pytest.approx(0.75)
     assert bare["exact_match"].metadata["filter"] == "flexible-extract"
-    assert bare["exact_match"].metadata["alias_of"] == "gsm8k.exact_match,flexible-extract"
+    assert (
+        bare["exact_match"].metadata["alias_of"] == "gsm8k.exact_match,flexible-extract"
+    )
     # The strict value is still reported under its qualified name.
     assert any(
         r.metric_name == "gsm8k.exact_match,strict-match" and r.metric_value == 0.72
@@ -881,7 +905,9 @@ def test_effective_num_fewshot(raw, requested, expected):
 
 
 @pytest.mark.integration
-def test_omitted_num_fewshot_is_not_labelled_zero_shot(tmp_path, mock_callbacks, monkeypatch):
+def test_omitted_num_fewshot_is_not_labelled_zero_shot(
+    tmp_path, mock_callbacks, monkeypatch
+):
     """GSM8K defaults to 5-shot in the harness; the card must not claim zero-shot."""
     meta_dir = tmp_path / "meta"
     meta_dir.mkdir()
@@ -942,7 +968,9 @@ def _unsafe_code_run(tmp_path, mock_callbacks, monkeypatch, **job_overrides):
 
 
 @pytest.mark.integration
-def test_cruxeval_output_forwards_unsafe_code_confirmation(tmp_path, mock_callbacks, monkeypatch):
+def test_cruxeval_output_forwards_unsafe_code_confirmation(
+    tmp_path, mock_callbacks, monkeypatch
+):
     """lm-eval marks cruxeval_output unsafe; without the flag the harness refuses it."""
     seen = _unsafe_code_run(
         tmp_path,
@@ -956,7 +984,9 @@ def test_cruxeval_output_forwards_unsafe_code_confirmation(tmp_path, mock_callba
 
 
 @pytest.mark.integration
-def test_cruxeval_output_is_refused_without_opt_in(tmp_path, mock_callbacks, monkeypatch):
+def test_cruxeval_output_is_refused_without_opt_in(
+    tmp_path, mock_callbacks, monkeypatch
+):
     with pytest.raises(ValueError, match="allow_code_execution"):
         _unsafe_code_run(
             tmp_path, mock_callbacks, monkeypatch, benchmark_id="cruxeval_output"
@@ -979,7 +1009,9 @@ def test_custom_task_list_with_unsafe_task_forwards_confirmation(
 
 
 @pytest.mark.integration
-def test_safe_tasks_do_not_get_the_confirmation_flag(tmp_path, mock_callbacks, monkeypatch):
+def test_safe_tasks_do_not_get_the_confirmation_flag(
+    tmp_path, mock_callbacks, monkeypatch
+):
     seen = _unsafe_code_run(
         tmp_path,
         mock_callbacks,
@@ -994,11 +1026,11 @@ def test_safe_tasks_do_not_get_the_confirmation_flag(tmp_path, mock_callbacks, m
 # These tests need the real lm_eval (requirements.txt); the CI "registry" job
 # installs it and sets LMEVAL_REQUIRED=1 so they fail instead of skipping.
 
-import subprocess  # noqa: E402
-import sys  # noqa: E402
+import subprocess
+import sys
 
-from _benchmarks import BENCHMARKS, TASKS  # noqa: E402
-from _tasks import COMPOSITE_SUITES  # noqa: E402
+from _benchmarks import BENCHMARKS, TASKS
+from _tasks import COMPOSITE_SUITES
 
 _PROVIDER = yaml.safe_load((_ADAPTER_DIR / "provider.yaml").read_text())
 _MANIFEST = {b["id"]: b for b in _PROVIDER["benchmarks"]}
@@ -1020,8 +1052,9 @@ def test_benchmarks_table_is_current(lmeval):
 
 @pytest.mark.lmeval
 def test_table_matches_pinned_lmeval_version(lmeval):
-    import _benchmarks
     from importlib.metadata import version
+
+    import _benchmarks
 
     assert _benchmarks.LMEVAL_VERSION == version("lm_eval")
 
@@ -1084,7 +1117,9 @@ def test_declared_primary_metric_is_emitted(benchmark_id):
     if spec.opaque or not spec.registered:
         pytest.skip("metric names are not statically known")
     metric = _MANIFEST[benchmark_id]["primary_score"]["metric"]
-    assert metric in spec.emits, f"{benchmark_id} declares {metric!r}, emits {spec.emits}"
+    assert metric in spec.emits, (
+        f"{benchmark_id} declares {metric!r}, emits {spec.emits}"
+    )
 
 
 @pytest.mark.parametrize("benchmark_id", _SCORED)
@@ -1117,8 +1152,8 @@ def test_tag_benchmark_scores_on_its_all_leaf():
 
 # ── Loglikelihood benchmarks need a tokenizer ────────────────────────────────
 
-from _execution import failure_hint  # noqa: E402
-from _tasks import resolve_tokenizer_backend  # noqa: E402
+from _execution import failure_hint
+from _tasks import resolve_tokenizer_backend
 
 
 def test_loglikelihood_benchmark_without_tokenizer_is_rejected_at_startup():
@@ -1132,8 +1167,13 @@ def test_loglikelihood_benchmark_without_tokenizer_is_rejected_at_startup():
 
 def test_a_tokenizer_without_a_backend_selects_huggingface():
     """lm-eval ignores a tokenizer when the backend is None."""
-    assert resolve_tokenizer_backend("arc_easy", "Qwen/Qwen3-8B", "None") == "huggingface"
-    assert resolve_tokenizer_backend("lm-eval/gsm8k", "Qwen/Qwen3-8B", "None") == "huggingface"
+    assert (
+        resolve_tokenizer_backend("arc_easy", "Qwen/Qwen3-8B", "None") == "huggingface"
+    )
+    assert (
+        resolve_tokenizer_backend("lm-eval/gsm8k", "Qwen/Qwen3-8B", "None")
+        == "huggingface"
+    )
 
 
 def test_explicit_backends_and_generation_benchmarks_are_left_alone():
@@ -1161,7 +1201,9 @@ def test_tokenizer_param_reaches_the_command_with_the_huggingface_backend(
 
 
 @pytest.mark.integration
-def test_job_without_a_tokenizer_fails_before_lmeval_starts(tmp_path, mock_callbacks, monkeypatch):
+def test_job_without_a_tokenizer_fails_before_lmeval_starts(
+    tmp_path, mock_callbacks, monkeypatch
+):
     with pytest.raises(ValueError, match="needs a tokenizer"):
         _unsafe_code_run(
             tmp_path,
@@ -1184,7 +1226,7 @@ def test_failure_hints_name_the_adapter_parameter():
 
 # ── Credentials never reach evaluation_metadata ──────────────────────────────
 
-from _execution import redact_params  # noqa: E402
+from _execution import redact_params
 
 
 def test_redact_params_masks_credentials_by_name():
@@ -1201,7 +1243,13 @@ def test_redact_params_masks_credentials_by_name():
         "empty_key": "",
     }
     out = redact_params(params)
-    for key in ("api_key", "aws_secret_access_key", "aws_access_key_id", "hf_token", "auth_token"):
+    for key in (
+        "api_key",
+        "aws_secret_access_key",
+        "aws_access_key_id",
+        "hf_token",
+        "auth_token",
+    ):
         assert out[key] == "***", key
     assert out["nested"] == {"password": "***", "keep": 1}
     assert out["tokenizer"] == "org/model"
@@ -1216,10 +1264,16 @@ def _stub_lmeval(adapter, monkeypatch):
 
 
 @pytest.mark.integration
-def test_evaluation_metadata_does_not_carry_credentials(adapter, mock_callbacks, monkeypatch, tmp_path):
+def test_evaluation_metadata_does_not_carry_credentials(
+    adapter, mock_callbacks, monkeypatch, tmp_path
+):
     """benchmark_config in the results is the redacted parameter map."""
     adapter.job_spec.parameters.update(
-        {"api_key": "sk-live", "aws_secret_access_key": "s3cret", "dataset_source": "hub"}
+        {
+            "api_key": "sk-live",
+            "aws_secret_access_key": "s3cret",
+            "dataset_source": "hub",
+        }
     )
     _stub_lmeval(adapter, monkeypatch)
     results = adapter.run_benchmark_job(adapter.job_spec, mock_callbacks)
@@ -1234,7 +1288,9 @@ def test_evaluation_metadata_does_not_carry_credentials(adapter, mock_callbacks,
 
 
 @pytest.mark.integration
-def test_chat_endpoint_defaults_to_apply_chat_template(tmp_path, mock_callbacks, monkeypatch):
+def test_chat_endpoint_defaults_to_apply_chat_template(
+    tmp_path, mock_callbacks, monkeypatch
+):
     """local-chat-completions rejects plain strings; the harness builds messages
     only under --apply_chat_template, so a chat endpoint gets it by default."""
     seen = _unsafe_code_run(
@@ -1269,7 +1325,9 @@ def test_auto_detected_chat_endpoint_defaults_to_apply_chat_template(
 
 
 @pytest.mark.integration
-def test_completions_endpoint_keeps_apply_chat_template_off(tmp_path, mock_callbacks, monkeypatch):
+def test_completions_endpoint_keeps_apply_chat_template_off(
+    tmp_path, mock_callbacks, monkeypatch
+):
     seen = _unsafe_code_run(
         tmp_path, mock_callbacks, monkeypatch, parameters={"api_style": "completions"}
     )
@@ -1318,12 +1376,15 @@ def test_pinned_lmeval_chat_model_needs_structured_messages(lmeval):
 
 # ── Chat templating on a completions endpoint ─────────────────────────────────
 
-from _execution import build_model_args  # noqa: E402
-from _tasks import resolve_chat_template_mode  # noqa: E402
+from _execution import build_model_args
+from _tasks import resolve_chat_template_mode
 
 
 def test_chat_template_is_a_noop_without_the_flag_or_on_chat_endpoints():
-    assert resolve_chat_template_mode("completions", False, None, "None") == ("None", False)
+    assert resolve_chat_template_mode("completions", False, None, "None") == (
+        "None",
+        False,
+    )
     assert resolve_chat_template_mode("chat", True, None, "None") == ("None", False)
     assert resolve_chat_template_mode("chat", True, "org/m", "None") == ("None", False)
 
@@ -1344,11 +1405,17 @@ def test_chat_template_on_completions_needs_a_huggingface_tokenizer():
 
 
 def test_build_model_args_tokenized_requests_flag():
-    kw = dict(
-        base_url="http://h/v1/completions", model_name="m", num_concurrent=1,
-        max_retries=1, timeout_http=1, max_length=1, max_gen_toks=1,
-        tokenizer=None, tokenizer_backend="None",
-    )
+    kw = {
+        "base_url": "http://h/v1/completions",
+        "model_name": "m",
+        "num_concurrent": 1,
+        "max_retries": 1,
+        "timeout_http": 1,
+        "max_length": 1,
+        "max_gen_toks": 1,
+        "tokenizer": None,
+        "tokenizer_backend": "None",
+    }
     assert "tokenized_requests=False" in build_model_args(**kw)
     assert "tokenized_requests=True" in build_model_args(**kw, tokenized_requests=True)
 
@@ -1404,7 +1471,9 @@ def _offline_chat_tokenizer(path: Path) -> str:
 
 
 @pytest.mark.lmeval
-def test_pinned_lmeval_renders_the_template_only_with_tokenized_requests(tmp_path, lmeval):
+def test_pinned_lmeval_renders_the_template_only_with_tokenized_requests(
+    tmp_path, lmeval
+):
     """lm_eval 0.4.13 on local-completions: JSON string vs a rendered template.
 
     Documents why the adapter must send tokenized_requests=True here, and checks
