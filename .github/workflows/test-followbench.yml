@@ -25,4 +25,4 @@ jobs:
         run: uv pip install --system -r requirements.txt -r requirements-test.txt
       - name: Run tests
         working-directory: adapters/followbench
-        run: pytest tests/ -v
+        run: python -m pytest tests/ -v
