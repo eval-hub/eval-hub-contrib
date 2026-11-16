@@ -239,7 +239,7 @@ def test_guidellm_native_records_join_calibration(tmp_path, provider_id, metadat
     "document,provider_id,error",
     [
         ({"benchmarks": []}, None, "Cannot identify"),
-        ({"metadata": {"guidellm_version": "0.5.3"}}, None, "missing its benchmarks"),
+        ({"metadata": {"guidellm_version": "0.5.3"}}, None, "Cannot identify"),
         ({"metadata": {"guidellm_version": "0.5.3"}, "benchmarks": []}, "guidellm", "nonempty"),
         (
             {"metadata": {"guidellm_version": "0.5.3"}, "benchmarks": [{}, {}]},
@@ -532,3 +532,71 @@ def test_guidellm_complete_report_uses_actual_total_not_sampling_option():
         ],
     }
     assert extract_guidellm_records(document, "guidellm") == rows
+
+
+@pytest.mark.parametrize("provider_id", [None, "guidellm"])
+@pytest.mark.parametrize("timing_location", ["scheduler_metrics", "computed"])
+def test_guidellm_transient_requests_match_measurement_population(
+    tmp_path, provider_id, timing_location
+):
+    """Warmup/cooldown exports use the same overlapping requests as GuideLLM metrics."""
+    rows = [
+        {"request_id": "warm", "request_start_time": 1, "request_end_time": 9},
+        {"request_id": "left", "request_start_time": 9, "request_end_time": 10},
+        {"request_id": "middle", "request_start_time": 12, "request_end_time": 15},
+        {"request_id": "unknown-start", "request_start_time": None, "request_end_time": 20},
+        {"request_id": "right", "request_start_time": 20, "request_end_time": 21},
+        {"request_id": "cool", "request_start_time": 21, "request_end_time": 22},
+    ]
+    section = {"requests": {"successful": rows}, "metrics": {"request_totals": {"successful": 4}}}
+    if timing_location == "scheduler_metrics":
+        section["scheduler_metrics"] = {"measure_start_time": 10, "measure_end_time": 20}
+    else:
+        section.update(start_time=10, end_time=20)
+    document = {"metadata": {"guidellm_version": "0.5.3"}, "benchmarks": [section]}
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(document))
+    table = read_table(path, {"columns": {"sample_id": "request_id"}}, provider_id=provider_id)
+    assert table.rows == rows[1:5]
+    # A sampled list cannot pass merely because its total raw length matches the metric count.
+    section["requests"]["successful"] = rows[:3] + rows[-1:]
+    path.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match="sampled or inconsistent"):
+        read_table(path, {"columns": {"sample_id": "request_id"}}, provider_id=provider_id)
+
+
+@pytest.mark.parametrize("summary_name", ["a-summary.json", "z-summary.json"])
+@pytest.mark.parametrize("provider_id", [None, "guidellm"])
+def test_guidellm_metadata_only_summary_does_not_block_samples(tmp_path, summary_name, provider_id):
+    """Version metadata alone does not turn a summary into a malformed request report."""
+    (tmp_path / summary_name).write_text(json.dumps({"metadata": {"guidellm_version": "0.5.3"}}))
+    rows = [{"sample_id": "a", "prediction": 1}]
+    (tmp_path / "samples.json").write_text(json.dumps(rows))
+    assert read_table(tmp_path, provider_id=provider_id).rows == rows
+
+
+def test_all_skipped_summaries_are_reported(tmp_path):
+    for name, document in [
+        ("first.json", {"metadata": {"guidellm_version": "0.5.3"}}),
+        ("second.json", {"benchmarks": []}),
+    ]:
+        (tmp_path / name).write_text(json.dumps(document))
+    with pytest.raises(
+        ValueError, match="results_data_ref: first.json, second.json: Cannot identify"
+    ):
+        read_table(tmp_path, dataset="results_data_ref")
+
+
+@pytest.mark.parametrize("start,end", [(None, 20), (10, None), (20, 10), (True, 20)])
+def test_guidellm_invalid_measurement_window_is_rejected(start, end):
+    document = {
+        "benchmarks": [
+            {
+                "requests": {"successful": [{"request_id": "a"}]},
+                "metrics": {"request_totals": {"successful": 1}},
+                "scheduler_metrics": {"measure_start_time": start, "measure_end_time": end},
+            }
+        ]
+    }
+    with pytest.raises(ValueError, match="GuideLLM measurement"):
+        extract_guidellm_records(document, "guidellm")

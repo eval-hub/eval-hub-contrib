@@ -31,11 +31,16 @@ ROLES = {
 }
 
 
-def is_guidellm_report(document: dict, provider_id: str | None) -> bool:
-    """Recognize native reports without treating aggregate summaries as request data."""
+def has_guidellm_metadata(document: dict) -> bool:
+    """Read the native version marker consistently for detection and provider checks."""
     metadata = document.get("metadata")
     version = metadata.get("guidellm_version") if isinstance(metadata, dict) else None
-    if isinstance(version, str) and version.strip():
+    return isinstance(version, str) and bool(version.strip())
+
+
+def is_guidellm_report(document: dict, provider_id: str | None) -> bool:
+    """Recognize native reports without treating aggregate summaries as request data."""
+    if has_guidellm_metadata(document) and "benchmarks" in document:
         return True
     benchmarks = document.get("benchmarks")
     # Provider identity alone does not make every JSON artifact a native report.
@@ -58,10 +63,7 @@ def is_guidellm_report(document: dict, provider_id: str | None) -> bool:
 
 def extract_guidellm_records(document: dict, provider_id: str | None) -> list[dict]:
     """Extract the first strategy, matching the GuideLLM adapter's reported metrics."""
-    metadata = document.get("metadata")
-    version = metadata.get("guidellm_version") if isinstance(metadata, dict) else None
-    identified = isinstance(version, str) and bool(version.strip())
-    if identified and provider_id not in {None, "guidellm"}:
+    if has_guidellm_metadata(document) and provider_id not in {None, "guidellm"}:
         raise ValueError("GuideLLM report conflicts with the evaluation job provider")
     if "benchmarks" not in document:
         raise ValueError("GuideLLM report is missing its benchmarks array")
@@ -87,6 +89,26 @@ def extract_guidellm_records(document: dict, provider_id: str | None) -> list[di
             "GuideLLM report requires a positive integer metrics.request_totals.successful "
             "to verify complete per-request results"
         )
+    # Stored requests include transient phases; totals count only requests overlapping
+    # the measurement window. Match GuideLLM's get_within_range before comparing counts.
+    timings = benchmark.get("scheduler_metrics")
+    timings = timings if isinstance(timings, dict) else {}
+    start = timings.get("measure_start_time", benchmark.get("start_time"))
+    end = timings.get("measure_end_time", benchmark.get("end_time"))
+    if start is not None or end is not None:
+        start = numeric(start, "GuideLLM measurement start")
+        end = numeric(end, "GuideLLM measurement end")
+        if end < start:
+            raise ValueError("GuideLLM measurement end must not precede its start")
+        measured = []
+        for row in records:
+            finished = numeric(row.get("request_end_time"), "GuideLLM request_end_time")
+            began = row.get("request_start_time")
+            # GuideLLM uses completion time for requests with no start timestamp.
+            boundary = finished if began is None else numeric(began, "GuideLLM request_start_time")
+            if finished >= start and boundary <= end:
+                measured.append(row)
+        records = measured
     if len(records) != total:
         raise ValueError(
             f"GuideLLM report contains {len(records)} successful request records but "
@@ -244,7 +266,7 @@ def read_table(
                         records = extract_guidellm_records(obj, provider_id)
                     except ValueError as exc:
                         raise ValueError(f"{prefix}{path.name}: {exc}") from exc
-                elif "benchmarks" in obj:
+                elif "benchmarks" in obj or has_guidellm_metadata(obj):
                     # Skip unrecognized summaries when another file supplies samples.
                     # If no file is usable, preserve a source-specific error below.
                     unidentified_reports.append(path.name)
@@ -289,7 +311,7 @@ def read_table(
             )
         if unidentified_reports:
             raise ValueError(
-                f"{prefix}{unidentified_reports[0]}: Cannot identify the origin of nested "
+                f"{prefix}{', '.join(unidentified_reports)}: Cannot identify the origin of nested "
                 "results; supply supported per-sample records"
             )
         raise ValueError(

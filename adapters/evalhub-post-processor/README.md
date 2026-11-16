@@ -167,14 +167,18 @@ For `eval_job` references, the source benchmark's `provider_id` plus native repo
 markers identify GuideLLM; provider identity alone does not turn an unrelated
 aggregate summary into a request report. External references (S3, PVC, Git,
 Hugging Face, MLflow, or OCI) identify native reports through a nonempty
-`metadata.guidellm_version`.
+`metadata.guidellm_version` together with a `benchmarks` field. Version metadata
+alone is treated as a summary, allowing usable sibling sample files to be read.
 
 The reader selects `benchmarks[0].requests.successful`, including for default
 sweep and multi-rate/concurrency reports. This deliberately matches the GuideLLM
 adapter's `_parse_results`, which reports metrics from `benchmarks[0]`. Later
 strategies are not pooled or substituted if the first has no usable requests.
 No API field or JSONPath configuration is required. The selected section must
-contain a nonempty array of successful request objects. Its row count must equal
+contain a nonempty array of successful request objects. When measurement timestamps
+are present, the reader first selects requests overlapping that window using the
+same inclusive boundaries as GuideLLM. Warmup/cooldown-only requests are excluded;
+requests crossing either boundary remain included. The selected count must equal
 that strategy's positive integer `metrics.request_totals.successful`; missing or
 invalid totals and count mismatches fail with an explicit error. GuideLLM versions
 can persist only a random request sample while aggregate metrics cover the full
@@ -186,7 +190,8 @@ records were persisted. Duplicate selected sample IDs still fail normal validati
 JSON arrays, `samples`/`records` wrappers, single records with a usable sample ID,
 and JSONL inputs bypass GuideLLM extraction. Unidentified aggregate summaries
 alongside usable sample files are skipped regardless of file order. If no usable
-samples remain, the job fails with a source-specific error. Positively identified
+samples remain, the job fails with a source-specific error naming every skipped
+summary. Positively identified
 but malformed native reports still fail rather than silently discard data.
 
 Use the existing column mappings to select the desired request-level measurement:
