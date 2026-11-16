@@ -600,3 +600,37 @@ def test_guidellm_invalid_measurement_window_is_rejected(start, end):
     }
     with pytest.raises(ValueError, match="GuideLLM measurement"):
         extract_guidellm_records(document, "guidellm")
+
+
+@pytest.mark.parametrize("provider_id", [None, "guidellm"])
+@pytest.mark.parametrize("sibling_name", [None, "a-samples.json", "z-samples.json"])
+@pytest.mark.parametrize("columns", [{}, {"sample_id": "nonexistent"}])
+def test_native_guidellm_missing_identifier_mapping_is_never_skipped(
+    tmp_path, provider_id, sibling_name, columns
+):
+    """Extracted requests must fail explicitly, even if a sibling supplies usable samples."""
+    document = {
+        "metadata": {"guidellm_version": "0.5.3"},
+        "benchmarks": [
+            {
+                "requests": {"successful": [{"request_id": "native", "latency": 10}]},
+                "metrics": {"request_totals": {"successful": 1}},
+            }
+        ],
+    }
+    (tmp_path / "report.json").write_text(json.dumps(document))
+    if sibling_name:
+        row = {"sample_id": "sibling", "nonexistent": "sibling", "prediction": 2}
+        (tmp_path / sibling_name).write_text(json.dumps([row]))
+    with pytest.raises(
+        ValueError,
+        match=r"results_data_ref: report.json: GuideLLM .*data_config.columns.sample_id to request_id",
+    ):
+        read_table(
+            tmp_path, {"columns": columns}, provider_id=provider_id, dataset="results_data_ref"
+        )
+    # The documented mapping makes the same native report usable.
+    table = read_table(
+        tmp_path / "report.json", {"columns": {"sample_id": "request_id"}}, provider_id=provider_id
+    )
+    assert table.rows == document["benchmarks"][0]["requests"]["successful"]

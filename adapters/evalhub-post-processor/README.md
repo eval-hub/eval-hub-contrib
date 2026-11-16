@@ -194,6 +194,10 @@ samples remain, the job fails with a source-specific error naming every skipped
 summary. Positively identified
 but malformed native reports still fail rather than silently discard data.
 
+Recognized native reports with missing or incorrect sample-ID mappings fail with
+a file-specific error suggesting `columns.sample_id: request_id`, even when sibling
+files contain usable records. They are never silently skipped as summaries.
+
 Use the existing column mappings to select the desired request-level measurement:
 
 ```json

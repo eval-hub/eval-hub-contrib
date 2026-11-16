@@ -264,6 +264,13 @@ def read_table(
                 if is_guidellm_report(obj, provider_id):
                     try:
                         records = extract_guidellm_records(obj, provider_id)
+                        # A recognized report is sample data, never a skippable summary.
+                        if any(table.get(row, "sample_id") is None for row in records):
+                            raise ValueError(
+                                "GuideLLM request records are missing the mapped sample_id; "
+                                "set data_config.columns.sample_id to request_id "
+                                "(or the request identifier field in this report)"
+                            )
                     except ValueError as exc:
                         raise ValueError(f"{prefix}{path.name}: {exc}") from exc
                 elif "benchmarks" in obj or has_guidellm_metadata(obj):
