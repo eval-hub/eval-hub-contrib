@@ -126,8 +126,33 @@ The adapter reads `calibration_data_ref[].data_config` and `results_data_ref.dat
 | `format` | `auto` (default), `json`, `jsonl`, `csv`, or `parquet`; `.ndjson` files are also recognized |
 | `path` | Relative file or directory within the downloaded artifact to read |
 | `columns` | Maps canonical roles to source column names; dotted paths can access nested JSON fields |
-| `selection` | Constant benchmark/metric identity for a file that has no identity columns |
+| `selection` | Benchmark/provider/metric identity: filters external rows when identity columns exist, supplies missing identity, or overrides native identity for an `eval_job` target |
 | `value_mappings` | Explicit string-category-to-number maps for `prediction` or `label`; every present category must be declared |
+
+For external results, the selected rows must identify at most one benchmark and
+provider. All selected calibration rows, across every calibration file/reference,
+must be consistent with those result identities and with each other. Conflicting
+metadata raises a `Results data contains multiple ...` or `Calibration data
+contains multiple ...` error before calibration labels are joined by sample ID.
+Narrow the appropriate reference using `data_config.selection` or `data_config.path`.
+External selectors must use the values stored in the file, rather than service
+benchmark names. For example, for rows containing `benchmark_id: niah-single-noise`,
+use `selection: {"benchmark_id": "niah-single-noise"}` even if the evaluation service
+uses a different benchmark name. Null or empty-string selector values are treated
+as omitted; they do not erase native metadata or disable consistency checks.
+A nonempty selection matching no rows raises a direct error naming the results
+or indexed calibration reference. Identity-conflict errors also identify the
+calibration reference index. When selectors match but the target metric rejects
+the rows, the error names the metric mismatch rather than blaming selection.
+Files without identity metadata remain supported.
+
+For `eval_job` references, the source job supplies the target identity. Explicit
+selection retains its existing override behavior for framework-native row names;
+the resulting identity must still match the source job's benchmark, provider,
+and selected metric. Without an override, conflicting row identities are filtered.
+Zero-match diagnostics distinguish a conflicting eval-job override from native
+identity fields excluded by the target. Shared calibration references that select
+another benchmark are still skipped for the current benchmark.
 
 The standalone Eval Hub API exposes result mappings alongside the result source:
 
