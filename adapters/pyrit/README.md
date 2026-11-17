@@ -4,17 +4,32 @@ Wraps [PyRIT](https://github.com/Azure/PyRIT) (MIT license), Microsoft's Python
 Risk Identification Tool for generative AI, exposing a headless `pyrit_scan`
 benchmark against an EvalHub-provided OpenAI-compatible model endpoint.
 
-- **`pyrit-scan`** — run a named PyRIT scan scenario via `pyrit_scan run`
+- **`pyrit-scan`** — run a named PyRIT scenario via
+  `pyrit_scan run <scenario> --target openai_chat --start-server`
 
-**Status (RHAIRFE-3602):** scaffold + CI/image wiring. `PyritAdapter.run_benchmark_job`
-is not implemented yet — keep the PR Draft until the CLI bridge lands. EvalHub
-catalog / operator ConfigMap sync is **RHAIRFE-3603** (this `provider.yaml` is
-the source contract, not auto-mounted on contrib merge alone).
+**Status (RHAIRFE-3602):** CLI bridge implemented (`run_benchmark_job` →
+`pyrit_scan` + results fetch + `pass_rate` metrics). EvalHub catalog /
+operator ConfigMap sync remains **RHAIRFE-3603** (this `provider.yaml` is the
+source contract, not auto-mounted on contrib merge alone).
 
 ## Metric semantics
 
 `overall_score` / `pass_rate` = resisted objectives / `n_evaluated`
 (= `1 - attack_success_rate`). **Lower pass_rate ⇒ more vulnerable.**
+
+## How a job runs
+
+1. Write job-local `.env` (`OPENAI_CHAT_*`, optional `ADVERSARIAL_CHAT_*` /
+   `OBJECTIVE_SCORER_CHAT_*`) and `.pyrit_conf` (in-memory memory,
+   `auth_mode: none`).
+2. `pyrit_scan run <parameters.scenario> --target openai_chat --start-server`.
+3. Parse scenario result id from CLI output, `GET` detailed results from the
+   local backend, then `pyrit_scan stop-server`.
+4. Map attack outcomes → `pass_rate` / `n_evaluated` / `attack_success_rate`.
+
+Required job parameter: `parameters.scenario` (e.g. `foundry.red_team_agent`,
+`airt.leakage`, `garak.encoding`). Optional: `max_objectives` (→
+`--max-dataset-size`), `techniques`, attacker/scorer provider overrides.
 
 ## Layout
 
@@ -47,14 +62,14 @@ by default (no special `IMAGE_MAP` entry required).
 The Containerfile installs `unixODBC` (pyodbc) and a temporary Rust toolchain
 (`base2048` has no wheel on some arches), then removes build-only packages.
 `constraints.txt` pins the transitive tree from a successful image freeze.
-`pyrit_scan --help` reports that backend commands expect a running PyRIT
-server (`start-server` / `--server-url`) — the adapter CLI bridge must account
-for that when implementing `run_benchmark_job`.
+The adapter always passes `--start-server --auth-mode none` so the job does
+not need a pre-running backend or interactive auth.
 
-Local smoke (after implementation):
+Local smoke (needs a reachable OpenAI-compatible endpoint in `meta/job.json`):
 
 ```bash
-EVALHUB_MODE=local EVALHUB_JOB_SPEC_PATH=meta/job.json python main.py
+EVALHUB_MODE=local EVALHUB_JOB_SPEC_PATH=meta/job.json \
+  OPENAI_API_KEY=... python main.py
 ```
 
 ## Secrets

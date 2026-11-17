@@ -8,8 +8,9 @@
     "name": "meta-llama/llama-3.1-8b-instruct"
   },
   "parameters": {
-    "scenario": "prompt_injection",
-    "max_objectives": 5
+    "scenario": "foundry.red_team_agent",
+    "max_objectives": 5,
+    "techniques": ["easy"]
   },
   "callback_url": "http://localhost:8081"
 }
