@@ -5,7 +5,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-
 from main import OCICoordinates, SWEBenchAdapter
 
 # -- Sample data -------------------------------------------------------------
@@ -180,5 +179,118 @@ def test_configured_oci_export_failure_is_fatal(adapter, tmp_path):
     callbacks.create_oci_artifact.side_effect = RuntimeError("upload failed")
     with pytest.raises(RuntimeError, match="upload failed"):
         adapter._persist_oci_artifact(
-            [tmp_path / "sample_results.jsonl"], OCICoordinates(oci_host="quay.io", oci_repository="test/results", oci_tag="test"), callbacks
+            [tmp_path / "sample_results.jsonl"],
+            OCICoordinates(
+                oci_host="quay.io", oci_repository="test/results", oci_tag="test"
+            ),
+            callbacks,
         )
+
+
+@pytest.fixture
+def runner_runtime(adapter, tmp_path, monkeypatch):
+    """Exercise orchestration and export without cluster Jobs or dataset downloads."""
+    import sys
+    from types import SimpleNamespace
+
+    config = adapter.job_spec.model_copy(deep=True)
+    config.parameters.pop("k8s_namespace", None)
+    loader = MagicMock(
+        return_value={"a": {"instance_id": "a"}, "b": {"instance_id": "b"}}
+    )
+    monkeypatch.setattr(adapter, "_load_predictions", loader)
+    monkeypatch.setattr(adapter, "_get_results_dir", lambda config: tmp_path)
+    monkeypatch.setattr(adapter, "_current_namespace", lambda: "pod-namespace")
+    monkeypatch.setattr(
+        adapter, "_current_service_account", lambda: "discovered-runner"
+    )
+    runner = MagicMock(
+        return_value={
+            "a": {"completed": True, "resolved": True},
+            "b": {"completed": True, "resolved": False},
+        }
+    )
+    monkeypatch.setitem(
+        sys.modules, "k8s_runner", SimpleNamespace(run_instances_k8s=runner)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "swebench.harness.utils",
+        SimpleNamespace(
+            load_swebench_dataset=lambda *args, **kwargs: [
+                {"instance_id": "a"},
+                {"instance_id": "b"},
+            ]
+        ),
+    )
+    callbacks = MagicMock()
+    callbacks.mlflow.save.return_value = "run-1"
+    return config, callbacks, runner, loader
+
+
+@pytest.mark.parametrize("save_samples", [None, True, False])
+def test_mlflow_export_includes_native_samples_and_manifest(
+    adapter, runner_runtime, tmp_path, save_samples
+):
+    config, callbacks, runner, _ = runner_runtime
+    if save_samples is not None:
+        config.parameters["save_sample_results"] = save_samples
+    result = adapter.run_benchmark_job(config, callbacks)
+    runner.assert_called_once()
+    assert result.mlflow_run_id == "run-1"
+    artifacts = {a.path: a for a in callbacks.mlflow.save.call_args.kwargs["artifacts"]}
+    expected = {"summary.json", "results.json"}
+    if save_samples is not False:
+        expected |= {"sample_results.jsonl", "manifest.json"}
+        for name in ["sample_results.jsonl", "manifest.json"]:
+            assert artifacts[name].content == (tmp_path / name).read_bytes()
+        assert json.loads(artifacts["manifest.json"].content) == {
+            "primary_score": {"metric": "resolve_rate"},
+            "estimand": "mean",
+        }
+    assert set(artifacts) == expected
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_runner_receives_requested_namespace_and_service_account(
+    adapter, runner_runtime, explicit
+):
+    config, callbacks, runner, _ = runner_runtime
+    if explicit:
+        config.parameters.update(
+            k8s_namespace="requested-namespace", service_account="requested-runner"
+        )
+    result = adapter.run_benchmark_job(config, callbacks)
+    assert result.overall_score == 0.5
+    assert runner.call_args.kwargs["namespace"] == (
+        "requested-namespace" if explicit else "pod-namespace"
+    )
+    assert runner.call_args.kwargs["service_account"] == (
+        "requested-runner" if explicit else "discovered-runner"
+    )
+
+
+@pytest.mark.parametrize("value", ["false", 0, "0", None, 1, "true"])
+def test_invalid_sample_flag_fails_before_dataset_or_runner(
+    adapter, runner_runtime, value
+):
+    config, callbacks, runner, loader = runner_runtime
+    config.parameters["save_sample_results"] = value
+    result = adapter.run_benchmark_job(config, callbacks)
+    loader.assert_not_called()
+    runner.assert_not_called()
+    callbacks.mlflow.save.assert_not_called()
+    assert result.overall_score is None
+    assert any(
+        "must be a boolean" in str(call)
+        for call in callbacks.report_status.call_args_list
+    )
+
+
+def test_invalid_sample_flag_cannot_write_artifacts(adapter, tmp_path, monkeypatch):
+    config = adapter.job_spec.model_copy(deep=True)
+    config.parameters["save_sample_results"] = "false"
+    monkeypatch.setattr(adapter, "_get_results_dir", lambda config: tmp_path)
+    with pytest.raises(ValueError, match="must be a boolean"):
+        adapter._save_artifacts({}, {}, config)
+    assert not list(tmp_path.iterdir())

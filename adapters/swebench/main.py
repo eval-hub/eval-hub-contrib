@@ -40,12 +40,12 @@ from evalhub.adapter import (
     JobStatus,
     JobStatusUpdate,
     MessageInfo,
-    OCIArtifactSpec,
     OCIArtifactResult,
+    OCIArtifactSpec,
     configure_telemetry,
 )
-from evalhub.models.api import OCICoordinates
 from evalhub.adapter.mlflow import MlflowArtifact
+from evalhub.models.api import OCICoordinates
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -96,13 +96,17 @@ class SWEBenchAdapter(FrameworkAdapter):
             dataset_name = SUPPORTED_BENCHMARKS[benchmark_id]
             params = config.parameters or {}
 
+            self._sample_results_enabled(config)
+
             predictions_path = params.get("predictions_path")
             if predictions_path is None:
                 predictions_path = "gold"
             elif not predictions_path:
                 raise ValueError('predictions_path must not be empty - pass a file path or "gold"')
             k8s_registry = params.get("k8s_registry", "docker.io/swebench")
-            k8s_namespace = self._current_namespace()
+            # Explicit runner settings take precedence over pod/environment discovery.
+            k8s_namespace = params.get("k8s_namespace") or self._current_namespace()
+            service_account = params.get("service_account") or self._current_service_account()
             max_workers = int(params.get("max_workers", 10))
             timeout = int(params.get("timeout_per_instance", 1800))
             split = params.get("split", "test")
@@ -153,7 +157,7 @@ class SWEBenchAdapter(FrameworkAdapter):
                 timeout=timeout,
                 cleanup=True,
                 instance_image_tag=instance_image_tag,
-                service_account=self._current_service_account(),
+                service_account=service_account,
             )
 
             # -- Phase 4: POST_PROCESSING --
@@ -198,9 +202,11 @@ class SWEBenchAdapter(FrameworkAdapter):
                 MlflowArtifact("summary.json", summary_bytes, "application/json"),
                 MlflowArtifact("results.json", result_bytes, "application/json"),
             ]
-            if config.parameters.get("save_sample_results") is not False:
-                sample_file = next(path for path in artifact_files if path.name == "sample_results.jsonl")
-                artifacts.append(MlflowArtifact("sample_results.jsonl", sample_file.read_bytes(), "application/x-ndjson"))
+            # Export identical sample and metric-declaration bytes to both artifact stores.
+            for path in artifact_files:
+                if path.name in {"sample_results.jsonl", "manifest.json"}:
+                    content_type = "application/x-ndjson" if path.suffix == ".jsonl" else "application/json"
+                    artifacts.append(MlflowArtifact(path.name, path.read_bytes(), content_type))
             run_id = callbacks.mlflow.save(job_results, config, artifacts=artifacts)
             if run_id:
                 job_results.mlflow_run_id = run_id
@@ -233,6 +239,14 @@ class SWEBenchAdapter(FrameworkAdapter):
             )
 
     # -- Helpers ---------------------------------------------------------------
+
+    @staticmethod
+    def _sample_results_enabled(config: JobSpec) -> bool:
+        """Validate the opt-out before inference or artifact creation can publish samples."""
+        enabled = (config.parameters or {}).get("save_sample_results", True)
+        if type(enabled) is not bool:
+            raise ValueError("parameters.save_sample_results must be a boolean")
+        return enabled
 
     @staticmethod
     def _current_namespace() -> str:
@@ -387,6 +401,7 @@ class SWEBenchAdapter(FrameworkAdapter):
         self, results: dict, summary: dict, config: JobSpec
     ) -> list[Path]:
         """Save result artifacts to local files for OCI persistence."""
+        save_samples = self._sample_results_enabled(config)
         base_path = self._get_results_dir(config)
         base_path.mkdir(parents=True, exist_ok=True)
 
@@ -397,7 +412,7 @@ class SWEBenchAdapter(FrameworkAdapter):
         results_path.write_text(json.dumps(results, indent=2))
 
         files = [summary_path, results_path]
-        if config.parameters.get("save_sample_results") is not False:
+        if save_samples:
             # resolve_rate divides by completed instances; infrastructure failures are
             # diagnostics, not scored observations, and must not alter that denominator.
             records = [
