@@ -5,10 +5,9 @@
 # `pyrit_scan` (PyRIT 1.1.0) against an EvalHub-supplied OpenAI-compatible
 # chat endpoint.
 #
-# WIP (RHAIRFE-3602): adapter implementation is incomplete; this file is the
-# contrib contract that will be mirrored into eval-hub / the operator catalog
-# under RHAIRFE-3603. Do not treat this provider as production-ready until
-# pyrit_scan is wired in main.py.
+# RHAIRFE-3602: pyrit_scan CLI bridge lives in main.py. This file is the
+# contrib contract mirrored into eval-hub / the operator catalog under
+# RHAIRFE-3603 (catalog sync is separate from contrib merge).
 
 id: pyrit
 name: PyRIT
