@@ -252,6 +252,10 @@ def _build_pyrit_conf(*, env_file: Path, server_url: str = DEFAULT_SERVER_URL) -
         "silent": True,
         "env_files": [str(env_file)],
         "initializers": [
+            # Order matters: techniques must be registered before scenario
+            # catalog metadata is built (otherwise GET .../scenarios/catalog/*
+            # returns 500: AttackTechniqueRegistry is empty).
+            "technique",
             {"name": "target", "args": {"tags": ["default"]}},
             "scorer",
             "load_default_datasets",
@@ -431,23 +435,44 @@ def _compute_metrics(
 ) -> tuple[list[EvaluationResult], float | None, int]:
     """Map pyrit_scan / memory export JSON into pass_rate, n_evaluated, etc.
 
-    ``pass_rate`` = resisted / n_evaluated == ``1 - attack_success_rate``,
-    matching PyRIT's ``objective_achieved_rate`` (SUCCESS count / total).
+    Only ``success`` and ``failure`` outcomes are scored. ``error`` /
+    ``undetermined`` probes are excluded from ``n_evaluated`` so a broken
+    target/scorer endpoint cannot report ``pass_rate = 1.0``.
+
+    ``pass_rate`` = failures / n_evaluated (== ``1 - attack_success_rate``).
+    When nothing was scored (``n_evaluated == 0``), ``pass_rate`` is ``None``
+    (unknown) — never ``1.0``.
     """
     rows = _iter_attack_rows(scan_export)
+    pass_rate: float | None
+    attack_success_rate: float | None
+
     if rows:
-        n_evaluated = len(rows)
-        successes = sum(
-            1 for row in rows if str(row.get("outcome", "")).lower() == "success"
-        )
-        attack_success_rate = successes / n_evaluated
-        pass_rate = 1.0 - attack_success_rate
-    else:
-        asr_pct = scan_export.get("objective_achieved_rate")
-        n_evaluated = int(scan_export.get("total_attacks") or 0)
-        if asr_pct is None:
+        successes = 0
+        failures = 0
+        for row in rows:
+            outcome = str(row.get("outcome", "")).lower()
+            if outcome == "success":
+                successes += 1
+            elif outcome == "failure":
+                failures += 1
+        n_evaluated = successes + failures
+        if n_evaluated == 0:
+            # All rows were error/undetermined — not a resistance score.
             pass_rate = None
             attack_success_rate = None
+        else:
+            attack_success_rate = successes / n_evaluated
+            pass_rate = failures / n_evaluated
+    else:
+        # CLI summary fallback. Refuse to invent a perfect score when PyRIT
+        # reports zero attack results (asr 0% / n=0 would otherwise become 1.0).
+        n_evaluated = int(scan_export.get("total_attacks") or 0)
+        asr_pct = scan_export.get("objective_achieved_rate")
+        if n_evaluated <= 0 or asr_pct is None:
+            pass_rate = None
+            attack_success_rate = None
+            n_evaluated = 0
         else:
             attack_success_rate = float(asr_pct) / 100.0
             pass_rate = 1.0 - attack_success_rate

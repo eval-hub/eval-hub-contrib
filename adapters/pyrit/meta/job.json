@@ -9,8 +9,7 @@
   },
   "parameters": {
     "scenario": "foundry.red_team_agent",
-    "max_objectives": 5,
-    "techniques": ["easy"]
+    "max_objectives": 5
   },
   "callback_url": "http://localhost:8081"
 }

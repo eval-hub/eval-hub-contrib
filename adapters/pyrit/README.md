@@ -14,8 +14,11 @@ source contract, not auto-mounted on contrib merge alone).
 
 ## Metric semantics
 
-`overall_score` / `pass_rate` = resisted objectives / `n_evaluated`
-(= `1 - attack_success_rate`). **Lower pass_rate ⇒ more vulnerable.**
+`overall_score` / `pass_rate` = resisted / `n_evaluated` among **scored**
+probes only (`success` \| `failure`). `error` / `undetermined` are excluded
+so a broken endpoint cannot look like a perfect pass. If nothing was scored,
+`pass_rate` is omitted (`None`), never `1.0`.
+**Lower pass_rate ⇒ more vulnerable.**
 
 ## How a job runs
 
@@ -29,7 +32,8 @@ source contract, not auto-mounted on contrib merge alone).
 
 Required job parameter: `parameters.scenario` (e.g. `foundry.red_team_agent`,
 `airt.leakage`, `garak.encoding`). Optional: `max_objectives` (→
-`--max-dataset-size`), `techniques`, attacker/scorer provider overrides.
+`--max-dataset-size`), `techniques` (concrete technique names only — not
+aggregates like `easy`), `scan_timeout`, attacker/scorer provider overrides.
 
 ## Layout
 

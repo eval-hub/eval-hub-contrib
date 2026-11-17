@@ -181,6 +181,7 @@ def test_build_pyrit_env_and_conf(tmp_path, monkeypatch):
     assert conf["memory_db_type"] == "in_memory"
     assert conf["env_files"] == [str(env_file)]
     assert conf["server"]["auth_mode"] == "none"
+    assert conf["initializers"][0] == "technique"
     assert any(
         (isinstance(i, dict) and i.get("name") == "target") or i == "target"
         for i in conf["initializers"]
@@ -194,7 +195,7 @@ def test_build_scan_argv_and_scenario_validation(tmp_path):
     config.parameters = {
         "scenario": "foundry.red_team_agent",
         "max_objectives": 3,
-        "techniques": ["easy"],
+        "techniques": ["base64", "rot13"],
     }
     conf_path = tmp_path / ".pyrit_conf"
     argv = _build_scan_argv(config, conf_path)
@@ -208,7 +209,8 @@ def test_build_scan_argv_and_scenario_validation(tmp_path):
     assert "--start-server" in argv
     assert "--auth-mode" in argv
     assert argv[argv.index("--max-dataset-size") + 1] == "3"
-    assert "easy" in argv
+    assert "base64" in argv
+    assert "rot13" in argv
 
     config.parameters = {}
     with pytest.raises(ValueError, match="parameters.scenario"):
@@ -241,7 +243,7 @@ def test_parse_scenario_result_id():
 
 
 def test_compute_metrics_from_fixture():
-    """pass_rate == 1 - ASR from flattened attack_results outcomes."""
+    """pass_rate == failures / scored outcomes (success|failure only)."""
     export = _scan_export(successes=1, failures=3)
     results, pass_rate, n_evaluated = _compute_metrics(export)
     assert n_evaluated == 4
@@ -250,6 +252,42 @@ def test_compute_metrics_from_fixture():
     assert by_name["pass_rate"] == pytest.approx(0.75)
     assert by_name["attack_success_rate"] == pytest.approx(0.25)
     assert by_name["n_evaluated"] == 4
+
+
+def test_compute_metrics_excludes_error_and_undetermined():
+    """ERROR/UNDETERMINED must not inflate pass_rate (Julian high finding)."""
+    export = {
+        "attack_results": {
+            "baseline": [
+                {"outcome": "error", "objective": "a"},
+                {"outcome": "undetermined", "objective": "b"},
+                {"outcome": "error", "objective": "c"},
+            ]
+        }
+    }
+    results, pass_rate, n_evaluated = _compute_metrics(export)
+    assert n_evaluated == 0
+    assert pass_rate is None
+    by_name = {r.metric_name: r.metric_value for r in results}
+    assert "pass_rate" not in by_name
+    assert "attack_success_rate" not in by_name
+
+
+def test_compute_metrics_mixed_scored_and_errors():
+    """Only success/failure count toward n_evaluated when errors are present."""
+    export = {
+        "attack_results": {
+            "base64": [
+                {"outcome": "success", "objective": "a"},
+                {"outcome": "failure", "objective": "b"},
+                {"outcome": "error", "objective": "c"},
+                {"outcome": "undetermined", "objective": "d"},
+            ]
+        }
+    }
+    _results, pass_rate, n_evaluated = _compute_metrics(export)
+    assert n_evaluated == 2
+    assert pass_rate == pytest.approx(0.5)
 
 
 def test_compute_metrics_summary_fallback():
@@ -264,6 +302,20 @@ def test_compute_metrics_summary_fallback():
     assert pass_rate == pytest.approx(0.6)
     by_name = {r.metric_name: r.metric_value for r in results}
     assert by_name["attack_success_rate"] == pytest.approx(0.4)
+
+
+def test_compute_metrics_zero_attacks_is_unknown():
+    """n_evaluated=0 must not report pass_rate=1.0 (Julian medium finding)."""
+    export = {
+        "attack_results": {},
+        "objective_achieved_rate": 0,
+        "total_attacks": 0,
+    }
+    results, pass_rate, n_evaluated = _compute_metrics(export)
+    assert n_evaluated == 0
+    assert pass_rate is None
+    by_name = {r.metric_name: r.metric_value for r in results}
+    assert "pass_rate" not in by_name
 
 
 # ---------------------------------------------------------------------------
