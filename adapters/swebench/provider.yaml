@@ -97,16 +97,6 @@ parameters:
     description: >-
       Image tag for SWE-bench instance images. Use versioned tags
       (e.g. "v1") to avoid caching issues with some registries.
-  - name: service_account
-    type: string
-    required: false
-    default: null
-    description: >-
-      Kubernetes service account for evaluation Job pods. Overrides
-      SWE_BENCH_SERVICE_ACCOUNT and automatic pod-account discovery. Must be
-      bound to the swebench-eval-scc SecurityContextConstraints
-      (see rbac.yaml) so that the init container can run as root
-      to fix file permissions.
   - name: max_workers
     type: integer
     default: 10

@@ -97,6 +97,12 @@ class SWEBenchAdapter(FrameworkAdapter):
             params = config.parameters or {}
 
             self._sample_results_enabled(config)
+            # Service accounts affect admission privileges; callers must not select them.
+            if params.get("service_account") is not None:
+                raise ValueError(
+                    "parameters.service_account is not allowed; an administrator must "
+                    "configure SWE_BENCH_SERVICE_ACCOUNT on the adapter deployment"
+                )
 
             predictions_path = params.get("predictions_path")
             if predictions_path is None:
@@ -104,9 +110,9 @@ class SWEBenchAdapter(FrameworkAdapter):
             elif not predictions_path:
                 raise ValueError('predictions_path must not be empty - pass a file path or "gold"')
             k8s_registry = params.get("k8s_registry", "docker.io/swebench")
-            # Explicit runner settings take precedence over pod/environment discovery.
+            # Namespace is configurable; account identity comes only from trusted runtime settings.
             k8s_namespace = params.get("k8s_namespace") or self._current_namespace()
-            service_account = params.get("service_account") or self._current_service_account()
+            service_account = self._current_service_account()
             max_workers = int(params.get("max_workers", 10))
             timeout = int(params.get("timeout_per_instance", 1800))
             split = params.get("split", "test")

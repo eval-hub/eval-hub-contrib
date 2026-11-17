@@ -11,12 +11,10 @@ import json
 import logging
 import threading
 import time
-from pathlib import Path
 
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.client.rest import ApiException
-
 from swebench.harness.constants import (
     APPLY_PATCH_FAIL,
     APPLY_PATCH_PASS,
@@ -160,6 +158,9 @@ def _create_job(
                 spec=k8s_client.V1PodSpec(
                     restart_policy="Never",
                     service_account_name=service_account,
+                    # Model patches and test code need no Kubernetes API credentials.
+                    # Pod-level false overrides service-account automount defaults.
+                    automount_service_account_token=False,
                     # Init container runs as root to fix permissions
                     # on /testbed so the eval container can run as a
                     # non-root UID on OpenShift.

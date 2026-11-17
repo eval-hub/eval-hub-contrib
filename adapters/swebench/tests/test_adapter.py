@@ -252,22 +252,18 @@ def test_mlflow_export_includes_native_samples_and_manifest(
 
 
 @pytest.mark.parametrize("explicit", [False, True])
-def test_runner_receives_requested_namespace_and_service_account(
+def test_runner_receives_requested_namespace_and_trusted_service_account(
     adapter, runner_runtime, explicit
 ):
     config, callbacks, runner, _ = runner_runtime
     if explicit:
-        config.parameters.update(
-            k8s_namespace="requested-namespace", service_account="requested-runner"
-        )
+        config.parameters.update(k8s_namespace="requested-namespace")
     result = adapter.run_benchmark_job(config, callbacks)
     assert result.overall_score == 0.5
     assert runner.call_args.kwargs["namespace"] == (
         "requested-namespace" if explicit else "pod-namespace"
     )
-    assert runner.call_args.kwargs["service_account"] == (
-        "requested-runner" if explicit else "discovered-runner"
-    )
+    assert runner.call_args.kwargs["service_account"] == "discovered-runner"
 
 
 @pytest.mark.parametrize("value", ["false", 0, "0", None, 1, "true"])
@@ -294,3 +290,18 @@ def test_invalid_sample_flag_cannot_write_artifacts(adapter, tmp_path, monkeypat
     with pytest.raises(ValueError, match="must be a boolean"):
         adapter._save_artifacts({}, {}, config)
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("account", ["admin", "default", "", False])
+def test_job_cannot_select_child_service_account(adapter, runner_runtime, account):
+    config, callbacks, runner, loader = runner_runtime
+    config.parameters["service_account"] = account
+    result = adapter.run_benchmark_job(config, callbacks)
+    loader.assert_not_called()
+    runner.assert_not_called()
+    callbacks.mlflow.save.assert_not_called()
+    assert result.overall_score is None
+    assert any(
+        "parameters.service_account is not allowed" in str(call)
+        for call in callbacks.report_status.call_args_list
+    )
