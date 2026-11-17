@@ -135,7 +135,7 @@ disable service-account token automounting for both init and evaluation containe
 # Run tests
 cd adapters/swebench
 pip install -r requirements.txt -r requirements-test.txt
-pytest tests/ -v
+python -m pytest tests/ -v
 
 # Build container
 make image-swebench
@@ -144,6 +144,10 @@ make image-swebench
 EVALHUB_JOB_SPEC_PATH=adapters/swebench/meta/job.json \
   python adapters/swebench/main.py
 ```
+
+The `Test SWE-bench` GitHub Actions workflow runs the full unit and child-pod
+security suite on SWE-bench pull requests and pushes to `main`. These tests mock
+cluster execution and require no cluster credentials.
 
 ## Per-instance results
 
