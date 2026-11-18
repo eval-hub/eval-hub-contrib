@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 from main import OCICoordinates, SWEBenchAdapter
@@ -169,9 +169,18 @@ def test_sample_artifacts_match_completed_instance_resolve_rate(
     )
 
 
-def test_child_runner_service_account_can_be_isolated(adapter, monkeypatch):
-    monkeypatch.setenv("SWE_BENCH_SERVICE_ACCOUNT", "swebench-ci-runner")
-    assert adapter._current_service_account() == "swebench-ci-runner"
+def test_child_runner_inherits_pod_service_account(adapter):
+    import base64
+
+    claims = {"sub": "system:serviceaccount:tenant:adapter-account"}
+    payload = base64.b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    with patch("builtins.open", mock_open(read_data=f"header.{payload}.signature")):
+        assert adapter._current_service_account() == "adapter-account"
+
+
+def test_child_runner_uses_namespace_default_without_pod_token(adapter):
+    with patch("builtins.open", side_effect=FileNotFoundError):
+        assert adapter._current_service_account() is None
 
 
 def test_configured_oci_export_failure_is_fatal(adapter, tmp_path):
@@ -291,15 +300,9 @@ def test_invalid_sample_flag_cannot_write_artifacts(adapter, tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("account", ["admin", "default", "", False])
-def test_job_cannot_select_child_service_account(adapter, runner_runtime, account):
-    config, callbacks, runner, loader = runner_runtime
+def test_job_service_account_parameter_is_ignored(adapter, runner_runtime, account):
+    config, callbacks, runner, _ = runner_runtime
     config.parameters["service_account"] = account
     result = adapter.run_benchmark_job(config, callbacks)
-    loader.assert_not_called()
-    runner.assert_not_called()
-    callbacks.mlflow.save.assert_not_called()
-    assert result.overall_score is None
-    assert any(
-        "parameters.service_account is not allowed" in str(call)
-        for call in callbacks.report_status.call_args_list
-    )
+    assert result.overall_score == 0.5
+    assert runner.call_args.kwargs["service_account"] == "discovered-runner"

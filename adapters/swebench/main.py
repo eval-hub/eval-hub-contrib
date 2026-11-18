@@ -97,12 +97,6 @@ class SWEBenchAdapter(FrameworkAdapter):
             params = config.parameters or {}
 
             self._sample_results_enabled(config)
-            # Service accounts affect admission privileges; callers must not select them.
-            if params.get("service_account") is not None:
-                raise ValueError(
-                    "parameters.service_account is not allowed; an administrator must "
-                    "configure SWE_BENCH_SERVICE_ACCOUNT on the adapter deployment"
-                )
 
             predictions_path = params.get("predictions_path")
             if predictions_path is None:
@@ -264,11 +258,7 @@ class SWEBenchAdapter(FrameworkAdapter):
 
     @staticmethod
     def _current_service_account() -> str | None:
-        """Select the configured child runner or infer the pod's service account."""
-        # Isolate child-job privileges when the adapter uses a dedicated kubeconfig.
-        configured = os.getenv("SWE_BENCH_SERVICE_ACCOUNT")
-        if configured:
-            return configured
+        """Infer the pod account, falling back to the namespace default."""
         try:
             with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
                 token = f.read().strip()

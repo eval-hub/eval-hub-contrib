@@ -123,8 +123,9 @@ your tenant namespace and apply:
 sed 's/NAMESPACE/my-namespace/g' rbac.yaml | oc apply -f -
 ```
 
-An administrator should set `SWE_BENCH_SERVICE_ACCOUNT=swebench-eval` on the
-adapter deployment. Job parameters cannot select a service account. Child pods
+Child Jobs inherit the adapter pod service account when it can be discovered;
+otherwise Kubernetes uses the namespace default. Job parameters cannot select
+a service account. Child pods
 disable service-account token automounting for both init and evaluation containers.
 
 ## Local Development
@@ -160,9 +161,9 @@ Only boolean values are accepted; invalid flags fail before loading data or star
 SWE-bench's Kubernetes client honors `KUBECONFIG` when no in-cluster token is
 mounted. Child Jobs inherit the adapter pod namespace selected by eval-hub for
 the request tenant (`X-Tenant`); job parameters cannot override it. Outside a pod,
-the namespace falls back to `default`. The account comes only from the administrator-controlled
-`SWE_BENCH_SERVICE_ACCOUNT`, then pod-token discovery, then the namespace default.
-`parameters.service_account` is rejected before dataset loading or child-job
-creation. Child pods never automatically mount the account token.
+the namespace falls back to `default`. The account comes from pod-token discovery,
+then the namespace default.
+Job parameters cannot select the service account. Child pods never automatically
+mount the account token.
 All such credentials must be provisioned by the cluster, not copied from a laptop.
 Configured OCI upload errors fail the evaluation instead of discarding the export.
