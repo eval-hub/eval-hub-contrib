@@ -38,6 +38,7 @@ agent:
   hints:
     - "The model endpoint must support OpenAI-compatible chat completions (POST /v1/chat/completions)"
     - "Provide parameters.scenario with a pyrit_scan scenario id"
+    - "Optional attacker/scorer upstreams use model.auth.secret_ref role keys attacker_url/attacker_api-key and scorer_url/scorer_api-key (not plaintext job parameters)"
   result_interpretation:
     - "overall_score is pass_rate: resisted / n_evaluated among scored probes (success|failure only; error/undetermined excluded) (== 1 - attack_success_rate). LOWER means more vulnerable."
     - "n_evaluated counts scored objectives/probes only; pass_rate is omitted when n_evaluated is 0"
@@ -122,44 +123,17 @@ parameters:
     default: null
     description: >
       Optional OpenAI-compatible model id used as the PyRIT attacker /
-      converter. Analogous to promptfoo generation_provider. If unset,
-      PyRIT defaults apply (may require OPENAI_API_KEY).
-
-  - name: attacker_provider_url
-    type: string
-    default: null
-    description: >
-      Base URL of the OpenAI-compatible endpoint for attacker_provider.
-      If unset and attacker_provider is set, defaults to the target
-      model's URL.
-
-  - name: attacker_provider_api_key
-    type: string
-    default: null
-    description: >
-      API key for the attacker_provider endpoint. Resolution order: this
-      parameter, then ATTACKER_PROVIDER_API_KEY, then the target model's
-      API key.
+      adversarial chat target. Endpoint URL and API key come from
+      model.auth.secret_ref role keys `attacker_url` and `attacker_api-key`
+      (falling back to the target model connection). Do not pass plaintext
+      API keys as job parameters.
 
   - name: scorer_provider
     type: string
     default: null
     description: >
-      Optional OpenAI-compatible model id used as the PyRIT scorer / judge.
-      If unset, PyRIT defaults apply.
-
-  - name: scorer_provider_url
-    type: string
-    default: null
-    description: >
-      Base URL of the OpenAI-compatible endpoint for scorer_provider.
-      If unset and scorer_provider is set, defaults to the target
-      model's URL.
-
-  - name: scorer_provider_api_key
-    type: string
-    default: null
-    description: >
-      API key for the scorer_provider endpoint. Resolution order: this
-      parameter, then SCORER_PROVIDER_API_KEY, then the target model's
-      API key.
+      Optional OpenAI-compatible model id used as the PyRIT objective
+      scorer / judge. Endpoint URL and API key come from
+      model.auth.secret_ref role keys `scorer_url` and `scorer_api-key`
+      (falling back to the target model connection). Do not pass plaintext
+      API keys as job parameters.

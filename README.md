@@ -27,6 +27,7 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [ToolEval](https://github.com/OpenBMB/ToolBench) | `quay.io/evalhub/community-tooleval:latest` | ✓ | Tool-use sequencing / multi-step planning (tool server image separate) |
 | [FollowBench](https://github.com/YJiangcm/FollowBench) | `quay.io/evalhub/community-followbench:latest` | ✓ | Multi-level instruction-following benchmark with HSR, SSR, and CSL metrics |
 | [promptfoo](https://github.com/promptfoo/promptfoo) | `quay.io/evalhub/community-promptfoo:latest` | ✓ | Assertion-based prompt regression testing (`promptfoo-eval`) and adversarial red-team scanning (`promptfoo-redteam`) — 155 plugins covering the OWASP LLM Top 10 plus industry-vertical compliance packs (financial, medical, insurance, telecom, and more) |
+| [PyRIT](https://github.com/Azure/PyRIT) | `quay.io/evalhub/community-pyrit:latest` | ✓ | Microsoft PyRIT adversarial scanning via headless `pyrit_scan` (`pyrit-scan`) — scenario-based red-teaming with `pass_rate` (= 1 − attack success rate) |
 
 ## MLflow and OCI Export Tracking
 
@@ -46,6 +47,7 @@ MLflow `Yes` means both metrics and artifacts; `Yes (metrics only)` indicates pa
 | [mteb](adapters/mteb/main.py) | Yes | Yes |
 | [nemo-guardrails](adapters/nemo-guardrails/main.py) | Yes (metrics only) | No |
 | [promptfoo](adapters/promptfoo/main.py) | Yes | Yes |
+| [pyrit](adapters/pyrit/main.py) | Yes | Yes |
 | [ragas](adapters/ragas/main.py) | Yes | Yes |
 | [ruler](adapters/ruler/main.py) | Yes | Yes |
 | [skillevaluator](adapters/skillevaluator/main.py) | Yes | Yes |
@@ -304,6 +306,7 @@ make image-swebench
 make image-ruler
 make image-nemo-guardrails
 make image-promptfoo
+make image-pyrit
 make image-followbench
 
 # Build all adapter images
@@ -321,6 +324,7 @@ make test-swebench
 make test-ruler
 make test-nemo-guardrails
 make test-promptfoo
+make test-pyrit
 make tests
 
 # Push to registry
@@ -334,6 +338,7 @@ make push-swebench REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-ruler REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-nemo-guardrails REGISTRY=quay.io/your-org VERSION=v1.0.0
 make push-promptfoo REGISTRY=quay.io/your-org VERSION=v1.0.0
+make push-pyrit REGISTRY=quay.io/your-org VERSION=v1.0.0
 ```
 
 ## Publishing a Versioned Framework Image

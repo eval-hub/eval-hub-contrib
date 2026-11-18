@@ -16,8 +16,10 @@ Flow:
 4. Map attack outcomes to ``pass_rate`` (= resisted / n_evaluated ==
    ``1 - attack_success_rate``).
 
-Secrets (``attacker_provider_api_key``, ``scorer_provider_api_key``, and the
-target API key written into the job-local ``.env``) must never appear in
+Attacker/scorer upstreams and credentials are resolved from
+``model.auth.secret_ref`` role keys (``attacker_url`` / ``attacker_api-key``,
+``scorer_url`` / ``scorer_api-key``), not from plaintext job parameters.
+The target API key written into the job-local ``.env`` must never appear in
 ``additional_info``, MLflow params, or OCI artifacts — only the scan
 results JSON is exported.
 """
@@ -39,6 +41,7 @@ import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
 import yaml
 from evalhub.adapter import (
     DefaultCallbacks,
@@ -54,7 +57,7 @@ from evalhub.adapter import (
     OCIArtifactSpec,
     configure_telemetry,
 )
-from evalhub.adapter.auth import resolve_model_credentials
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 from evalhub.adapter.mlflow import MlflowArtifact
 from evalhub.adapter.models.cards import (
     EnvironmentCardMetadata,
@@ -75,8 +78,9 @@ DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 DEFAULT_SCAN_TIMEOUT_SECONDS = 7_200
 SUPPORTED_BENCHMARKS = frozenset({"pyrit-scan"})
 
-# Job parameters that must never appear in additional_info, MLflow params,
-# or OCI artifacts (plaintext credentials). Keep in sync with provider.yaml.
+# Legacy plaintext credential parameter names. Rejected if present so jobs
+# cannot bypass model.auth.secret_ref role routing. Keep denylisted so any
+# residual values never appear in additional_info / MLflow / OCI.
 SECRET_PARAM_NAMES: frozenset[str] = frozenset(
     {
         "attacker_provider_api_key",
@@ -145,27 +149,48 @@ def _normalize_openai_base_url(url: str) -> str:
     return f"{cleaned}/v1"
 
 
-def _resolve_aux_api_key(
-    *,
-    param_key: str | None,
-    env_name: str,
-    explicit_url: str | None,
-    target_api_key: str,
-) -> str:
-    """Resolve attacker/scorer API key with promptfoo-style fallthrough."""
-    if param_key and str(param_key).strip():
-        return str(param_key).strip()
-    env_key = os.getenv(env_name, "").strip()
-    if env_key:
-        return env_key
-    if explicit_url:
-        logger.warning(
-            "No API key for auxiliary endpoint %s — not forwarding the "
-            "target model credential to an explicit third-party URL.",
-            explicit_url,
+def _reject_plaintext_aux_secrets(params: dict[str, Any] | None) -> None:
+    """Fail fast if a job still passes plaintext attacker/scorer API keys."""
+    if not params:
+        return
+    present = sorted(name for name in SECRET_PARAM_NAMES if params.get(name))
+    if present:
+        raise ValueError(
+            "plaintext credential parameters are not supported: "
+            + ", ".join(present)
+            + ". Configure attacker_api-key / scorer_api-key (and optional "
+            "attacker_url / scorer_url) in model.auth.secret_ref instead."
         )
-        return "not-required"
-    return target_api_key
+
+
+def _role_connection(config: JobSpec, role: str, *, target_api_key: str) -> tuple[str, str]:
+    """Resolve an auxiliary role URL/key from model.auth.secret_ref.
+
+    Keys read from the projected secret directory:
+    - ``{role}_url``
+    - ``{role}_api-key``
+
+    When the role URL is omitted, falls back to the target model URL. When the
+    role API key is omitted, falls back to the target model's key (or
+    ``not-required``).
+    """
+    role_key = read_model_auth_key(f"{role}_api-key")
+    role_url = read_model_auth_key(f"{role}_url")
+    if role_url and not role_key:
+        raise ValueError(
+            f"{role}_url in model.auth.secret_ref requires {role}_api-key"
+        )
+    base = (role_url or config.model.url or "").strip()
+    endpoint = _normalize_openai_base_url(base)
+    api_key = role_key or target_api_key or "not-required"
+    return endpoint, api_key
+
+
+def _resolve_scan_timeout(params: dict[str, Any] | None) -> int:
+    """Return scan_timeout seconds, treating missing/null as the default."""
+    if not params or params.get("scan_timeout") is None:
+        return DEFAULT_SCAN_TIMEOUT_SECONDS
+    return int(params["scan_timeout"])
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +199,9 @@ def _resolve_aux_api_key(
 
 
 def _build_pyrit_env(config: JobSpec, work_dir: Path, api_key: str) -> dict[str, str]:
-    """Build job-local env with OPENAI_CHAT_* (+ optional attacker/scorer) for pyrit_scan."""
+    """Build job-local env with OPENAI_CHAT_* (+ attacker/scorer roles) for pyrit_scan."""
     params = config.parameters or {}
+    _reject_plaintext_aux_secrets(params)
     endpoint = _normalize_openai_base_url(config.model.url or "")
     if not config.model.name:
         raise ValueError("config.model.name is required for the pyrit adapter")
@@ -187,43 +213,23 @@ def _build_pyrit_env(config: JobSpec, work_dir: Path, api_key: str) -> dict[str,
     env["OPENAI_CHAT_KEY"] = api_key
     env["OPENAI_CHAT_MODEL"] = config.model.name
 
-    attacker_model = params.get("attacker_provider")
-    if attacker_model:
-        attacker_url = params.get("attacker_provider_url") or endpoint
-        attacker_url = _normalize_openai_base_url(str(attacker_url))
-        attacker_key = _resolve_aux_api_key(
-            param_key=params.get("attacker_provider_api_key"),
-            env_name="ATTACKER_PROVIDER_API_KEY",
-            explicit_url=params.get("attacker_provider_url"),
-            target_api_key=api_key,
-        )
-        env["ADVERSARIAL_CHAT_ENDPOINT"] = attacker_url
-        env["ADVERSARIAL_CHAT_KEY"] = attacker_key
-        env["ADVERSARIAL_CHAT_MODEL"] = str(attacker_model)
-    else:
-        # Many multi-turn techniques need an adversarial chat target; default
-        # to the objective target so single-endpoint jobs still start.
-        env["ADVERSARIAL_CHAT_ENDPOINT"] = endpoint
-        env["ADVERSARIAL_CHAT_KEY"] = api_key
-        env["ADVERSARIAL_CHAT_MODEL"] = config.model.name
+    attacker_url, attacker_key = _role_connection(
+        config, "attacker", target_api_key=api_key
+    )
+    env["ADVERSARIAL_CHAT_ENDPOINT"] = attacker_url
+    env["ADVERSARIAL_CHAT_KEY"] = attacker_key
+    env["ADVERSARIAL_CHAT_MODEL"] = str(
+        params.get("attacker_provider") or config.model.name
+    )
 
-    scorer_model = params.get("scorer_provider")
-    if scorer_model:
-        scorer_url = params.get("scorer_provider_url") or endpoint
-        scorer_url = _normalize_openai_base_url(str(scorer_url))
-        scorer_key = _resolve_aux_api_key(
-            param_key=params.get("scorer_provider_api_key"),
-            env_name="SCORER_PROVIDER_API_KEY",
-            explicit_url=params.get("scorer_provider_url"),
-            target_api_key=api_key,
-        )
-        env["OBJECTIVE_SCORER_CHAT_ENDPOINT"] = scorer_url
-        env["OBJECTIVE_SCORER_CHAT_KEY"] = scorer_key
-        env["OBJECTIVE_SCORER_CHAT_MODEL"] = str(scorer_model)
-    else:
-        env["OBJECTIVE_SCORER_CHAT_ENDPOINT"] = endpoint
-        env["OBJECTIVE_SCORER_CHAT_KEY"] = api_key
-        env["OBJECTIVE_SCORER_CHAT_MODEL"] = config.model.name
+    scorer_url, scorer_key = _role_connection(
+        config, "scorer", target_api_key=api_key
+    )
+    env["OBJECTIVE_SCORER_CHAT_ENDPOINT"] = scorer_url
+    env["OBJECTIVE_SCORER_CHAT_KEY"] = scorer_key
+    env["OBJECTIVE_SCORER_CHAT_MODEL"] = str(
+        params.get("scorer_provider") or config.model.name
+    )
 
     return env
 
@@ -642,11 +648,7 @@ class PyritAdapter(FrameworkAdapter):
                 )
             )
 
-            scan_timeout = int(
-                (config.parameters or {}).get(
-                    "scan_timeout", DEFAULT_SCAN_TIMEOUT_SECONDS
-                )
-            )
+            scan_timeout = _resolve_scan_timeout(config.parameters)
             completed = _run_pyrit_scan(
                 argv, env=env, work_dir=work_dir, timeout=scan_timeout
             )
@@ -731,21 +733,20 @@ class PyritAdapter(FrameworkAdapter):
             eval_card = _build_eval_card(config, pass_rate, n_evaluated)
             env_card = _build_env_card(config)
 
-            callbacks.report_status(
-                JobStatusUpdate(
-                    status=JobStatus.RUNNING,
-                    phase=JobPhase.PERSISTING_ARTIFACTS,
-                    progress=0.95,
-                    message=MessageInfo(
-                        message="Persisting pyrit artifacts",
-                        message_code="persisting_artifacts",
-                    ),
-                )
-            )
-
             oci_artifact = None
             oci_exports = config.exports.oci if config.exports else None
             if oci_exports is not None:
+                callbacks.report_status(
+                    JobStatusUpdate(
+                        status=JobStatus.RUNNING,
+                        phase=JobPhase.PERSISTING_ARTIFACTS,
+                        progress=0.95,
+                        message=MessageInfo(
+                            message="Persisting pyrit artifacts",
+                            message_code="persisting_artifacts",
+                        ),
+                    )
+                )
                 # Export ONLY scan_results.json — never work_dir (.env holds
                 # plaintext API keys for target/attacker/scorer).
                 artifact_dir = work_dir / "artifact"
