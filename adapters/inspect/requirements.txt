@@ -5,7 +5,7 @@
 eval-hub-sdk[adapter]~=1.0.7
 inspect-ai==0.3.278
 openai==3.24.0
-inspect-evals[math,bfcl]==0.26.0
+inspect-evals[math,bfcl,agentdojo]==0.26.0
 inspect-petri==3.1.1
 petri-bloom==0.2.6
 # Required by inspect_evals/makemesay for word tokenization and lemmatization.
