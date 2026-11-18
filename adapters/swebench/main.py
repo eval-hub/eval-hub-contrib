@@ -171,14 +171,15 @@ class SWEBenchAdapter(FrameworkAdapter):
                 results, config
             )
 
+            # Local files and either remote export share one persistence phase.
+            callbacks.report_status(
+                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
+            )
             artifact_files = self._save_artifacts(results, summary, config)
 
             oci_artifact: OCIArtifactResult | None = None
             oci_exports = config.exports.oci if config.exports else None
             if oci_exports is not None:
-                callbacks.report_status(
-                    JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
-                )
                 oci_artifact = self._persist_oci_artifact(
                     artifact_files, oci_exports.coordinates, callbacks
                 )
@@ -418,6 +419,10 @@ class SWEBenchAdapter(FrameworkAdapter):
             manifest_path = base_path / "manifest.json"
             manifest_path.write_text(json.dumps({"primary_score": {"metric": "resolve_rate"}, "estimand": "mean"}))
             files.extend([sample_path, manifest_path])
+        else:
+            # A reused local results directory must not expose samples from an earlier run.
+            for name in ("sample_results.jsonl", "manifest.json"):
+                (base_path / name).unlink(missing_ok=True)
         logger.info("Artifacts saved to %s", base_path)
         return files
 

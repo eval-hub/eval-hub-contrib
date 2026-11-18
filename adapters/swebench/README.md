@@ -115,12 +115,15 @@ container that runs as root to fix permissions, then the eval container
 runs as UID 1001.  On OpenShift the service account needs the `anyuid`
 SCC for the init container.
 
-The included `rbac.yaml` creates a `swebench-eval` service account
-with all necessary RBAC and SCC bindings.  Replace `NAMESPACE` with
-your tenant namespace and apply:
+The included `rbac.yaml` grants Job/pod access and the `anyuid` SCC to the
+existing `evalhub-evalhub-opendatahub-job` service account; it does not create
+a service account. The adapter must run as this account, or you must update both
+binding subjects to match its account, which child Jobs inherit. Replace
+`NAMESPACE` with your tenant namespace and apply (requires cluster-admin for
+the cluster-scoped SCC binding):
 
 ```bash
-sed 's/NAMESPACE/my-namespace/g' rbac.yaml | oc apply -f -
+sed 's/NAMESPACE/my-namespace/g' rbac.yaml | oc apply -n my-namespace -f -
 ```
 
 Child Jobs inherit the adapter pod service account when it can be discovered;
@@ -156,8 +159,13 @@ When at least one instance completes, their mean matches the aggregate resolve
 rate. Incomplete infrastructure runs remain in diagnostic artifacts and are
 excluded from scored observations. If none complete, the aggregate falls back to
 0.0, but the sample file is empty and cannot produce a confidence interval.
+If no prediction IDs match the selected dataset, the adapter instead returns 0.0
+before writing artifacts or invoking OCI/MLflow exporters; that run creates no
+sample file or artifact reference. On a reused local path, any files from a prior
+run are not outputs of this no-match run.
 OCI and MLflow exports include the same JSONL bytes and primary-metric manifest.
-Set `parameters.save_sample_results: false` to disable this additional export.
+Set `parameters.save_sample_results: false` to disable this additional export
+and remove adapter-owned sample/manifest files from a reused results directory.
 Only boolean values are accepted; invalid flags fail before loading data or starting Jobs.
 
 SWE-bench's Kubernetes client honors `KUBECONFIG` when no in-cluster token is

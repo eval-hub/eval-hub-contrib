@@ -7,7 +7,7 @@
 # permissions to that service account.
 #
 # Usage:
-#   sed 's/NAMESPACE/my-tenant-namespace/g' rbac.yaml | oc apply -f -
+#   sed 's/NAMESPACE/my-tenant-namespace/g' rbac.yaml | oc apply -n my-tenant-namespace -f -
 #
 # Replace NAMESPACE below with your eval-hub tenant namespace.
 

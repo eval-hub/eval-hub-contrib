@@ -161,7 +161,9 @@ def test_sample_artifacts_match_completed_instance_resolve_rate(
         json.loads(line)
         for line in (tmp_path / "sample_results.jsonl").read_text().splitlines()
     ]
-    assert [row["sample_id"] for row in rows] == ["a", "b"]
+    assert {
+        row["sample_id"]: (row["instance_id"], row["resolve_rate"]) for row in rows
+    } == {"a": ("a", 1.0), "b": ("b", 0.0)}
     assert sum(row["resolve_rate"] for row in rows) / len(rows) == score == 0.5
     assert (
         json.loads((tmp_path / "manifest.json").read_text())["primary_score"]["metric"]
@@ -183,7 +185,9 @@ def test_child_runner_uses_namespace_default_without_pod_token(adapter):
         assert adapter._current_service_account() is None
 
 
-def test_configured_oci_export_failure_preserves_evaluation(adapter, runner_runtime, caplog):
+def test_configured_oci_export_failure_preserves_evaluation(
+    adapter, runner_runtime, caplog
+):
     from types import SimpleNamespace
 
     config, callbacks, runner, _ = runner_runtime
@@ -191,7 +195,9 @@ def test_configured_oci_export_failure_preserves_evaluation(adapter, runner_runt
         oci_host="quay.io", oci_repository="test/results", oci_tag="test"
     )
     config = config.model_copy(
-        update={"exports": SimpleNamespace(oci=SimpleNamespace(coordinates=coordinates))}
+        update={
+            "exports": SimpleNamespace(oci=SimpleNamespace(coordinates=coordinates))
+        }
     )
     callbacks.create_oci_artifact.side_effect = RuntimeError("upload failed")
 
@@ -360,12 +366,17 @@ def test_oci_rerun_exports_only_current_artifacts(adapter, tmp_path, monkeypatch
         adapter._persist_oci_artifact(files, coordinates, callbacks)
 
     assert set(uploaded[0]) == {
-        "summary.json", "results.json", "sample_results.jsonl", "manifest.json"
+        "summary.json",
+        "results.json",
+        "sample_results.jsonl",
+        "manifest.json",
     }
     assert json.loads(uploaded[0]["sample_results.jsonl"])["sample_id"] == "old"
     assert set(uploaded[1]) == {"summary.json", "results.json"}
     assert set(json.loads(uploaded[1]["results.json"])) == {"new"}
-    assert (tmp_path / "sample_results.jsonl").exists()
+    assert not (tmp_path / "sample_results.jsonl").exists()
+    assert not (tmp_path / "manifest.json").exists()
+    assert (tmp_path / "unrelated.txt").exists()
     assert staging_paths[0] != staging_paths[1]
     assert all(not path.exists() for path in staging_paths)
 
@@ -418,3 +429,77 @@ def test_missing_mlflow_run_id_warns_only_for_configured_export(
     assert result.overall_score == 0.5
     assert result.mlflow_run_id is None
     assert ("no run ID was returned" in caplog.text) == bool(experiment)
+
+
+@pytest.mark.parametrize("oci", [False, True])
+@pytest.mark.parametrize("mlflow", [False, True])
+def test_persistence_phase_precedes_local_and_remote_artifacts(
+    adapter, runner_runtime, monkeypatch, oci, mlflow
+):
+    from types import SimpleNamespace
+
+    from main import JobPhase
+
+    config, callbacks, _, _ = runner_runtime
+    config.experiment_name = "experiment" if mlflow else None
+    if oci:
+        config = config.model_copy(
+            update={
+                "exports": SimpleNamespace(
+                    oci=SimpleNamespace(
+                        coordinates=OCICoordinates(
+                            oci_host="quay.io",
+                            oci_repository="test/results",
+                            oci_tag="test",
+                        )
+                    )
+                )
+            }
+        )
+    callbacks.create_oci_artifact.return_value = None
+    save_artifacts = adapter._save_artifacts
+
+    def check_phase():
+        phases = [call.args[0].phase for call in callbacks.report_status.call_args_list]
+        assert phases.count(JobPhase.PERSISTING_ARTIFACTS) == 1
+        assert phases[-1] == JobPhase.PERSISTING_ARTIFACTS
+        assert phases.index(JobPhase.POST_PROCESSING) < phases.index(
+            JobPhase.PERSISTING_ARTIFACTS
+        )
+
+    def save_with_phase(*args):
+        check_phase()
+        return save_artifacts(*args)
+
+    monkeypatch.setattr(adapter, "_save_artifacts", save_with_phase)
+    callbacks.create_oci_artifact.side_effect = lambda spec: check_phase()
+    callbacks.mlflow.save.side_effect = lambda *args, **kwargs: check_phase()
+    result = adapter.run_benchmark_job(config, callbacks)
+    assert result.overall_score == 0.5
+    check_phase()
+
+
+def test_no_matching_instances_skips_artifacts_and_exports(
+    adapter, runner_runtime, tmp_path
+):
+    config, callbacks, runner, loader = runner_runtime
+    loader.return_value = {"not-in-dataset": {"instance_id": "not-in-dataset"}}
+    result = adapter.run_benchmark_job(config, callbacks)
+    assert result.overall_score == 0.0
+    assert result.num_examples_evaluated == 0
+    assert result.oci_artifact is None
+    assert result.mlflow_run_id is None
+    assert not list(tmp_path.iterdir())
+    runner.assert_not_called()
+    callbacks.create_oci_artifact.assert_not_called()
+    callbacks.mlflow.save.assert_not_called()
+
+
+def test_no_completed_instances_writes_empty_samples(adapter, runner_runtime, tmp_path):
+    config, callbacks, runner, _ = runner_runtime
+    runner.return_value = {"a": {"completed": False, "resolved": False}}
+    result = adapter.run_benchmark_job(config, callbacks)
+    assert result.overall_score == 0.0
+    assert (tmp_path / "sample_results.jsonl").read_text() == ""
+    assert (tmp_path / "manifest.json").exists()
+    callbacks.mlflow.save.assert_called_once()

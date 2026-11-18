@@ -316,7 +316,17 @@ def run_instance_k8s(
         logger.info("Created job %s for %s", job_name, instance_id)
     except ApiException as e:
         if e.status == 409:
-            logger.info("Job %s already exists, waiting for it", job_name)
+            # A retry may encounter a Job created before token automounting was disabled.
+            try:
+                existing = batch_v1.read_namespaced_job(job_name, namespace)
+            except ApiException as read_error:
+                logger.error("Cannot verify existing job %s: %s", job_name, read_error.reason)
+                return {"completed": False, "resolved": False}
+            if existing.spec.template.spec.automount_service_account_token is not False:
+                logger.error("Refusing existing job %s without explicit token protection", job_name)
+                _delete_job(batch_v1, job_name, namespace)
+                return {"completed": False, "resolved": False}
+            logger.info("Job %s already exists with token protection, waiting for it", job_name)
         else:
             logger.error("Error creating job %s: %s", job_name, e.reason)
             return {"completed": False, "resolved": False}
