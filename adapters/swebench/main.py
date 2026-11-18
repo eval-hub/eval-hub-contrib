@@ -440,13 +440,17 @@ class SWEBenchAdapter(FrameworkAdapter):
         if not files:
             return None
 
-        # A configured export must finish successfully before results are reported.
-        artifact_dir = files[0].parent
-        result = callbacks.create_oci_artifact(
-            OCIArtifactSpec(files_path=artifact_dir, coordinates=coordinates)
-        )
-        logger.info("OCI artifact created from %s", artifact_dir)
-        return result
+        # Export availability must not discard successfully computed evaluation scores.
+        try:
+            artifact_dir = files[0].parent
+            result = callbacks.create_oci_artifact(
+                OCIArtifactSpec(files_path=artifact_dir, coordinates=coordinates)
+            )
+            logger.info("OCI artifact created from %s", artifact_dir)
+            return result
+        except Exception as e:
+            logger.warning("Failed to create OCI artifact; evaluation results are preserved: %s", e)
+            return None
 
     def _empty_results(self, config: JobSpec, start_time: float) -> JobResults:
         """Return empty results when no instances to evaluate."""

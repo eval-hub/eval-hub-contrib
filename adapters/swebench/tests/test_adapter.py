@@ -183,17 +183,33 @@ def test_child_runner_uses_namespace_default_without_pod_token(adapter):
         assert adapter._current_service_account() is None
 
 
-def test_configured_oci_export_failure_is_fatal(adapter, tmp_path):
-    callbacks = MagicMock()
+def test_configured_oci_export_failure_preserves_evaluation(adapter, runner_runtime, caplog):
+    from types import SimpleNamespace
+
+    config, callbacks, runner, _ = runner_runtime
+    coordinates = OCICoordinates(
+        oci_host="quay.io", oci_repository="test/results", oci_tag="test"
+    )
+    config = config.model_copy(
+        update={"exports": SimpleNamespace(oci=SimpleNamespace(coordinates=coordinates))}
+    )
     callbacks.create_oci_artifact.side_effect = RuntimeError("upload failed")
-    with pytest.raises(RuntimeError, match="upload failed"):
-        adapter._persist_oci_artifact(
-            [tmp_path / "sample_results.jsonl"],
-            OCICoordinates(
-                oci_host="quay.io", oci_repository="test/results", oci_tag="test"
-            ),
-            callbacks,
-        )
+
+    result = adapter.run_benchmark_job(config, callbacks)
+
+    runner.assert_called_once()
+    callbacks.create_oci_artifact.assert_called_once()
+    assert result.overall_score == 0.5
+    assert result.num_examples_evaluated == 2
+    assert result.oci_artifact is None
+    assert result.mlflow_run_id == "run-1"
+    callbacks.mlflow.save.assert_called_once()
+    assert "Failed to create OCI artifact" in caplog.text
+    assert "upload failed" in caplog.text
+    assert not any(
+        "failed" == str(call.args[0].status).lower()
+        for call in callbacks.report_status.call_args_list
+    )
 
 
 @pytest.fixture

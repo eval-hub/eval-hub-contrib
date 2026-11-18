@@ -166,4 +166,5 @@ then the namespace default.
 Job parameters cannot select the service account. Child pods never automatically
 mount the account token.
 All such credentials must be provisioned by the cluster, not copied from a laptop.
-Configured OCI upload errors fail the evaluation instead of discarding the export.
+OCI upload errors are logged as warnings; computed scores are preserved, but the
+OCI artifact reference is unavailable if the export fails.
