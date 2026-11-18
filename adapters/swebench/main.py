@@ -98,7 +98,7 @@ class SWEBenchAdapter(FrameworkAdapter):
             dataset_name = SUPPORTED_BENCHMARKS[benchmark_id]
             params = config.parameters or {}
 
-            self._sample_results_enabled(config)
+            save_samples = self._sample_results_enabled(config)
 
             predictions_path = params.get("predictions_path")
             if predictions_path is None:
@@ -185,7 +185,7 @@ class SWEBenchAdapter(FrameworkAdapter):
                     JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
                 )
                 oci_artifact = self._persist_oci_artifact(
-                    artifact_files, oci_exports.coordinates, callbacks
+                    artifact_files, oci_exports.coordinates, callbacks, fail_on_error=save_samples
                 )
 
             duration = time.time() - start_time
@@ -218,6 +218,8 @@ class SWEBenchAdapter(FrameworkAdapter):
             if run_id:
                 job_results.mlflow_run_id = run_id
             elif config.experiment_name:
+                if save_samples:
+                    raise RuntimeError("MLflow per-sample results export returned no run ID")
                 logger.warning(
                     "MLflow experiment is configured but no run ID was returned; "
                     "MLflow results cannot be resolved from this evaluation"
@@ -244,8 +246,8 @@ class SWEBenchAdapter(FrameworkAdapter):
 
     @staticmethod
     def _sample_results_enabled(config: JobSpec) -> bool:
-        """Validate the opt-out before inference or artifact creation can publish samples."""
-        enabled = (config.parameters or {}).get("save_sample_results", True)
+        """Require an explicit boolean opt-in before publishing per-instance records."""
+        enabled = (config.parameters or {}).get("save_sample_results", False)
         if type(enabled) is not bool:
             raise ValueError("parameters.save_sample_results must be a boolean")
         return enabled
@@ -441,13 +443,15 @@ class SWEBenchAdapter(FrameworkAdapter):
         files: list[Path],
         coordinates: OCICoordinates,
         callbacks: JobCallbacks,
+        *,
+        fail_on_error: bool = False,
     ) -> OCIArtifactResult | None:
         """Create an OCI artifact from result files."""
         if not files:
             return None
 
-        # The evaluation succeeded; an upload failure must not invalidate its scores
-        # or fail the evaluation job. Warn and leave the OCI artifact reference unset.
+        # Explicit sample persistence is required to succeed. Without that opt-in,
+        # preserve the existing warning-only behavior for diagnostic OCI exports.
         try:
             # The SDK uploads a directory, so isolate exactly this run's selected files.
             with TemporaryDirectory(prefix="swebench-oci-") as staging:
@@ -457,9 +461,13 @@ class SWEBenchAdapter(FrameworkAdapter):
                 result = callbacks.create_oci_artifact(
                     OCIArtifactSpec(files_path=artifact_dir, coordinates=coordinates)
                 )
+                if result is None and fail_on_error:
+                    raise RuntimeError("OCI export returned no artifact reference")
                 logger.info("OCI artifact created from %s", artifact_dir)
                 return result
         except Exception as e:
+            if fail_on_error:
+                raise RuntimeError(f"OCI per-sample results upload failed: {e}") from e
             logger.warning("Failed to create OCI artifact; evaluation results are preserved: %s", e)
             return None
 

@@ -154,7 +154,7 @@ def test_sample_artifacts_match_completed_instance_resolve_rate(
     }
     _, score, summary = adapter._process_results(results, config)
     files = adapter._save_artifacts(results, summary, config)
-    if save_samples is False:
+    if save_samples is not True:
         assert {p.name for p in files} == {"summary.json", "results.json"}
         return
     rows = [
@@ -185,12 +185,15 @@ def test_child_runner_uses_namespace_default_without_pod_token(adapter):
         assert adapter._current_service_account() is None
 
 
+@pytest.mark.parametrize("save_samples", [None, False])
 def test_configured_oci_export_failure_preserves_evaluation(
-    adapter, runner_runtime, caplog
+    adapter, runner_runtime, caplog, save_samples
 ):
     from types import SimpleNamespace
 
     config, callbacks, runner, _ = runner_runtime
+    if save_samples is not None:
+        config.parameters["save_sample_results"] = save_samples
     coordinates = OCICoordinates(
         oci_host="quay.io", oci_repository="test/results", oci_tag="test"
     )
@@ -271,7 +274,7 @@ def test_mlflow_export_includes_native_samples_and_manifest(
     assert result.mlflow_run_id == "run-1"
     artifacts = {a.path: a for a in callbacks.mlflow.save.call_args.kwargs["artifacts"]}
     expected = {"summary.json", "results.json"}
-    if save_samples is not False:
+    if save_samples is True:
         expected |= {"sample_results.jsonl", "manifest.json"}
         for name in ["sample_results.jsonl", "manifest.json"]:
             assert artifacts[name].content == (tmp_path / name).read_bytes()
@@ -510,9 +513,174 @@ def test_no_matching_instances_cleans_owned_outputs_and_skips_exports(
 
 def test_no_completed_instances_writes_empty_samples(adapter, runner_runtime, tmp_path):
     config, callbacks, runner, _ = runner_runtime
+    config.parameters["save_sample_results"] = True
     runner.return_value = {"a": {"completed": False, "resolved": False}}
     result = adapter.run_benchmark_job(config, callbacks)
     assert result.overall_score == 0.0
     assert (tmp_path / "sample_results.jsonl").read_text() == ""
     assert (tmp_path / "manifest.json").exists()
     callbacks.mlflow.save.assert_called_once()
+
+
+@pytest.mark.parametrize("destination", ["local", "oci", "mlflow"])
+def test_opted_in_persistence_failure_reports_actual_error_and_exits(
+    adapter, runner_runtime, monkeypatch, destination
+):
+    """Inspect the real SDK event payload and ensure main never reports completion."""
+    import main as adapter_module
+    from evalhub.adapter.models.job import JobSpecExports
+
+    config, _, _, _ = runner_runtime
+    config.parameters["save_sample_results"] = True
+    config.experiment_name = "experiment" if destination == "mlflow" else None
+    if destination == "oci":
+        config.exports = JobSpecExports.model_validate(
+            {
+                "oci": {
+                    "coordinates": {
+                        "oci_host": "quay.io",
+                        "oci_repository": "test/results",
+                        "oci_tag": "test",
+                    }
+                }
+            }
+        )
+    http = MagicMock()
+    with patch.object(
+        adapter_module.DefaultCallbacks, "_create_http_client", return_value=http
+    ):
+        callbacks = adapter_module.DefaultCallbacks(
+            job_id=config.id,
+            benchmark_id=config.benchmark_id,
+            benchmark_index=config.benchmark_index,
+            provider_id=config.provider_id,
+            sidecar_url="http://sidecar:8080",
+        )
+    error = f"{destination} permission denied for sample_results.jsonl"
+    if destination == "local":
+        write_text = Path.write_text
+
+        def fail_sample_write(path, *args, **kwargs):
+            if path.name == "sample_results.jsonl":
+                raise OSError(error)
+            return write_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", fail_sample_write)
+    elif destination == "oci":
+        monkeypatch.setattr(
+            callbacks, "create_oci_artifact", MagicMock(side_effect=RuntimeError(error))
+        )
+    else:
+        # The companion SDK tests cover inclusion of this cause in its first FAILED event.
+        monkeypatch.setattr(
+            callbacks.mlflow, "save", MagicMock(side_effect=RuntimeError(error))
+        )
+    report_results = MagicMock()
+    monkeypatch.setattr(callbacks, "report_results", report_results)
+    monkeypatch.setattr(type(adapter), "job_spec", property(lambda self: config))
+    monkeypatch.setattr(adapter_module, "SWEBenchAdapter", lambda **kwargs: adapter)
+    monkeypatch.setattr(adapter_module, "configure_telemetry", lambda: None)
+    monkeypatch.setattr(
+        adapter_module.DefaultCallbacks, "from_adapter", lambda adapter: callbacks
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        adapter_module.main()
+
+    assert exc.value.code == 1
+    events = [
+        call.kwargs["json"]["benchmark_status_event"]
+        for call in http.post.call_args_list
+    ]
+    failed = [event for event in events if event["status"] == "failed"]
+    assert len(failed) == 1
+    assert error in failed[0]["error_message"]["message"]
+    assert failed[0]["error_message"]["message_code"] == "evaluation_failed"
+    assert "warning_message" not in failed[0]
+    assert all(event["status"] != "completed" for event in events)
+    report_results.assert_not_called()
+
+
+@pytest.mark.parametrize("destination", ["oci", "mlflow"])
+def test_opted_in_export_requires_artifact_reference(
+    adapter, runner_runtime, destination
+):
+    from evalhub.adapter.models.job import JobSpecExports
+
+    config, callbacks, _, _ = runner_runtime
+    config.parameters["save_sample_results"] = True
+    if destination == "oci":
+        config.exports = JobSpecExports.model_validate(
+            {
+                "oci": {
+                    "coordinates": {
+                        "oci_host": "quay.io",
+                        "oci_repository": "test/results",
+                        "oci_tag": "test",
+                    }
+                }
+            }
+        )
+        callbacks.create_oci_artifact.return_value = None
+    else:
+        config.experiment_name = "experiment"
+        callbacks.mlflow.save.return_value = None
+    with pytest.raises(RuntimeError, match="no (artifact reference|run ID)"):
+        adapter.run_benchmark_job(config, callbacks)
+    failed = [
+        call.args[0]
+        for call in callbacks.report_status.call_args_list
+        if call.args[0].status == JobStatus.FAILED
+    ]
+    assert len(failed) == 1
+    assert "no " in failed[0].error_message.message
+
+
+def test_opted_in_oci_success_returns_reference_and_current_samples(
+    adapter, runner_runtime
+):
+    from evalhub.adapter.models.job import JobSpecExports, OCIArtifactResult
+
+    config, callbacks, _, _ = runner_runtime
+    config.parameters["save_sample_results"] = True
+    config.exports = JobSpecExports.model_validate(
+        {
+            "oci": {
+                "coordinates": {
+                    "oci_host": "quay.io",
+                    "oci_repository": "test/results",
+                    "oci_tag": "test",
+                }
+            }
+        }
+    )
+    expected = OCIArtifactResult(
+        digest="sha256:test", reference="quay.io/test/results@sha256:test"
+    )
+
+    def upload(spec):
+        root = Path(spec.files_path)
+        assert {path.name for path in root.iterdir()} == {
+            "summary.json",
+            "results.json",
+            "sample_results.jsonl",
+            "manifest.json",
+        }
+        rows = [
+            json.loads(row)
+            for row in (root / "sample_results.jsonl").read_text().splitlines()
+        ]
+        assert {row["sample_id"]: row["resolve_rate"] for row in rows} == {
+            "a": 1.0,
+            "b": 0.0,
+        }
+        return expected
+
+    callbacks.create_oci_artifact.side_effect = upload
+    result = adapter.run_benchmark_job(config, callbacks)
+    assert result.overall_score == 0.5
+    assert result.oci_artifact == expected
+    assert not any(
+        call.args[0].status == JobStatus.FAILED
+        for call in callbacks.report_status.call_args_list
+    )

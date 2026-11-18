@@ -30,7 +30,7 @@ The adapter orchestrates evaluation by creating K8s Jobs for each SWE-bench inst
 | `timeout_per_instance` | integer | `1800` | Per-instance timeout in seconds |
 | `split` | string | `test` | Dataset split (`test` or `dev`) |
 | `instance_ids` | array | `null` | Specific instance IDs to evaluate (all if null) |
-| `save_sample_results` | boolean | `true` | Persist completed-instance samples and their manifest; set `false` to opt out |
+| `save_sample_results` | boolean | `false` | Set `true` to persist completed-instance samples and their manifest; persistence failures then fail the job |
 
 ## Supported Benchmarks
 
@@ -154,8 +154,10 @@ cluster execution and require no cluster credentials.
 
 ## Per-instance results
 
-Completed instances are persisted by default in `sample_results.jsonl`, with a
-stable instance ID as `sample_id` and a numeric `resolve_rate` observation.
+Per-instance persistence is opt-in: set `parameters.save_sample_results: true`
+to write completed instances to `sample_results.jsonl`, with a stable instance
+ID as `sample_id` and a numeric `resolve_rate` observation. Omitted or `false`
+disables sample/manifest output; only boolean values are accepted.
 When at least one instance completes, their mean matches the aggregate resolve
 rate. Incomplete infrastructure runs remain in diagnostic artifacts and are
 excluded from scored observations. If none complete, the aggregate falls back to
@@ -165,10 +167,11 @@ before writing artifacts or invoking OCI/MLflow exporters; that run creates no
 sample file or artifact reference. On a reused local path, it removes the four
 adapter-owned output files (samples, manifest, summary, and results) so earlier
 outputs cannot be mistaken for this run; unrelated files are preserved.
-OCI and MLflow exports include the same JSONL bytes and primary-metric manifest.
-Set `parameters.save_sample_results: false` to disable this additional export
-and remove adapter-owned sample/manifest files from a reused results directory.
-Only boolean values are accepted; invalid flags fail before loading data or starting Jobs.
+When enabled, configured OCI and MLflow exports include the same JSONL bytes
+and primary-metric manifest. Sample/manifest files from a reused results
+directory are removed when persistence is disabled. Invalid flags fail before
+loading data or starting Jobs. With no remote export configured, opted-in
+samples remain on the local filesystem.
 
 SWE-bench's Kubernetes client honors `KUBECONFIG` when no in-cluster token is
 mounted. Child Jobs inherit the adapter pod namespace selected by eval-hub for
@@ -178,8 +181,14 @@ then the namespace default.
 Job parameters cannot select the service account. Child pods never automatically
 mount the account token.
 All such credentials must be provisioned by the cluster, not copied from a laptop.
-OCI upload errors are logged as warnings because the evaluation itself succeeded;
-an upload failure must not fail the evaluation job or invalidate its scores.
-The OCI artifact reference is unavailable if the export fails.
+When sample persistence is enabled, local write errors and configured OCI/MLflow
+export errors fail the job. A configured export returning no artifact/run
+reference also fails. The failure event carries the underlying error in
+`error_message`, exposed through the evaluation API at
+`status.benchmarks[].error_message`; the process exits nonzero without reporting
+completion. Full MLflow error details require [SDK PR #204](https://github.com/eval-hub/eval-hub-sdk/pull/204)
+to be released and included in the image. When sample persistence is
+disabled, diagnostic OCI export failures retain their prior warning-only
+behavior and leave the OCI artifact reference unset.
 `PERSISTING_ARTIFACTS` is reported only for configured OCI exports, as required
 by the repository lifecycle; local writes and MLflow-only exports skip that phase.

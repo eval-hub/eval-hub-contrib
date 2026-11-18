@@ -67,8 +67,10 @@ benchmarks:
 parameters:
   - name: save_sample_results
     type: boolean
-    default: true
-    description: Persist completed per-instance observations for confidence-interval post-processing.
+    default: false
+    description: >-
+      Opt in to persisting completed per-instance observations for confidence-interval
+      post-processing. When enabled, sample persistence failures fail the evaluation.
 
   - name: predictions_path
     type: string
