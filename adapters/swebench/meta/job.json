@@ -10,7 +10,6 @@
   "parameters": {
     "predictions_path": "gold",
     "k8s_registry": "docker.io/swebench",
-    "k8s_namespace": "swe-bench",
     "max_workers": 4,
     "timeout_per_instance": 1800,
     "split": "test",

@@ -140,6 +140,10 @@ class SWEBenchAdapter(FrameworkAdapter):
             logger.info("Evaluating %d instances", len(dataset))
 
             if not dataset:
+                # A no-match rerun must not leave earlier results beside its zero score.
+                base_path = self._get_results_dir(config)
+                for name in ("sample_results.jsonl", "manifest.json", "summary.json", "results.json"):
+                    (base_path / name).unlink(missing_ok=True)
                 return self._empty_results(config, start_time)
 
             # -- Phase 3: RUNNING_EVALUATION --
@@ -171,15 +175,15 @@ class SWEBenchAdapter(FrameworkAdapter):
                 results, config
             )
 
-            # Local files and either remote export share one persistence phase.
-            callbacks.report_status(
-                JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
-            )
             artifact_files = self._save_artifacts(results, summary, config)
 
             oci_artifact: OCIArtifactResult | None = None
             oci_exports = config.exports.oci if config.exports else None
             if oci_exports is not None:
+                # The repository lifecycle reserves this phase for configured OCI exports.
+                callbacks.report_status(
+                    JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
+                )
                 oci_artifact = self._persist_oci_artifact(
                     artifact_files, oci_exports.coordinates, callbacks
                 )
@@ -442,7 +446,8 @@ class SWEBenchAdapter(FrameworkAdapter):
         if not files:
             return None
 
-        # Export availability must not discard successfully computed evaluation scores.
+        # The evaluation succeeded; an upload failure must not invalidate its scores
+        # or fail the evaluation job. Warn and leave the OCI artifact reference unset.
         try:
             # The SDK uploads a directory, so isolate exactly this run's selected files.
             with TemporaryDirectory(prefix="swebench-oci-") as staging:

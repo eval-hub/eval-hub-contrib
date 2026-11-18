@@ -433,7 +433,7 @@ def test_missing_mlflow_run_id_warns_only_for_configured_export(
 
 @pytest.mark.parametrize("oci", [False, True])
 @pytest.mark.parametrize("mlflow", [False, True])
-def test_persistence_phase_precedes_local_and_remote_artifacts(
+def test_persistence_phase_is_reserved_for_configured_oci(
     adapter, runner_runtime, monkeypatch, oci, mlflow
 ):
     from types import SimpleNamespace
@@ -456,40 +456,53 @@ def test_persistence_phase_precedes_local_and_remote_artifacts(
                 )
             }
         )
-    callbacks.create_oci_artifact.return_value = None
     save_artifacts = adapter._save_artifacts
 
-    def check_phase():
-        phases = [call.args[0].phase for call in callbacks.report_status.call_args_list]
-        assert phases.count(JobPhase.PERSISTING_ARTIFACTS) == 1
-        assert phases[-1] == JobPhase.PERSISTING_ARTIFACTS
-        assert phases.index(JobPhase.POST_PROCESSING) < phases.index(
-            JobPhase.PERSISTING_ARTIFACTS
-        )
+    def phases():
+        return [call.args[0].phase for call in callbacks.report_status.call_args_list]
 
     def save_with_phase(*args):
-        check_phase()
+        assert phases()[-1] == JobPhase.POST_PROCESSING
+        assert JobPhase.PERSISTING_ARTIFACTS not in phases()
         return save_artifacts(*args)
 
+    def check_export_phase(*args, **kwargs):
+        assert phases().count(JobPhase.PERSISTING_ARTIFACTS) == int(oci)
+        assert phases()[-1] == (
+            JobPhase.PERSISTING_ARTIFACTS if oci else JobPhase.POST_PROCESSING
+        )
+
     monkeypatch.setattr(adapter, "_save_artifacts", save_with_phase)
-    callbacks.create_oci_artifact.side_effect = lambda spec: check_phase()
-    callbacks.mlflow.save.side_effect = lambda *args, **kwargs: check_phase()
+    callbacks.create_oci_artifact.side_effect = check_export_phase
+    callbacks.mlflow.save.side_effect = check_export_phase
     result = adapter.run_benchmark_job(config, callbacks)
     assert result.overall_score == 0.5
-    check_phase()
+    check_export_phase()
+    assert callbacks.create_oci_artifact.call_count == int(oci)
 
 
-def test_no_matching_instances_skips_artifacts_and_exports(
-    adapter, runner_runtime, tmp_path
+@pytest.mark.parametrize("stale", [False, True])
+def test_no_matching_instances_cleans_owned_outputs_and_skips_exports(
+    adapter, runner_runtime, tmp_path, stale
 ):
     config, callbacks, runner, loader = runner_runtime
+    owned = ("sample_results.jsonl", "manifest.json", "summary.json", "results.json")
+    if stale:
+        for name in owned:
+            (tmp_path / name).write_text("earlier run")
+        (tmp_path / "unrelated.txt").write_text("keep")
     loader.return_value = {"not-in-dataset": {"instance_id": "not-in-dataset"}}
     result = adapter.run_benchmark_job(config, callbacks)
     assert result.overall_score == 0.0
     assert result.num_examples_evaluated == 0
     assert result.oci_artifact is None
     assert result.mlflow_run_id is None
-    assert not list(tmp_path.iterdir())
+    assert all(not (tmp_path / name).exists() for name in owned)
+    assert {path.name for path in tmp_path.iterdir()} == (
+        {"unrelated.txt"} if stale else set()
+    )
+    if stale:
+        assert (tmp_path / "unrelated.txt").read_text() == "keep"
     runner.assert_not_called()
     callbacks.create_oci_artifact.assert_not_called()
     callbacks.mlflow.save.assert_not_called()

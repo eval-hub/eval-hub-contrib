@@ -30,6 +30,7 @@ The adapter orchestrates evaluation by creating K8s Jobs for each SWE-bench inst
 | `timeout_per_instance` | integer | `1800` | Per-instance timeout in seconds |
 | `split` | string | `test` | Dataset split (`test` or `dev`) |
 | `instance_ids` | array | `null` | Specific instance IDs to evaluate (all if null) |
+| `save_sample_results` | boolean | `true` | Persist completed-instance samples and their manifest; set `false` to opt out |
 
 ## Supported Benchmarks
 
@@ -161,8 +162,9 @@ excluded from scored observations. If none complete, the aggregate falls back to
 0.0, but the sample file is empty and cannot produce a confidence interval.
 If no prediction IDs match the selected dataset, the adapter instead returns 0.0
 before writing artifacts or invoking OCI/MLflow exporters; that run creates no
-sample file or artifact reference. On a reused local path, any files from a prior
-run are not outputs of this no-match run.
+sample file or artifact reference. On a reused local path, it removes the four
+adapter-owned output files (samples, manifest, summary, and results) so earlier
+outputs cannot be mistaken for this run; unrelated files are preserved.
 OCI and MLflow exports include the same JSONL bytes and primary-metric manifest.
 Set `parameters.save_sample_results: false` to disable this additional export
 and remove adapter-owned sample/manifest files from a reused results directory.
@@ -176,5 +178,8 @@ then the namespace default.
 Job parameters cannot select the service account. Child pods never automatically
 mount the account token.
 All such credentials must be provisioned by the cluster, not copied from a laptop.
-OCI upload errors are logged as warnings; computed scores are preserved, but the
-OCI artifact reference is unavailable if the export fails.
+OCI upload errors are logged as warnings because the evaluation itself succeeded;
+an upload failure must not fail the evaluation job or invalidate its scores.
+The OCI artifact reference is unavailable if the export fails.
+`PERSISTING_ARTIFACTS` is reported only for configured OCI exports, as required
+by the repository lifecycle; local writes and MLflow-only exports skip that phase.
