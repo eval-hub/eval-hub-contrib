@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
-from main import OCICoordinates, SWEBenchAdapter
+from main import JobStatus, OCICoordinates, SWEBenchAdapter
 
 # -- Sample data -------------------------------------------------------------
 
@@ -207,7 +207,7 @@ def test_configured_oci_export_failure_preserves_evaluation(adapter, runner_runt
     assert "Failed to create OCI artifact" in caplog.text
     assert "upload failed" in caplog.text
     assert not any(
-        "failed" == str(call.args[0].status).lower()
+        call.args[0].status == JobStatus.FAILED
         for call in callbacks.report_status.call_args_list
     )
 
@@ -295,11 +295,11 @@ def test_invalid_sample_flag_fails_before_dataset_or_runner(
 ):
     config, callbacks, runner, loader = runner_runtime
     config.parameters["save_sample_results"] = value
-    result = adapter.run_benchmark_job(config, callbacks)
+    with pytest.raises(ValueError, match="must be a boolean"):
+        adapter.run_benchmark_job(config, callbacks)
     loader.assert_not_called()
     runner.assert_not_called()
     callbacks.mlflow.save.assert_not_called()
-    assert result.overall_score is None
     assert any(
         "must be a boolean" in str(call)
         for call in callbacks.report_status.call_args_list
@@ -322,3 +322,99 @@ def test_job_service_account_parameter_is_ignored(adapter, runner_runtime, accou
     result = adapter.run_benchmark_job(config, callbacks)
     assert result.overall_score == 0.5
     assert runner.call_args.kwargs["service_account"] == "discovered-runner"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["!", "a", "_w", "W10", "bnVsbA", "eyJzdWIiOjEyM30"],
+)
+def test_malformed_pod_token_uses_default_account(adapter, payload, caplog):
+    with patch("builtins.open", mock_open(read_data=f"header.{payload}.signature")):
+        assert adapter._current_service_account() is None
+    assert "Could not determine service account" in caplog.text
+
+
+def test_oci_rerun_exports_only_current_artifacts(adapter, tmp_path, monkeypatch):
+    """Inspect files during the synchronous upload, including an opted-out rerun."""
+    config = adapter.job_spec.model_copy(deep=True)
+    monkeypatch.setattr(adapter, "_get_results_dir", lambda config: tmp_path)
+    callbacks = MagicMock()
+    coordinates = OCICoordinates(
+        oci_host="quay.io", oci_repository="test/results", oci_tag="test"
+    )
+    uploaded = []
+    staging_paths = []
+
+    def capture_export(spec):
+        root = Path(spec.files_path)
+        staging_paths.append(root)
+        uploaded.append({path.name: path.read_bytes() for path in root.iterdir()})
+
+    callbacks.create_oci_artifact.side_effect = capture_export
+    for enabled, instance in [(True, "old"), (False, "new")]:
+        config.parameters["save_sample_results"] = enabled
+        results = {instance: {"completed": True, "resolved": enabled}}
+        _, _, summary = adapter._process_results(results, config)
+        files = adapter._save_artifacts(results, summary, config)
+        (tmp_path / "unrelated.txt").write_text("not a current artifact")
+        adapter._persist_oci_artifact(files, coordinates, callbacks)
+
+    assert set(uploaded[0]) == {
+        "summary.json", "results.json", "sample_results.jsonl", "manifest.json"
+    }
+    assert json.loads(uploaded[0]["sample_results.jsonl"])["sample_id"] == "old"
+    assert set(uploaded[1]) == {"summary.json", "results.json"}
+    assert set(json.loads(uploaded[1]["results.json"])) == {"new"}
+    assert (tmp_path / "sample_results.jsonl").exists()
+    assert staging_paths[0] != staging_paths[1]
+    assert all(not path.exists() for path in staging_paths)
+
+
+@pytest.mark.parametrize("invalid", ["sample_flag", "benchmark"])
+def test_entrypoint_failure_never_reports_completion(
+    adapter, runner_runtime, monkeypatch, invalid
+):
+    """Run the real entry point through validation and its failure callback."""
+    import main as adapter_module
+
+    config, callbacks, runner, loader = runner_runtime
+    if invalid == "sample_flag":
+        config.parameters["save_sample_results"] = "false"
+    else:
+        config.benchmark_id = "unsupported"
+    adapter.job_spec.parameters = config.parameters
+    adapter.job_spec.benchmark_id = config.benchmark_id
+    monkeypatch.setattr(adapter_module, "SWEBenchAdapter", lambda **kwargs: adapter)
+    monkeypatch.setattr(adapter_module, "configure_telemetry", lambda: None)
+    monkeypatch.setattr(
+        adapter_module.DefaultCallbacks, "from_adapter", lambda adapter: callbacks
+    )
+    # Model report_results' side effect: it would emit COMPLETED if invoked.
+    callbacks.report_results.side_effect = lambda results: callbacks.report_status(
+        adapter_module.JobStatusUpdate(status=JobStatus.COMPLETED)
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        adapter_module.main()
+
+    assert exc.value.code == 1
+    callbacks.report_results.assert_not_called()
+    statuses = [call.args[0].status for call in callbacks.report_status.call_args_list]
+    assert statuses[-1] == JobStatus.FAILED
+    assert JobStatus.COMPLETED not in statuses
+    runner.assert_not_called()
+    loader.assert_not_called()
+
+
+@pytest.mark.parametrize("experiment", [None, "configured-experiment"])
+@pytest.mark.parametrize("run_id", [None, ""])
+def test_missing_mlflow_run_id_warns_only_for_configured_export(
+    adapter, runner_runtime, caplog, experiment, run_id
+):
+    config, callbacks, _, _ = runner_runtime
+    config.experiment_name = experiment
+    callbacks.mlflow.save.return_value = run_id
+    result = adapter.run_benchmark_job(config, callbacks)
+    assert result.overall_score == 0.5
+    assert result.mlflow_run_id is None
+    assert ("no run ID was returned" in caplog.text) == bool(experiment)

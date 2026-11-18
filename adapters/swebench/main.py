@@ -24,9 +24,11 @@ import base64
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from evalhub.adapter import (
@@ -210,13 +212,16 @@ class SWEBenchAdapter(FrameworkAdapter):
             run_id = callbacks.mlflow.save(job_results, config, artifacts=artifacts)
             if run_id:
                 job_results.mlflow_run_id = run_id
+            elif config.experiment_name:
+                logger.warning(
+                    "MLflow experiment is configured but no run ID was returned; "
+                    "MLflow results cannot be resolved from this evaluation"
+                )
 
             return job_results
 
         except Exception as e:
             logger.error("SWE-bench evaluation failed: %s", e, exc_info=True)
-            duration = time.time() - start_time
-
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
@@ -227,16 +232,8 @@ class SWEBenchAdapter(FrameworkAdapter):
                 )
             )
 
-            return JobResults(
-                id=config.id,
-                benchmark_id=config.benchmark_id,
-                benchmark_index=config.benchmark_index,
-                model_name=config.model.name if config.model else "",
-                results=[],
-                overall_score=None,
-                num_examples_evaluated=0,
-                duration_seconds=duration,
-            )
+            # Let the entry point exit nonzero without reporting completed results.
+            raise
 
     # -- Helpers ---------------------------------------------------------------
 
@@ -265,12 +262,12 @@ class SWEBenchAdapter(FrameworkAdapter):
             payload = token.split(".")[1]
             # JWT base64 padding
             payload += "=" * (-len(payload) % 4)
-            claims = json.loads(base64.b64decode(payload))
+            claims = json.loads(base64.urlsafe_b64decode(payload))
             # sub is "system:serviceaccount:<ns>:<sa-name>"
             parts = claims.get("sub", "").split(":")
             if len(parts) == 4 and parts[0] == "system" and parts[1] == "serviceaccount":
                 return parts[3]
-        except (OSError, json.JSONDecodeError, IndexError, KeyError):
+        except (OSError, ValueError, IndexError, KeyError, AttributeError, TypeError):
             logger.warning("Could not determine service account from token, child Jobs will use namespace default")
         return None
 
@@ -442,12 +439,16 @@ class SWEBenchAdapter(FrameworkAdapter):
 
         # Export availability must not discard successfully computed evaluation scores.
         try:
-            artifact_dir = files[0].parent
-            result = callbacks.create_oci_artifact(
-                OCIArtifactSpec(files_path=artifact_dir, coordinates=coordinates)
-            )
-            logger.info("OCI artifact created from %s", artifact_dir)
-            return result
+            # The SDK uploads a directory, so isolate exactly this run's selected files.
+            with TemporaryDirectory(prefix="swebench-oci-") as staging:
+                artifact_dir = Path(staging)
+                for path in files:
+                    shutil.copy2(path, artifact_dir / path.name)
+                result = callbacks.create_oci_artifact(
+                    OCIArtifactSpec(files_path=artifact_dir, coordinates=coordinates)
+                )
+                logger.info("OCI artifact created from %s", artifact_dir)
+                return result
         except Exception as e:
             logger.warning("Failed to create OCI artifact; evaluation results are preserved: %s", e)
             return None

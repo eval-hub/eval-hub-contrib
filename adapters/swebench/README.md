@@ -152,8 +152,10 @@ cluster execution and require no cluster credentials.
 
 Completed instances are persisted by default in `sample_results.jsonl`, with a
 stable instance ID as `sample_id` and a numeric `resolve_rate` observation.
-Their mean matches the aggregate resolve rate: incomplete infrastructure runs
-remain in diagnostic artifacts and are excluded from scored observations.
+When at least one instance completes, their mean matches the aggregate resolve
+rate. Incomplete infrastructure runs remain in diagnostic artifacts and are
+excluded from scored observations. If none complete, the aggregate falls back to
+0.0, but the sample file is empty and cannot produce a confidence interval.
 OCI and MLflow exports include the same JSONL bytes and primary-metric manifest.
 Set `parameters.save_sample_results: false` to disable this additional export.
 Only boolean values are accepted; invalid flags fail before loading data or starting Jobs.
