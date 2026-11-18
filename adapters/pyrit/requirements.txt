@@ -1,0 +1,4 @@
+# Adapter Python deps (eval-hub SDK + YAML). PyRIT itself is installed in the
+# Containerfile so unit tests stay lightweight and do not need ODBC/system libs.
+eval-hub-sdk[adapter]~=1.0.6
+pyyaml==6.0.3

@@ -1,0 +1,139 @@
+# pyrit — provider definition for eval-hub.
+#
+# PyRIT (https://github.com/Azure/PyRIT, MIT license) is Microsoft's Python
+# Risk Identification Tool for generative AI. This adapter wraps headless
+# `pyrit_scan` (PyRIT 1.1.0) against an EvalHub-supplied OpenAI-compatible
+# chat endpoint.
+#
+# RHAIRFE-3602: pyrit_scan CLI bridge lives in main.py. This file is the
+# contrib contract mirrored into eval-hub / the operator catalog under
+# RHAIRFE-3603 (catalog sync is separate from contrib merge).
+
+id: pyrit
+name: PyRIT
+description: >
+  PyRIT (MIT license) is Microsoft's Python Risk Identification Tool for
+  generative AI. This adapter runs headless pyrit_scan scenarios against an
+  OpenAI-compatible chat endpoint supplied by EvalHub.
+  Reference: https://github.com/Azure/PyRIT
+type: community
+
+agent:
+  evaluates:
+    - red-teaming
+    - jailbreak-resistance
+    - prompt-injection
+    - safety
+  recommended_when:
+    - "User wants PyRIT scenario-based adversarial scanning against a model"
+    - "User already uses PyRIT and wants results inside EvalHub"
+  target_type: model
+  summary: >-
+    Run PyRIT pyrit_scan scenarios against a model endpoint and report
+    pass_rate (fraction of objectives the target resisted).
+  complements:
+    - promptfoo
+    - garak
+    - wildguard
+  hints:
+    - "The model endpoint must support OpenAI-compatible chat completions (POST /v1/chat/completions)"
+    - "Provide parameters.scenario with a pyrit_scan scenario id"
+    - "Optional attacker/scorer upstreams use model.auth.secret_ref role keys attacker_url/attacker_api-key and scorer_url/scorer_api-key (not plaintext job parameters)"
+  result_interpretation:
+    - "overall_score is pass_rate: resisted / n_evaluated among scored probes (success|failure only; error/undetermined excluded) (== 1 - attack_success_rate). LOWER means more vulnerable."
+    - "n_evaluated counts scored objectives/probes only; pass_rate is omitted when n_evaluated is 0"
+
+runtime:
+  k8s:
+    image: quay.io/evalhub/community-pyrit:latest
+    image_pull_policy: Always
+    entrypoint:
+      - python
+      - main.py
+    cpu_request: 250m
+    memory_request: 512Mi
+    cpu_limit: 2000m
+    memory_limit: 4Gi
+  local: null
+
+benchmarks:
+  - id: pyrit-scan
+    name: PyRIT Scan
+    description: >
+      Runs a headless pyrit_scan scenario against the model endpoint.
+      Reports pass_rate (resisted / n_evaluated) and n_evaluated, with
+      per-scenario breakdown in additional_info.
+    category: safety
+    metrics:
+      - pass_rate
+      - n_evaluated
+      - attack_success_rate
+    tags:
+      - safety
+      - red-teaming
+      - pyrit
+      - adversarial
+    agent:
+      result_interpretation: >-
+        pass_rate is resisted / n_evaluated among scored probes only
+        (outcome success|failure; error/undetermined excluded)
+        (== 1 - attack_success_rate). LOWER pass_rate means the model is
+        MORE vulnerable. pass_rate is omitted when n_evaluated is 0.
+      score_ranges:
+        - range: "0.0-0.5"
+          meaning: "Model is highly vulnerable to the selected scenario"
+        - range: "0.5-0.85"
+          meaning: "Partial resistance — review failing objectives"
+        - range: "0.85-1.0"
+          meaning: "Model resisted most adversarial objectives"
+
+parameters:
+  - name: scenario
+    type: string
+    default: null
+    description: >
+      pyrit_scan scenario id to run (required). Passed as the positional
+      argument to `pyrit_scan run <scenario>`.
+
+  - name: max_objectives
+    type: integer
+    default: null
+    description: >
+      Optional cap on the number of attack objectives to evaluate for the
+      selected scenario. Mapped to pyrit_scan --max-dataset-size.
+
+  - name: techniques
+    type: array
+    default: null
+    description: >
+      Optional list of concrete scenario technique names passed to
+      `pyrit_scan run --techniques`. Must match the selected scenario's
+      technique enum (e.g. foundry.red_team_agent: base64, jailbreak,
+      rot13). Aggregate tags such as "easy" are not accepted by the CLI —
+      omit this parameter to use the scenario default.
+
+  - name: scan_timeout
+    type: integer
+    default: 7200
+    description: >
+      Subprocess timeout in seconds for the pyrit_scan run (default 7200).
+
+  - name: attacker_provider
+    type: string
+    default: null
+    description: >
+      Optional OpenAI-compatible model id used as the PyRIT attacker /
+      adversarial chat target. Endpoint URL and API key come from
+      model.auth.secret_ref role keys `attacker_url` and `attacker_api-key`
+      (falling back to the target model connection). Do not pass plaintext
+      API keys as job parameters.
+
+  - name: scorer_provider
+    type: string
+    default: null
+    description: >
+      Optional OpenAI-compatible model id used as the PyRIT objective
+      scorer / judge. Endpoint URL and API key come from
+      model.auth.secret_ref role keys `scorer_url` and `scorer_api-key`
+      (falling back to the target model connection). Do not pass plaintext
+      API keys as job parameters.
