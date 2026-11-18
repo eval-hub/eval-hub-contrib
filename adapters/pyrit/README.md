@@ -76,12 +76,20 @@ EVALHUB_MODE=local EVALHUB_JOB_SPEC_PATH=meta/job.json \
   OPENAI_API_KEY=... python main.py
 ```
 
-## Secrets
+## Secrets / auxiliary model roles
 
-`attacker_provider_api_key` and `scorer_provider_api_key` are job parameters
-(same pattern as promptfoo `generation_provider_api_key`). Implementation must
-never embed them in `additional_info`, MLflow params, or OCI artifacts — see
-`SECRET_PARAM_NAMES` / `test_secret_param_names` in the adapter tests.
+Attacker and scorer **URLs and API keys** come from `model.auth.secret_ref`
+role files — not plaintext job parameters:
+
+| Role | Secret keys |
+|---|---|
+| attacker (adversarial chat) | `attacker_url`, `attacker_api-key` |
+| scorer (objective judge) | `scorer_url`, `scorer_api-key` |
+
+Optional `parameters.attacker_provider` / `parameters.scorer_provider` set only
+the model **ids**. Legacy `*_api_key` job parameters are rejected. Target and
+role credentials written into the job-local `.env` must never appear in
+`additional_info`, MLflow params, or OCI artifacts.
 
 ## Image
 

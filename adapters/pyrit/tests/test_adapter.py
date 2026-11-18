@@ -23,6 +23,7 @@ from evalhub.adapter.models.job import (
 )
 from evalhub.models.api import OCICoordinates
 from main import (
+    DEFAULT_SCAN_TIMEOUT_SECONDS,
     SECRET_PARAM_NAMES,
     PyritAdapter,
     _build_pyrit_conf,
@@ -33,6 +34,7 @@ from main import (
     _normalize_openai_base_url,
     _parse_scenario_result_id,
     _resolve_api_key,
+    _resolve_scan_timeout,
     _strip_secret_params,
 )
 
@@ -150,17 +152,26 @@ def test_normalize_openai_base_url_missing_raises():
 
 
 def test_build_pyrit_env_and_conf(tmp_path, monkeypatch):
-    """Env sets OPENAI_CHAT_* and conf points at the job-local dotenv."""
+    """Env uses secret_ref role keys for attacker/scorer, not job params."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     config = MagicMock()
     config.model.url = "http://localhost:8080"
     config.model.name = "test-model"
     config.parameters = {
         "attacker_provider": "attacker-model",
-        "attacker_provider_api_key": "sk-attacker",
         "scorer_provider": "scorer-model",
-        "scorer_provider_api_key": "sk-scorer",
     }
+
+    role_values = {
+        "attacker_url": "http://attacker:8000/v1",
+        "attacker_api-key": "sk-attacker",
+        "scorer_url": "http://scorer:8000/v1",
+        "scorer_api-key": "sk-scorer",
+    }
+    monkeypatch.setattr(
+        "main.read_model_auth_key",
+        lambda name: role_values.get(name),
+    )
 
     env = _build_pyrit_env(config, tmp_path, "sk-target")
     assert env["HOME"] == str(tmp_path)
@@ -168,8 +179,10 @@ def test_build_pyrit_env_and_conf(tmp_path, monkeypatch):
     assert env["OPENAI_CHAT_KEY"] == "sk-target"
     assert env["OPENAI_CHAT_MODEL"] == "test-model"
     assert env["ADVERSARIAL_CHAT_MODEL"] == "attacker-model"
+    assert env["ADVERSARIAL_CHAT_ENDPOINT"] == "http://attacker:8000/v1"
     assert env["ADVERSARIAL_CHAT_KEY"] == "sk-attacker"
     assert env["OBJECTIVE_SCORER_CHAT_MODEL"] == "scorer-model"
+    assert env["OBJECTIVE_SCORER_CHAT_ENDPOINT"] == "http://scorer:8000/v1"
     assert env["OBJECTIVE_SCORER_CHAT_KEY"] == "sk-scorer"
 
     dotenv = _dotenv_payload(env)
@@ -186,6 +199,38 @@ def test_build_pyrit_env_and_conf(tmp_path, monkeypatch):
         (isinstance(i, dict) and i.get("name") == "target") or i == "target"
         for i in conf["initializers"]
     )
+
+
+def test_build_pyrit_env_rejects_plaintext_api_key_params(tmp_path):
+    """Plaintext attacker/scorer API key job params are rejected."""
+    config = MagicMock()
+    config.model.url = "http://localhost:8080"
+    config.model.name = "test-model"
+    config.parameters = {"attacker_provider_api_key": "sk-attacker"}
+    with pytest.raises(ValueError, match="plaintext credential parameters"):
+        _build_pyrit_env(config, tmp_path, "sk-target")
+
+
+def test_build_pyrit_env_falls_back_to_target_without_roles(tmp_path, monkeypatch):
+    """Missing role keys fall back to the target model connection."""
+    monkeypatch.setattr("main.read_model_auth_key", lambda _name: None)
+    config = MagicMock()
+    config.model.url = "http://localhost:8080"
+    config.model.name = "test-model"
+    config.parameters = {}
+    env = _build_pyrit_env(config, tmp_path, "sk-target")
+    assert env["ADVERSARIAL_CHAT_ENDPOINT"] == "http://localhost:8080/v1"
+    assert env["ADVERSARIAL_CHAT_KEY"] == "sk-target"
+    assert env["ADVERSARIAL_CHAT_MODEL"] == "test-model"
+    assert env["OBJECTIVE_SCORER_CHAT_KEY"] == "sk-target"
+
+
+def test_resolve_scan_timeout_null_uses_default():
+    """Explicit null scan_timeout must not raise TypeError."""
+    assert _resolve_scan_timeout(None) == DEFAULT_SCAN_TIMEOUT_SECONDS
+    assert _resolve_scan_timeout({}) == DEFAULT_SCAN_TIMEOUT_SECONDS
+    assert _resolve_scan_timeout({"scan_timeout": None}) == DEFAULT_SCAN_TIMEOUT_SECONDS
+    assert _resolve_scan_timeout({"scan_timeout": 30}) == 30
 
 
 def test_build_scan_argv_and_scenario_validation(tmp_path):
@@ -376,7 +421,9 @@ def test_run_benchmark_job_happy_path(pyrit_adapter, mock_callbacks, monkeypatch
     phases = [c.args[0].phase for c in mock_callbacks.report_status.call_args_list]
     assert JobPhase.INITIALIZING in phases
     assert JobPhase.RUNNING_EVALUATION in phases
-    assert JobPhase.PERSISTING_ARTIFACTS in phases
+    assert JobPhase.POST_PROCESSING in phases
+    # No OCI export configured on this fixture → no PERSISTING_ARTIFACTS.
+    assert JobPhase.PERSISTING_ARTIFACTS not in phases
 
 
 @pytest.mark.integration
@@ -414,9 +461,16 @@ def test_oci_excludes_secrets(pyrit_adapter, mock_callbacks, monkeypatch):
     config = copy.deepcopy(pyrit_adapter.job_spec)
     config.parameters = {
         "scenario": "foundry.red_team_agent",
-        "attacker_provider_api_key": "sk-attacker-secret",
-        "scorer_provider_api_key": "sk-scorer-secret",
+        "attacker_provider": "attacker-model",
+        "scorer_provider": "scorer-model",
     }
+    monkeypatch.setattr(
+        "main.read_model_auth_key",
+        lambda name: {
+            "attacker_api-key": "sk-attacker-secret",
+            "scorer_api-key": "sk-scorer-secret",
+        }.get(name),
+    )
     config.exports = JobSpecExports(
         oci=JobSpecExportsOCI(
             coordinates=OCICoordinates(
@@ -468,7 +522,7 @@ def test_oci_excludes_secrets(pyrit_adapter, mock_callbacks, monkeypatch):
 
 @pytest.mark.integration
 def test_persisting_artifacts_without_oci(pyrit_adapter, mock_callbacks, monkeypatch):
-    """PERSISTING_ARTIFACTS is reported even when OCI export is not configured."""
+    """PERSISTING_ARTIFACTS is skipped when OCI export is not configured."""
     import main as main_mod
 
     config = copy.deepcopy(pyrit_adapter.job_spec)
@@ -490,7 +544,7 @@ def test_persisting_artifacts_without_oci(pyrit_adapter, mock_callbacks, monkeyp
     results = pyrit_adapter.run_benchmark_job(config, mock_callbacks)
     assert results.oci_artifact is None
     phases = [c.args[0].phase for c in mock_callbacks.report_status.call_args_list]
-    assert JobPhase.PERSISTING_ARTIFACTS in phases
+    assert JobPhase.PERSISTING_ARTIFACTS not in phases
     mock_callbacks.create_oci_artifact.assert_not_called()
 
     # MLflow artifact payload is base64 eval JSON, independent of OCI.
