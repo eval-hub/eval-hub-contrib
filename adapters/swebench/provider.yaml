@@ -86,11 +86,6 @@ parameters:
       Container registry where SWE-bench evaluation images are located.
       The adapter pulls images from this registry when creating eval Jobs.
       For Docker Hub use "docker.io/swebench".
-  - name: k8s_namespace
-    type: string
-    description: >-
-      Kubernetes namespace where evaluation Jobs are created. If omitted, use the
-      adapter pod namespace, or default when no pod namespace is mounted.
   - name: instance_image_tag
     type: string
     default: "latest"

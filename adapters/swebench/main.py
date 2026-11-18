@@ -110,8 +110,8 @@ class SWEBenchAdapter(FrameworkAdapter):
             elif not predictions_path:
                 raise ValueError('predictions_path must not be empty - pass a file path or "gold"')
             k8s_registry = params.get("k8s_registry", "docker.io/swebench")
-            # Namespace is configurable; account identity comes only from trusted runtime settings.
-            k8s_namespace = params.get("k8s_namespace") or self._current_namespace()
+            # Keep child Jobs in the tenant namespace assigned to this adapter pod.
+            k8s_namespace = self._current_namespace()
             service_account = self._current_service_account()
             max_workers = int(params.get("max_workers", 10))
             timeout = int(params.get("timeout_per_instance", 1800))

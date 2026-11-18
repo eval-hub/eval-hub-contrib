@@ -25,7 +25,6 @@ The adapter orchestrates evaluation by creating K8s Jobs for each SWE-bench inst
 |-----------|------|---------|-------------|
 | `predictions_path` | string | `gold` | Path to predictions file. Use `"gold"` for ground-truth patches, or a file path like `/test_data/predictions.jsonl` when using `test_data_ref.s3` |
 | `k8s_registry` | string | `docker.io/swebench` | Container registry where SWE-bench images are pulled from |
-| `k8s_namespace` | string | current namespace | Kubernetes namespace for evaluation Jobs (auto-detected if not set) |
 | `instance_image_tag` | string | `latest` | Image tag for SWE-bench instance images. Use versioned tags (e.g. `v1`) to avoid caching issues on OpenShift |
 | `max_workers` | integer | `10` | Maximum concurrent evaluation Jobs |
 | `timeout_per_instance` | integer | `1800` | Per-instance timeout in seconds |
@@ -79,7 +78,6 @@ benchmarks:
     provider_id: <provider-id>
     parameters:
       predictions_path: /test_data/predictions.jsonl
-      k8s_namespace: my-namespace
       max_workers: 8
     test_data_ref:
       s3:
@@ -160,9 +158,9 @@ Set `parameters.save_sample_results: false` to disable this additional export.
 Only boolean values are accepted; invalid flags fail before loading data or starting Jobs.
 
 SWE-bench's Kubernetes client honors `KUBECONFIG` when no in-cluster token is
-mounted. Set `parameters.k8s_namespace` to select the child-job namespace.
-Otherwise the namespace comes from the adapter pod, or `default` when no pod
-namespace is mounted. The account comes only from the administrator-controlled
+mounted. Child Jobs inherit the adapter pod namespace selected by eval-hub for
+the request tenant (`X-Tenant`); job parameters cannot override it. Outside a pod,
+the namespace falls back to `default`. The account comes only from the administrator-controlled
 `SWE_BENCH_SERVICE_ACCOUNT`, then pod-token discovery, then the namespace default.
 `parameters.service_account` is rejected before dataset loading or child-job
 creation. Child pods never automatically mount the account token.
