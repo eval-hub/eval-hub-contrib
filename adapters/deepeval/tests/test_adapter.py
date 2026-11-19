@@ -132,7 +132,7 @@ def test_deepeval_happy_path(tmp_path, monkeypatch, benchmark_id, file_content, 
         (data_dir / "data.jsonl").write_text(file_content)
 
     monkeypatch.setattr("main._resolve_data_dir", lambda _config: str(data_dir))
-    monkeypatch.setattr("main._resolve_judge_model", lambda _name, _url: SimpleNamespace(name="MockModel"))
+    monkeypatch.setattr("main._resolve_judge_model", lambda _name, _url, **kwargs: SimpleNamespace(name="MockModel"))
     monkeypatch.setattr("main._create_metric", lambda _bid, _model, _threshold: SimpleNamespace(name="MockMetric"))
 
     canned = _make_canned_eval_results()
@@ -166,7 +166,8 @@ def test_deepeval_happy_path(tmp_path, monkeypatch, benchmark_id, file_content, 
 
 
 @pytest.mark.integration
-def test_oci_export_persists_artifacts(tmp_path, monkeypatch):
+@pytest.mark.parametrize("save_samples", [None, False, True])
+def test_oci_export_persists_artifacts(tmp_path, monkeypatch, save_samples):
     """When exports.oci is configured, PERSISTING_ARTIFACTS is emitted, results file is written, and create_oci_artifact is called."""
     meta_dir = tmp_path / "meta"
     meta_dir.mkdir()
@@ -184,18 +185,26 @@ def test_oci_export_persists_artifacts(tmp_path, monkeypatch):
     }
     (meta_dir / "job.json").write_text(json.dumps(job))
 
+    if save_samples is not None:
+        job["parameters"]["save_sample_results"] = save_samples
+        (meta_dir / "job.json").write_text(json.dumps(job))
+
     adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
     callbacks = create_autospec(JobCallbacks)
-    callbacks.create_oci_artifact.return_value = OCIArtifactResult(
-        digest="sha256:fake", reference="fake:latest",
-    )
+    callbacks.mlflow = MagicMock()
+    callbacks.mlflow.save.return_value = "test-run"
+    uploaded = {}
+    def upload(spec):
+        uploaded.update({p.name: p.read_bytes() for p in spec.files_path.iterdir()})
+        return OCIArtifactResult(digest="sha256:fake", reference="fake:latest")
+    callbacks.create_oci_artifact.side_effect = upload
 
     data_dir = tmp_path / "test_data"
     data_dir.mkdir()
     (data_dir / "data.csv").write_text("input,actual_output,retrieval_context\nq,a,ctx\n")
 
     monkeypatch.setattr("main._resolve_data_dir", lambda _config: str(data_dir))
-    monkeypatch.setattr("main._resolve_judge_model", lambda _name, _url: SimpleNamespace(name="MockModel"))
+    monkeypatch.setattr("main._resolve_judge_model", lambda _name, _url, **kwargs: SimpleNamespace(name="MockModel"))
     monkeypatch.setattr("main._create_metric", lambda _bid, _model, _threshold: SimpleNamespace(name="MockMetric"))
     monkeypatch.setattr("main.evaluate", lambda **kwargs: _make_canned_eval_results())
 
@@ -209,8 +218,21 @@ def test_oci_export_persists_artifacts(tmp_path, monkeypatch):
     call_args = callbacks.create_oci_artifact.call_args
     assert call_args is not None
     spec = call_args.args[0]
-    assert spec.files_path.exists()
-    assert (spec.files_path / "results_summary.json").exists()
+    assert not spec.files_path.exists()
+    assert "results_summary.json" in uploaded
+    local_results = adapter.local_jobs_base_path / "results"
+
+    sample_path = local_results / "sample_results.jsonl"
+    assert sample_path.exists() == (save_samples is True)
+    assert (local_results / "manifest.json").exists() == (save_samples is True)
+    if save_samples is True:
+        rows = [json.loads(line) for line in sample_path.read_text().splitlines()]
+        assert rows[0]["sample_id"] == "0"
+        assert rows[0]["prediction"] == 0.85
+        assert json.loads((local_results / "manifest.json").read_text())["primary_score"]["metric"] == "faithfulness_score"
+
+    mlflow_files = {a.path: a.content for a in callbacks.mlflow.save.call_args.kwargs["artifacts"]}
+    assert mlflow_files == uploaded
 
     # OCI artifact is attached to results
     assert results.oci_artifact is not None
@@ -361,3 +383,10 @@ def test_build_conversational_test_cases_raises_on_all_invalid():
     records = [{"chatbot_role": "agent"}]  # no turns
     with pytest.raises(ValueError, match="No valid conversational test cases"):
         _build_conversational_test_cases(records, "knowledge-retention")
+
+
+@pytest.mark.parametrize("value", [None, False, 0, -1, "1024"])
+def test_judge_rejects_invalid_token_limit(value):
+    from main import _resolve_judge_model
+    with pytest.raises(ValueError, match="max_tokens must be a positive integer"):
+        _resolve_judge_model("judge", "http://model/v1", max_tokens=value)

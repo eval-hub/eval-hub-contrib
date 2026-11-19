@@ -188,3 +188,24 @@ Select the judge model with `eval_model_name`. Its connection uses
 `judge_api-key`/`judge_url`. Legacy `eval_model_url`, `judge_url`,
 `judge_base_url`, and `judge_api_key` parameters are ignored. Only the Secret
 values configure the auxiliary connection.
+
+
+## Per-sample CI artifacts
+
+Set `parameters.save_sample_results: true` to export per-test observations; the
+default is `false`. `sample_results.jsonl` contains a run-local `sample_id`, the
+native test result input and numeric `prediction`. The manifest declares the
+benchmark's aggregate metric and mean estimand. Each observation is taken from
+its own native result, so test execution order cannot swap scores between inputs.
+Invalid/nonfinite scores or an unexpected number of metrics fail the export.
+Configured OCI and MLflow exports contain identical sample and manifest bytes;
+with no remote export, files remain in the local results directory. Opted-in
+persistence errors fail the evaluation instead of silently discarding samples.
+
+Judge responses are bounded by `parameters.max_tokens` (positive integer,
+default 1024). For self-hosted OpenAI-compatible endpoints that support JSON
+schema, set `parameters.judge_structured_outputs: true` to use DeepEval's native
+schema-constrained generation. Its default is false. The adapter preserves the
+real model name and credentials, and lets DeepEval provide `response_format`
+once when the model uses its structured or JSON-mode path. Dataset fields or CI
+column mappings cannot repair malformed judge responses during evaluation.

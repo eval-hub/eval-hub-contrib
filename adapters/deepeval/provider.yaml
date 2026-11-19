@@ -12,7 +12,7 @@ type: builtin
 runtime:
   k8s:
     image: quay.io/evalhub/community-deepeval:latest
-    image_pull_policy: Always
+    image_pull_policy: always
     entrypoint:
       - python
       - main.py
@@ -131,6 +131,18 @@ benchmarks:
       - knowledge-retention
 
 parameters:
+  - name: judge_structured_outputs
+    type: boolean
+    default: false
+    description: Enable native JSON-schema enforcement for compatible judge endpoints.
+  - name: max_tokens
+    type: integer
+    default: 1024
+    description: Maximum output tokens for each judge completion.
+  - name: save_sample_results
+    type: boolean
+    default: false
+    description: Opt in to canonical per-sample CI artifacts; persistence failures fail the evaluation.
   - name: eval_model_name
     type: string
     default: null

@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import sys
 import time
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -214,13 +216,19 @@ def _build_conversational_test_cases(
     return test_cases
 
 
-def _resolve_judge_model(judge_name: str, model_url: str) -> Any:
+def _resolve_judge_model(judge_name: str, model_url: str, *, max_tokens: int = 1024, structured_outputs: bool = False) -> Any:
     """Return a GPTModel pointed at an OpenAI-compatible endpoint.
 
     Both the judge endpoint and credential come from the model auth Secret.
     JSON mode is forced to ensure small local models return parseable output.
     """
     from deepeval.models.llms import GPTModel
+
+    if type(max_tokens) is not int or max_tokens <= 0:
+        raise ValueError("parameters.max_tokens must be a positive integer")
+
+    if type(structured_outputs) is not bool:
+        raise ValueError("parameters.judge_structured_outputs must be a boolean")
 
     api_key = read_model_auth_key("judge_api-key")
     judge_url = read_model_auth_key("judge_url")
@@ -232,12 +240,23 @@ def _resolve_judge_model(judge_name: str, model_url: str) -> Any:
     if not url.endswith("/v1"):
         url = f"{url}/v1"
 
-    return GPTModel(
+    class SchemaJudge(GPTModel):
+        """Enable DeepEval's native schema path only for explicitly capable endpoints."""
+
+        def supports_structured_outputs(self):
+            return True
+
+    model_class = SchemaJudge if structured_outputs else GPTModel
+    judge = model_class(
         model=judge_name,
         base_url=url,
         api_key=api_key or "EMPTY",
-        generation_kwargs={"response_format": {"type": "json_object"}},
+        generation_kwargs={"max_tokens": max_tokens},
     )
+    # DeepEval supplies response_format itself in schema/JSON mode; do not pass it twice.
+    if not judge.supports_structured_outputs() and not judge.supports_json_mode():
+        judge.generation_kwargs["response_format"] = {"type": "json_object"}
+    return judge
 
 
 def _create_metric(benchmark_id: str, model: Any, threshold: float):
@@ -295,6 +314,14 @@ class DeepEvalAdapter(FrameworkAdapter):
             )
 
             self._validate_config(config)
+            save_samples = config.parameters.get("save_sample_results", False)
+            if type(save_samples) is not bool:
+                raise ValueError("parameters.save_sample_results must be a boolean")
+            results_dir = (self.local_jobs_base_path / "results" if self.local_jobs_base_path is not None
+                           else Path(__file__).parent / "results")
+            if not save_samples:
+                for name in ("sample_results.jsonl", "manifest.json"):
+                    (results_dir / name).unlink(missing_ok=True)
             benchmark_id = config.benchmark_id
             model_url = config.model.url.strip().rstrip("/")
             model_name = config.model.name
@@ -333,7 +360,7 @@ class DeepEvalAdapter(FrameworkAdapter):
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
             )
 
-            judge = _resolve_judge_model(judge_name, model_url)
+            judge = _resolve_judge_model(judge_name, model_url, max_tokens=config.parameters.get("max_tokens", 1024), structured_outputs=config.parameters.get("judge_structured_outputs", False))
             metric = _create_metric(benchmark_id, judge, threshold)
             throttle_value = float(config.parameters.get("throttle_value", 0))
             max_concurrent = int(config.parameters.get("max_concurrent", 1))
@@ -369,18 +396,37 @@ class DeepEvalAdapter(FrameworkAdapter):
                 default=str,
             ).encode()
 
+            sample_artifacts = []
+            if save_samples:
+                # Each native test result carries its own score and input, even if evaluation reorders cases.
+                metric_name = benchmark_id.replace("-", "_") + "_score"
+                rows = []
+                for index, case in enumerate(eval_results.test_results):
+                    if len(case.metrics_data) != 1:
+                        raise ValueError("Per-sample export requires exactly one metric per test case")
+                    score = case.metrics_data[0].score
+                    if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
+                        raise ValueError(f"Invalid per-sample score for test result {index}")
+                    rows.append({"sample_id": str(index), "input": getattr(case, "input", None),
+                                 "prediction": score, "metric": metric_name})
+                sample_artifacts = [
+                    MlflowArtifact("sample_results.jsonl", "".join(json.dumps(row, allow_nan=False) + "\n" for row in rows).encode(), "application/x-ndjson"),
+                    MlflowArtifact("manifest.json", json.dumps({"primary_score": {"metric": metric_name}, "estimand": "mean"}).encode(), "application/json"),
+                ]
+
             oci_artifact = None
             oci_exports = config.exports.oci if config.exports else None
+            if save_samples or oci_exports is not None:
+                results_dir.mkdir(parents=True, exist_ok=True)
+                (results_dir / "results_summary.json").write_bytes(summary_bytes)
+                for name in ("sample_results.jsonl", "manifest.json"):
+                    (results_dir / name).unlink(missing_ok=True)
+                for artifact in sample_artifacts:
+                    (results_dir / artifact.path).write_bytes(artifact.content)
             if oci_exports is not None:
                 callbacks.report_status(
                     JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
                 )
-                if self.local_jobs_base_path is not None:
-                    results_dir = self.local_jobs_base_path / "results"
-                else:
-                    results_dir = Path(__file__).parent / "results"
-                results_dir.mkdir(parents=True, exist_ok=True)
-                (results_dir / "results_summary.json").write_bytes(summary_bytes)
                 coords = oci_exports.coordinates.model_copy(deep=True)
                 coords.annotations.update({
                     "org.opencontainers.image.created": datetime.now(UTC).isoformat(),
@@ -388,9 +434,15 @@ class DeepEvalAdapter(FrameworkAdapter):
                     "io.github.eval-hub.model": config.model.name,
                     "io.github.eval-hub.job_id": config.id,
                 })
-                oci_artifact = callbacks.create_oci_artifact(
-                    OCIArtifactSpec(files_path=results_dir, coordinates=coords)
-                )
+                # Upload only this run's files, excluding unrelated/stale local artifacts.
+                with tempfile.TemporaryDirectory(prefix="deepeval-oci-") as staging:
+                    for name in ["results_summary.json", *(artifact.path for artifact in sample_artifacts)]:
+                        (Path(staging) / name).write_bytes((results_dir / name).read_bytes())
+                    oci_artifact = callbacks.create_oci_artifact(
+                        OCIArtifactSpec(files_path=Path(staging), coordinates=coords)
+                    )
+                if oci_artifact is None:
+                    raise RuntimeError("OCI export returned no artifact reference")
                 logger.info("OCI artifact created: %s", oci_artifact.reference)
 
             duration = time.time() - start_time
@@ -428,13 +480,18 @@ class DeepEvalAdapter(FrameworkAdapter):
                         job_results,
                         spec,
                         artifacts=[
-                            MlflowArtifact("results_summary.json", summary_bytes, "application/json")
+                            MlflowArtifact("results_summary.json", summary_bytes, "application/json"),
+                            *sample_artifacts,
                         ],
                     )
+                    if save_samples and not rid:
+                        raise RuntimeError("MLflow per-sample export returned no run ID")
                     if rid:
                         job_results.mlflow_run_id = rid
                         logger.info("MLflow run saved: %s (experiment=%s)", rid, experiment_name)
                 except Exception as exc:
+                    if save_samples:
+                        raise
                     logger.warning("MLflow save failed (job still completes): %s", exc)
 
             return job_results
@@ -445,7 +502,7 @@ class DeepEvalAdapter(FrameworkAdapter):
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
                     error_message=MessageInfo(
-                        message=str(exc),
+                        message=str(exc) or type(exc).__name__,
                         message_code="evaluation_error",
                     ),
                 )

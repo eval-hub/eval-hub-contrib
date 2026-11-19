@@ -122,3 +122,15 @@ def test_job_ignores_legacy_connections(
     evaluation.assert_called_once()
     assert result.num_examples_evaluated == 1
     assert result.overall_score == 1.0
+
+
+def test_custom_model_schema_capability_is_opt_in(model_secret):
+    judge = main._resolve_judge_model("meta-llama/Llama-3.2-1B-Instruct", config().model.url, structured_outputs=True)
+    assert judge.supports_structured_outputs() is True
+    assert "response_format" not in judge.generation_kwargs
+    assert judge.generation_kwargs["max_tokens"] == 1024
+
+
+def test_known_openai_model_does_not_duplicate_response_format(model_secret):
+    judge = main._resolve_judge_model("gpt-4o-mini", config().model.url)
+    assert "response_format" not in judge.generation_kwargs
