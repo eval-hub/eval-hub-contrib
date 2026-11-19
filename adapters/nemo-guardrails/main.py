@@ -1568,7 +1568,7 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
             # Classification scores match the accuracy denominator; masking uses a different observation unit.
             if any(row.get("dataset_type") == "masking" or row.get("error") or row["predicted_blocked"] == NemoResponses.ERROR for row in results):
                 raise ValueError("Per-sample export currently requires error-free classification results")
-            records = [{"sample_id": str(i), "prompt": row["prompt"],
+            records = [{"sample_id": str(i),
                         "prediction": float((row["predicted_blocked"] != NemoResponses.ALLOW) == row["expected_blocked"])}
                        for i, row in enumerate(results)]
             artifacts = [
