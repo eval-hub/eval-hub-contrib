@@ -128,7 +128,7 @@ evalhub eval run \
 
 To see the NeMo Guardrails server logs, run:
 ```shell
-tail -f $NEMO_CONFIG/../server.log
+find "${TMPDIR:-/tmp}" -path "*/server.log" -name server.log -print
 ```
 
 ### 5. Check results
@@ -149,3 +149,22 @@ make test-nemo-guardrails
 # or
 pytest tests/ -v
 ```
+
+
+## Per-sample CI artifacts
+
+Set `parameters.save_sample_results: true` to persist classification observations;
+the default is `false`. The adapter writes `sample_results.jsonl` and a manifest
+with primary metric `accuracy`, and exports identical bytes to configured OCI
+and MLflow destinations. Each record has a unique run-local `sample_id`, its
+prompt, and numeric `prediction` (1 for a correct decision, 0 otherwise).
+The sample mean matches aggregate classification accuracy. Opted-in persistence
+requires error-free classification results; masking uses a different observation
+unit and is currently rejected when this export is requested.
+
+Files remain local if no export is configured. Upload failures propagate and
+prevent completion; the entry point reports the underlying error. The entry
+point reuses an already created MLflow run rather than writing a second run.
+NeMo's server log lives in its writable temporary server root, allowing configs
+staged under read-only `/test_data` mounts. That root is removed when the server
+stops, so inspect its log while the evaluation is running.
