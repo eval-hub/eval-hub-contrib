@@ -101,24 +101,13 @@ parameters:
   - name: provider
     type: string
     description: >
-      Required. LiteLLM/OpenAI-style provider name for the judge (e.g. openai, azure).
+      Required. Use openai for Secret-based routing. Other native authentication protocols require additional sidecar support.
 
   - name: inference_backend
     type: string
     default: litellm
     description: >
-      CLEAR inference backend. Use "endpoint" with model.url or parameters.endpoint_url (or inference_url)
-      for a fixed HTTP endpoint; default litellm uses the usual CLEAR LiteLLM path.
-
-  - name: endpoint_url
-    type: string
-    description: >
-      When inference_backend is "endpoint", HTTP base URL for the judge (inference_url is accepted as an alias).
-
-  - name: inference_url
-    type: string
-    description: >
-      Same role as endpoint_url when inference_backend is "endpoint".
+      CLEAR inference backend: litellm (default) or legacy endpoint. Both use judge_api-key/judge_url in model.auth.secret_ref, falling back to the primary model Secret connection.
 
   - name: evaluation_criteria
     type: object

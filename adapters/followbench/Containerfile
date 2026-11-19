@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY _evaluation.py rules.py main.py provider.yaml ./
+COPY _evaluation.py rules.py main.py sample_results.py provider.yaml ./
 COPY data/ ./data/
 COPY FOLLOWBENCH-LICENSE ./
 COPY meta/job.json /meta/job.json

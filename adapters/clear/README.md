@@ -152,15 +152,26 @@ From repo root: `podman build -f eval-hub-contrib/adapters/clear/Containerfile -
 
 Bump the `clear-eval` version in `requirements.txt` when you adopt a newer IBM CLEAR release. Pin the container image tag in your eval-hub provider definition when you want immutable pulls.
 
-## `parameters.inference_backend` and credentials
+## Judge routing and credentials
 
-- **`litellm`** (default): The adapter sets **`OPENAI_BASE_URL`** from **`model.url`**. IBM CLEAR’s LiteLLM path uses **`OPENAI_API_KEY`** when your upstream requires it—**omit** it for many **local** OpenAI-compatible servers; set it when connecting to providers that enforce auth. **On Kubernetes / OpenShift**, prefer **`model.auth.secret_ref`** (Secret key **`api-key`**); for **local** runs you can export **`OPENAI_API_KEY`** or rely on no key if your server allows it. Never put raw keys in **`parameters`**.
+All auxiliary model credentials and endpoints come from `model.auth.secret_ref`.
+Use `<role>_api-key` and optional `<role>_url` entries in that Secret; model IDs
+remain benchmark parameters. When a role has no entries, it reuses `model.url`
+and the primary `api-key` from the same Secret. A role URL requires its matching
+role key, even when the real key equals the primary key. Kubernetes adapters see
+only projected references and localhost URLs; the sidecar selects the upstream
+and injects its credential. Local jobs use the SDK's `file:///` auth directory.
 
-- **`endpoint`** (legacy): Still accepted in code for backward compatibility but **deprecated** upstream—prefer **`litellm`** for new jobs. Details remain in **`main.py`** for maintainers.
+Inline role URLs/keys are ignored. Role credentials and endpoints are not read
+from environment variables. See [model-role authentication](../../docs/model-role-auth.md)
+for the Secret layout, supported roles, migration, and sidecar limitations.
 
-## Model API key (Kubernetes, `litellm` + OpenAI-style usage)
-
-Prefer **`model.auth.secret_ref`** on the job so credentials stay in a **Kubernetes Secret**, not in the job ConfigMap. Eval-hub mounts that secret (SDK path **`/var/run/secrets/model/api-key`**); the adapter uses **`evalhub.adapter.auth.resolve_model_credentials()`** and sets **`OPENAI_API_KEY`** when that key is present. For local development you can set **`OPENAI_API_KEY`** in the shell instead.
+Both `litellm` and the legacy `endpoint` backend use the `judge` Secret pair.
+The adapter overwrites `OPENAI_API_KEY` with that Secret credential for CLEAR;
+an existing runtime key cannot override it. `endpoint_url`/`inference_url` job
+parameters are ignored. Connection overrides in `eval_model_params`, including
+nested dictionaries and lists, are removed; generation settings are retained.
+Keep model selection in `eval_model_name` and `provider`.
 
 ## MLflow
 

@@ -10,6 +10,7 @@ PYTHON_VERSION ?= 3.12
 # Image names
 IMAGE_ATIF = $(REGISTRY)/community-atif:$(VERSION)
 IMAGE_DATABENCH = $(REGISTRY)/community-databench:$(VERSION)
+IMAGE_LMEVAL = $(REGISTRY)/community-lm-eval:$(VERSION)
 IMAGE_FOLLOWBENCH = $(REGISTRY)/community-followbench:$(VERSION)
 IMAGE_LIGHTEVAL = $(REGISTRY)/community-lighteval:$(VERSION)
 IMAGE_GUIDELLM = $(REGISTRY)/community-guidellm:$(VERSION)
@@ -496,11 +497,17 @@ images: image-evalhub-post-processor
 push-images: push-evalhub-post-processor
 clean-images: clean-evalhub-post-processor
 tests: test-evalhub-post-processor
+# Optional override for product builds, e.g.
+#   make image-promptfoo BASE_IMAGE=registry.redhat.io/rhel9/rhel-minimal:latest
+BASE_IMAGE ?=
+
 .PHONY: image-promptfoo
 image-promptfoo:
 	@echo "Building promptfoo adapter image..."
 	cd adapters/promptfoo && \
-	$(BUILD_TOOL) build -t $(IMAGE_PROMPTFOO) -f Containerfile .
+	$(BUILD_TOOL) build \
+		$(if $(BASE_IMAGE),--build-arg BASE_IMAGE=$(BASE_IMAGE),) \
+		-t $(IMAGE_PROMPTFOO) -f Containerfile .
 	@echo "✅ Built: $(IMAGE_PROMPTFOO)"
 
 .PHONY: push-promptfoo
@@ -639,3 +646,31 @@ images: image-databench
 push-images: push-databench
 clean-images: clean-databench
 tests: test-databench
+
+# LM Evaluation Harness adapter
+.PHONY: image-lm-eval push-lm-eval clean-lm-eval test-lm-eval
+image-lm-eval:
+	$(BUILD_TOOL) build -t $(IMAGE_LMEVAL) -f adapters/lm-eval/Containerfile adapters/lm-eval
+push-lm-eval:
+	$(BUILD_TOOL) push $(IMAGE_LMEVAL)
+clean-lm-eval:
+	$(BUILD_TOOL) rmi $(IMAGE_LMEVAL) 2>/dev/null || true
+test-lm-eval:
+	cd adapters/lm-eval && \
+	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \
+	uv pip install --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/python -m ruff check --config 'src = ["."]' . && \
+	.venv/bin/python -m pytest tests/ -m "not local" -v
+images: image-lm-eval
+push-images: push-lm-eval
+clean-images: clean-lm-eval
+tests: test-lm-eval
+
+.PHONY: test-followbench
+test-followbench:
+	cd adapters/followbench && \
+	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/python -m pytest tests/ -v
+
+tests: test-followbench

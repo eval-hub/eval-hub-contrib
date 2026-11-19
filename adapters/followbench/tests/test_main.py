@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from unittest.mock import MagicMock, create_autospec
 
@@ -61,6 +62,7 @@ def test_build_judge_client_reuses_model_credential_for_default_endpoint(monkeyp
     monkeypatch.delenv("FOLLOWBENCH_JUDGE_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     resolve_model_api_key = MagicMock(return_value="model-secret")
+    monkeypatch.setattr(main_module, "read_model_auth_key", {"api-key": "model-secret"}.get)
     monkeypatch.setattr(main_module, "_resolve_model_api_key", resolve_model_api_key)
     openai_client = MagicMock(name="openai_client")
     openai_constructor = MagicMock(return_value=openai_client)
@@ -71,53 +73,31 @@ def test_build_judge_client_reuses_model_credential_for_default_endpoint(monkeyp
     assert client is openai_client
     assert judge_model == config.model.name
     assert openai_constructor.call_args.kwargs["api_key"] == "model-secret"
-    resolve_model_api_key.assert_called_once_with(config)
-
-
-def test_build_judge_client_prefers_explicit_judge_credential(monkeypatch):
-    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
-    monkeypatch.delenv("FOLLOWBENCH_JUDGE_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    resolve_model_api_key = MagicMock(return_value="model-secret")
-    monkeypatch.setattr(main_module, "_resolve_model_api_key", resolve_model_api_key)
-    openai_constructor = MagicMock()
-    monkeypatch.setattr(main_module.openai, "OpenAI", openai_constructor)
-
-    main_module._build_judge_client(
-        config,
-        {"judge_api_key": "judge-secret"},
-        30,
-    )
-
-    assert openai_constructor.call_args.kwargs["api_key"] == "judge-secret"
     resolve_model_api_key.assert_not_called()
 
 
-def test_build_judge_client_does_not_reuse_model_credential_for_other_endpoint(
-    monkeypatch,
-):
+def test_build_judge_client_ignores_explicit_judge_credential(monkeypatch):
     config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
-    monkeypatch.delenv("FOLLOWBENCH_JUDGE_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    resolve_model_api_key = MagicMock(return_value="model-secret")
-    monkeypatch.setattr(main_module, "_resolve_model_api_key", resolve_model_api_key)
-    openai_constructor = MagicMock()
-    monkeypatch.setattr(main_module.openai, "OpenAI", openai_constructor)
+    constructor = MagicMock()
+    monkeypatch.setattr(main_module.openai, "OpenAI", constructor)
+    monkeypatch.setattr(main_module, "read_model_auth_key", {"api-key": "api-key:ref"}.get)
+    main_module._build_judge_client(config, {"judge_api_key": "legacy-value"}, 30)
+    assert constructor.call_args.kwargs["api_key"] == "api-key:ref"
 
-    main_module._build_judge_client(
-        config,
-        {"judge_url": "https://judge.example/v1"},
-        30,
-    )
 
-    assert openai_constructor.call_args.kwargs["api_key"] == "DUMMY"
-    resolve_model_api_key.assert_not_called()
+def test_build_judge_client_ignores_inline_judge_endpoint(monkeypatch):
+    config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
+    constructor = MagicMock()
+    monkeypatch.setattr(main_module.openai, "OpenAI", constructor)
+    monkeypatch.setattr(main_module, "read_model_auth_key", {}.get)
+    main_module._build_judge_client(config, {"judge_url": "legacy-value"}, 30)
+    assert constructor.call_args.kwargs["base_url"] == config.model.url
 
 
 def test_collection_without_judge_secret_fields_reuses_target_connection(monkeypatch):
     config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
     monkeypatch.setenv("FOLLOWBENCH_JUDGE_API_KEY", "unrelated-key")
-    monkeypatch.setattr(main_module, "read_model_auth_key", lambda key: None)
+    monkeypatch.setattr(main_module, "read_model_auth_key", {"api-key": "api-key:ref"}.get)
     monkeypatch.setattr(main_module, "_resolve_model_api_key", lambda _: "api-key:ref")
     constructor = MagicMock()
     monkeypatch.setattr(main_module.openai, "OpenAI", constructor)
@@ -167,15 +147,19 @@ def test_collection_judge_url_requires_projected_key(monkeypatch):
 
 
 @pytest.mark.parametrize("legacy_parameter", ["judge_url", "judge_api_key"])
-def test_collection_judge_rejects_legacy_connection_parameters(legacy_parameter):
+def test_collection_judge_ignores_legacy_connection_parameters(monkeypatch, legacy_parameter):
     config = main_module.FollowBenchAdapter(job_spec_path="meta/job.json").job_spec
-
-    with pytest.raises(ValueError, match="judge_model cannot be combined with the legacy"):
-        main_module._build_judge_client(
-            config,
-            {"judge_model": "deployed-judge", legacy_parameter: "legacy-value"},
-            30,
-        )
+    constructor = MagicMock()
+    monkeypatch.setattr(main_module.openai, "OpenAI", constructor)
+    monkeypatch.setattr(main_module, "read_model_auth_key", {"judge_api-key": "judge_api-key:ref"}.get)
+    _, name = main_module._build_judge_client(
+        config,
+        {"judge_model": "deployed-judge", legacy_parameter: "legacy-value"},
+        30,
+    )
+    assert name == "deployed-judge"
+    assert constructor.call_args.kwargs["base_url"] == config.model.url
+    assert constructor.call_args.kwargs["api_key"] == "judge_api-key:ref"
 
 
 def test_malformed_judge_response_is_scored_as_no(monkeypatch):
@@ -206,13 +190,21 @@ def test_malformed_judge_response_is_scored_as_no(monkeypatch):
     assert score.soft_satisfied == 0.0
 
 
-def test_followbench_judge_and_callbacks_integration(monkeypatch):
+@pytest.mark.parametrize("save_samples", [None, False, True])
+def test_followbench_judge_and_callbacks_integration(monkeypatch, save_samples):
     adapter = main_module.FollowBenchAdapter(job_spec_path="meta/job.json")
     callbacks = create_autospec(JobCallbacks)
     config = copy.deepcopy(adapter.job_spec)
     # EvalHub serializes this standard limit to the JobSpec root field.
     config.parameters.pop("num_examples", None)
     config.num_examples = 1
+    if save_samples is None:
+        config.parameters.pop("save_sample_results", None)
+    else:
+        config.parameters["save_sample_results"] = save_samples
+    config.experiment_name = "sample-test"
+    callbacks.mlflow = MagicMock()
+    callbacks.mlflow.save.return_value = "run-1"
 
     model_client = MagicMock(name="model_client")
     judge_client = MagicMock(name="judge_client")
@@ -249,6 +241,16 @@ def test_followbench_judge_and_callbacks_integration(monkeypatch):
     assert metrics["csl"] == 5.0
     assert metrics["n_evaluated"] == 5
     assert results.overall_score == 1.0
+    if save_samples is not False:
+        artifact = callbacks.mlflow.save.call_args.kwargs["artifacts"][0]
+        samples = [json.loads(line) for line in artifact.content.splitlines()]
+        assert len({row["sample_id"] for row in samples}) == 5
+        assert [row["level"] for row in samples] == [1, 2, 3, 4, 5]
+        assert [row["hsr"] for row in samples] == [1.0] * 5
+        assert "response" not in samples[0]
+        assert "instruction" not in samples[0]
+    else:
+        assert callbacks.mlflow.save.call_args.kwargs["artifacts"] == []
     callbacks.report_results.assert_called_once_with(results)
 
     phases = [call.args[0].phase for call in callbacks.report_status.call_args_list]
@@ -257,3 +259,15 @@ def test_followbench_judge_and_callbacks_integration(monkeypatch):
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
     assert JobPhase.PERSISTING_ARTIFACTS in phases
+
+
+@pytest.mark.parametrize("value", ["false", 0, None])
+def test_invalid_sample_flag_fails_before_inference(value, monkeypatch):
+    adapter = main_module.FollowBenchAdapter(job_spec_path="meta/job.json")
+    config = copy.deepcopy(adapter.job_spec)
+    config.parameters["save_sample_results"] = value
+    callbacks = create_autospec(JobCallbacks)
+    with pytest.raises(ValueError, match="must be a boolean"):
+        adapter.run_benchmark_job(config, callbacks)
+    phases = [call.args[0].phase for call in callbacks.report_status.call_args_list]
+    assert JobPhase.RUNNING_EVALUATION not in phases

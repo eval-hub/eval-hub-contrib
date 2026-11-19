@@ -56,7 +56,7 @@ agent:
     - wildguard
   hints:
     - "The model endpoint must support OpenAI-compatible chat completions (POST /v1/chat/completions)"
-    - "promptfoo-redteam REQUIRES generation_provider (used for attack generation AND grading); promptfoo-hosted inference is disabled"
+    - "promptfoo-redteam REQUIRES generation_provider (used for attack generation AND grading); promptfoo-hosted inference is disabled; credentials/endpoints come from model.auth.secret_ref"
     - "Remote-only plugins/strategies (🌐 in promptfoo docs: rag-poisoning, ssrf, medical:*, jailbreak:meta, …) are rejected — they depend on api.promptfoo.app"
     - "Use promptfoo-eval's config_yaml parameter to pass through an existing promptfoo project's config verbatim instead of generating one from prompts/tests"
   result_interpretation:
@@ -221,35 +221,14 @@ parameters:
     type: string
     default: null
     description: >
-      REQUIRED for promptfoo-redteam. promptfoo provider ID used both to
-      generate adversarial test content (`redteam generate --provider`) AND
-      to grade responses (`eval --grader`). promptfoo-hosted inference is
-      disabled; leaving this unset fails the job rather than falling back to
-      api.promptfoo.app or a hardcoded hosted grader model.
+      REQUIRED for promptfoo-redteam. OpenAI-compatible promptfoo provider ID
+      (e.g. openai:chat:generator-model) used for adversarial generation
+      (`redteam generate --provider`) and as the default grader. Leaving this
+      unset fails the job rather than falling back to api.promptfoo.app. URL
+      and credential come from generation_provider_url/generation_provider_api-key
+      in model.auth.secret_ref. Grading uses judge_model (or this model ID) with
+      the independent judge_url/judge_api-key Secret connection.
 
-  - name: generation_provider_url
-    type: string
-    default: null
-    description: >
-      Base URL of the OpenAI-compatible endpoint for the generation_provider
-      model (e.g. https://granite-2b-svc.models.svc:8000/v1). Injected as
-      OPENAI_BASE_URL so promptfoo can reach cluster-internal models that
-      are not the evaluation target. If unset, defaults to the target
-      model's URL — suitable when both models share the same endpoint.
-      Only used when generation_provider is set.
-
-  - name: generation_provider_api_key
-    type: string
-    default: null
-    description: >
-      API key for the generation_provider endpoint. Injected as
-      OPENAI_API_KEY so promptfoo can authenticate with external model
-      services (e.g. LiteLLM, OpenAI) used for red-team test generation
-      and grading. Resolution order: this parameter, then the
-      GENERATION_PROVIDER_API_KEY environment variable, then the target
-      model's own API key. Only used when generation_provider is set.
-
-  # --- common parameters ---
   - name: max_concurrency
     type: integer
     default: 4
@@ -259,3 +238,11 @@ parameters:
     type: integer
     default: 120
     description: Per-request timeout in seconds for calls to the model endpoint.
+
+  - name: judge_model
+    type: string
+    default: null
+    description: >
+      OpenAI-compatible promptfoo grader provider ID, e.g. openai:chat:judge-model.
+      Defaults to generation_provider, then the target model. The connection comes
+      from judge_api-key/judge_url in model.auth.secret_ref.

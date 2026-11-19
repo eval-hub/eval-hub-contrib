@@ -55,39 +55,21 @@ evaluation loop.
 
 ## External judge
 
-The following parameters are supported:
+All auxiliary model credentials and endpoints come from `model.auth.secret_ref`.
+Use `<role>_api-key` and optional `<role>_url` entries in that Secret; model IDs
+remain benchmark parameters. When a role has no entries, it reuses `model.url`
+and the primary `api-key` from the same Secret. A role URL requires its matching
+role key, even when the real key equals the primary key. Kubernetes adapters see
+only projected references and localhost URLs; the sidecar selects the upstream
+and injects its credential. Local jobs use the SDK's `file:///` auth directory.
 
-- `judge_model`
-- `judge_url`
-- `judge_api_key`
-- `num_examples`
-- `max_tokens`
-- `temperature`
-- `request_timeout`
+Inline role URLs/keys are ignored. Role credentials and endpoints are not read
+from environment variables. See [model-role authentication](../../docs/model-role-auth.md)
+for the Secret layout, supported roles, migration, and sidecar limitations.
 
-Credentials must be injected through configuration or environment variables.
-Credentials must not be committed to source code, job specifications, or
-container images.
-
-For the bundled Instruction & Output Reliability collection, set `judge_model`
-on the FollowBench benchmark in each job. With no judge-specific entries in
-`model.auth.secret_ref`, it reuses `model.url` and its credential. A
-`judge_api-key` entry selects a separate credential at `model.url`; adding
-`judge_url` selects a separate endpoint. `judge_url` alone is invalid because
-the sidecar routes `api-key:ref` only to the target. To use a different URL with
-the same credential, copy the target key into `judge_api-key`. In Kubernetes
-the adapter receives projected references and loopback URLs; the sidecar
-supplies the real credential and upstream route. Jobs that omit `judge_model`
-and use the legacy `judge_url` or `judge_api_key` job parameters retain their
-behavior. When `judge_model` is set, do not set those legacy parameters; the
-adapter rejects them so the Secret fields determine the connection
-unambiguously.
-
-For legacy standalone jobs, when `judge_url` is omitted, the judge uses `model.url` and reuses the
-evaluated model credential, including the credential resolved from
-`model.auth.secret_ref`. A separate judge endpoint must receive its own
-credential through `judge_api_key`, `FOLLOWBENCH_JUDGE_API_KEY`, or the
-runtime's `OPENAI_API_KEY`.
+Select the judge with `judge_model` (defaults to `model.name`). This Secret
+resolution applies whether or not `judge_model` is supplied. `FOLLOWBENCH_JUDGE_API_KEY`
+and `OPENAI_API_KEY` cannot select the judge credential.
 
 Judge runtime and cost depend on:
 
@@ -134,3 +116,18 @@ The expected output contains `hsr`, `ssr`, `csl`, and `n_evaluated`. HSR and
 SSR are fractions in `0.0–1.0`; CSL is the average number of consecutive
 satisfied levels on the five-level scale. The proposed HSR smoke floor is
 `0.20`, pending calibration against reference results.
+
+## Per-sample results
+
+`sample_results.jsonl` is persisted by default for confidence-interval
+post-processing. Set `parameters.save_sample_results: false` to disable it.
+Each observation retains a stable `sample_id`
+and the native primary metric. Records include category, example ID, level,
+HSR and SSR; the ID combines category, example ID, and
+level. Configured OCI exports receive the file and a metric manifest; configured
+MLflow persistence receives both files as well.
+Configured upload failures fail the evaluation. Without an export destination,
+export is skipped. Disabling sample export preserves configured MLflow metrics
+and parameters. Raw instructions and responses are excluded from sample exports.
+
+`parameters.save_sample_results` accepts only a boolean and defaults to `true`.

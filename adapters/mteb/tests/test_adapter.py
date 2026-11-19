@@ -32,11 +32,11 @@ CANNED_STS12 = {
 @pytest.mark.integration
 def test_mteb_happy_path(tmp_path, monkeypatch):
     """Full run_benchmark_job with mocked subprocess and canned task results."""
-    import shutil
-
     meta_dir = tmp_path / "meta"
     meta_dir.mkdir()
-    shutil.copy(Path("meta/job.json"), meta_dir / "job.json")
+    job = json.loads(Path("meta/job.json").read_text())
+    job["parameters"].pop("batch_size")
+    (meta_dir / "job.json").write_text(json.dumps(job))
 
     adapter = MTEBAdapter(job_spec_path=str(meta_dir / "job.json"))
 
@@ -50,11 +50,15 @@ def test_mteb_happy_path(tmp_path, monkeypatch):
     # passes it to _build_mteb_command which adds --output-folder <path>,
     # then calls _run_mteb_subprocess. We extract output_dir from the adapter.
     def fake_run(cmd, timeout):
+        assert cmd[cmd.index("--batch-size") + 1] == "32"
         idx = cmd.index("--output-folder")
         output_dir = Path(cmd[idx + 1])
         model_dir = output_dir / "model" / "no_revision"
         model_dir.mkdir(parents=True)
         (model_dir / "STS12.json").write_text(json.dumps(CANNED_STS12))
+        (output_dir / "evalhub_sampling_info.json").write_text(
+            json.dumps({"num_tasks_evaluated": 1})
+        )
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(adapter, "_run_mteb_subprocess", fake_run)
@@ -86,6 +90,61 @@ def test_mteb_happy_path(tmp_path, monkeypatch):
     assert JobPhase.RUNNING_EVALUATION in phases
     assert JobPhase.POST_PROCESSING in phases
     # PERSISTING_ARTIFACTS only emitted when OCI exports are configured
+
+
+def test_non_finite_metrics_are_omitted_and_raw_results_are_json_safe(
+    tmp_path, monkeypatch
+):
+    adapter = MTEBAdapter(job_spec_path="meta/job.json")
+    mteb_results = {
+        "SciFact": {
+            "scores": {
+                "test": [
+                    {
+                        "main_score": float("nan"),
+                        "ndcg_at_10": float("nan"),
+                        "map_at_10": float("inf"),
+                        "accuracy": 0.5,
+                    },
+                    {
+                        "main_score": 0.75,
+                        "ndcg_at_10": 0.8,
+                        "map_at_10": float("-inf"),
+                    },
+                ]
+            }
+        }
+    }
+
+    results = adapter._extract_evaluation_results(mteb_results)
+    metric_values = {result.metric_name: result.metric_value for result in results}
+    assert metric_values == {
+        "SciFact.test.accuracy": 0.5,
+        "SciFact.test.main_score": 0.75,
+        "SciFact.test.ndcg_at_10": 0.8,
+    }
+    assert adapter._compute_overall_score(results) == 0.75
+
+    monkeypatch.setattr(
+        MTEBAdapter,
+        "local_jobs_base_path",
+        property(lambda _self: tmp_path),
+    )
+    files = adapter._save_detailed_results(
+        job_id="job-1",
+        benchmark_id="mteb_retrieval",
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        mteb_results=mteb_results,
+        evaluation_results=results,
+    )
+    raw_results = json.loads(next(p for p in files if p.name == "mteb_results.json").read_text())
+    assert raw_results["SciFact"]["scores"]["test"][0]["main_score"] is None
+    assert raw_results["SciFact"]["scores"]["test"][1]["main_score"] == 0.75
+
+    structured_results = json.loads(
+        next(p for p in files if p.name == "results.json").read_text()
+    )
+    assert structured_results["overall_score"] == 0.75
 
 
 @pytest.mark.integration
@@ -196,3 +255,150 @@ def test_results_use_local_jobs_base_path(tmp_path):
             f"Result file {f} should be under {expected_results_dir}"
         )
         assert "/tmp/mteb_results" not in str(f)
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value"),
+    [
+        ("num_examples", 0),
+        ("num_examples", -1),
+        ("num_examples", True),
+        ("batch_size", 0),
+        ("batch_size", 1.5),
+        ("batch_size", "4"),
+    ],
+)
+def test_sample_limit_and_batch_size_must_be_positive_integers(
+    tmp_path, parameter, value
+):
+    job = json.loads(Path("meta/job.json").read_text())
+    job["parameters"][parameter] = value
+    job_path = tmp_path / "job.json"
+    job_path.write_text(json.dumps(job))
+    adapter = MTEBAdapter(job_spec_path=str(job_path))
+
+    with pytest.raises(ValueError, match=f"{parameter} must be a positive integer"):
+        adapter._validate_config(adapter.job_spec)
+
+
+def test_sample_limited_job_uses_runner_and_reports_effective_parameters(
+    tmp_path, monkeypatch
+):
+    job = json.loads(Path("meta/job.json").read_text())
+    job["parameters"].update({"num_examples": 2, "batch_size": 7})
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    job_path = meta_dir / "job.json"
+    job_path.write_text(json.dumps(job))
+    adapter = MTEBAdapter(job_spec_path=str(job_path))
+    callbacks = create_autospec(JobCallbacks)
+
+    def fake_run(cmd, timeout):
+        assert Path(cmd[1]).name == "mteb_runner.py"
+        runner_config = json.loads(Path(cmd[2]).read_text())
+        assert runner_config["num_examples"] == 2
+        assert runner_config["batch_size"] == 7
+
+        output_dir = Path(runner_config["output_dir"])
+        model_dir = output_dir / "model" / "no_revision"
+        model_dir.mkdir(parents=True)
+        (model_dir / "STS12.json").write_text(json.dumps(CANNED_STS12))
+        (output_dir / "evalhub_sampling_info.json").write_text(
+            json.dumps(
+                {
+                    "num_examples_by_task": {"STS12": 2},
+                    "total_examples_evaluated": 2,
+                    "num_tasks_evaluated": 1,
+                }
+            )
+        )
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(adapter, "_run_mteb_subprocess", fake_run)
+
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    # JobResults.num_examples_evaluated keeps its historical task-count meaning.
+    assert results.num_examples_evaluated == 1
+    assert results.additional_info["num_examples"] == 2
+    assert results.additional_info["batch_size"] == 7
+    assert results.additional_info["num_examples_by_task"] == {"STS12": 2}
+    assert results.additional_info["total_examples_evaluated"] == 2
+
+
+def test_task_type_jobs_use_runner_to_report_resolved_task_count(tmp_path, monkeypatch):
+    job = json.loads(Path("meta/job.json").read_text())
+    job["parameters"].pop("tasks")
+    job["parameters"]["task_types"] = ["STS"]
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    job_path = meta_dir / "job.json"
+    job_path.write_text(json.dumps(job))
+    adapter = MTEBAdapter(job_spec_path=str(job_path))
+    callbacks = create_autospec(JobCallbacks)
+
+    def fake_run(cmd, timeout):
+        assert Path(cmd[1]).name == "mteb_runner.py"
+        runner_config = json.loads(Path(cmd[2]).read_text())
+        assert runner_config["tasks"] == []
+        assert runner_config["task_types"] == ["STS"]
+        output_dir = Path(runner_config["output_dir"])
+        model_dir = output_dir / "model" / "no_revision"
+        model_dir.mkdir(parents=True)
+        (model_dir / "STS12.json").write_text(json.dumps(CANNED_STS12))
+        (output_dir / "evalhub_sampling_info.json").write_text(
+            json.dumps({"num_tasks_evaluated": 3})
+        )
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(adapter, "_run_mteb_subprocess", fake_run)
+
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    assert results.num_examples_evaluated == 3
+
+
+@pytest.mark.parametrize("device", ["cpu", "mps", "cuda", "cuda:0", "cuda:12"])
+def test_device_override_uses_python_runner_for_full_dataset_jobs(
+    tmp_path, monkeypatch, device
+):
+    job = json.loads(Path("meta/job.json").read_text())
+    job["parameters"]["device"] = device
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    job_path = meta_dir / "job.json"
+    job_path.write_text(json.dumps(job))
+    adapter = MTEBAdapter(job_spec_path=str(job_path))
+    callbacks = create_autospec(JobCallbacks)
+
+    def fake_run(cmd, timeout):
+        assert Path(cmd[1]).name == "mteb_runner.py"
+        runner_config = json.loads(Path(cmd[2]).read_text())
+        assert runner_config["num_examples"] is None
+        assert runner_config["device"] == device
+        output_dir = Path(runner_config["output_dir"])
+        model_dir = output_dir / "model" / "no_revision"
+        model_dir.mkdir(parents=True)
+        (model_dir / "STS12.json").write_text(json.dumps(CANNED_STS12))
+        (output_dir / "evalhub_sampling_info.json").write_text(
+            json.dumps({"num_tasks_evaluated": 1})
+        )
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(adapter, "_run_mteb_subprocess", fake_run)
+
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+    assert results.num_examples_evaluated == 1
+
+
+@pytest.mark.parametrize("device", ["", "cuda:", "cuda:gpu", "cuda:-1", "gpu", 0])
+def test_invalid_device_override_is_rejected(tmp_path, device):
+    job = json.loads(Path("meta/job.json").read_text())
+    job["parameters"]["device"] = device
+    job_path = tmp_path / "job.json"
+    job_path.write_text(json.dumps(job))
+    adapter = MTEBAdapter(job_spec_path=str(job_path))
+
+    with pytest.raises(ValueError, match="device must be one of"):
+        adapter._validate_config(adapter.job_spec)
