@@ -4,10 +4,9 @@ Wraps [promptfoo](https://github.com/promptfoo/promptfoo) (MIT license), an open
 LLM testing tool, exposing two benchmarks against an EvalHub-provided model endpoint:
 
 - **`promptfoo-eval`** — assertion-based prompt/model regression testing
-- **`promptfoo-redteam`** — promptfoo's red-team plugin catalog (170+ plugins as of
-  promptfoo 0.123.1), mapped to the OWASP LLM Top 10 plus industry-vertical packs
-  (financial, medical, insurance, telecom, real estate) that complement rather than
-  duplicate Garak's probe set — see "Garak overlap" below.
+- **`promptfoo-redteam`** — local-capable promptfoo red-team plugins (OWASP-oriented
+  defaults). Plugins/strategies that require `api.promptfoo.app` are rejected — see
+  "Cloud / hosted inference" below.
 
 Every completed job persists promptfoo's own native `eval.json` (written directly via
 `promptfoo eval -o eval.json` — verified byte-identical to `promptfoo export eval <id>
@@ -31,18 +30,34 @@ promptfoo's own viewer via `promptfoo import`:
    (embeds the target model's plaintext `apiKey`; exporting the whole directory would
    leak it into the OCI artifact)
 
+## Cloud / hosted inference
+
+By default, open-source promptfoo can send red-team generation and grading to
+`api.promptfoo.app` ("Promptfoo manages all inference"). Many plugins/strategies
+have **no local generator** in the MIT repo (remote-only / 🌐 in promptfoo docs).
+
+This adapter always forces:
+
+- `PROMPTFOO_DISABLE_REMOTE_GENERATION=1` (superset — all hosted inference fallbacks)
+- `PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=1`
+- `PROMPTFOO_DISABLE_TELEMETRY=1`, `PROMPTFOO_DISABLE_UPDATE=1`,
+  `PROMPTFOO_DISABLE_SHARING=1`, `PROMPTFOO_SELF_HOSTED=1`
+
+And for `promptfoo-redteam`:
+
+- **`generation_provider` is required** (used for attack generation and grading)
+- **Remote-only plugins/strategies are rejected** up front
+- **Zero evaluated tests fail the job** (no vacuous pass rate)
+
+These flags are not a network firewall; pair with egress controls in production.
+
 ## Verified operational constraints (promptfoo 0.123.1, checked 2026-09-21)
 
 These were confirmed by actually running promptfoo, not read from documentation alone:
 
-- **Red-team generation requires `PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=1`.**
-  Without it, `redteam generate` / `redteam run` block on an interactive
-  email-verification prompt against promptfoo's cloud service for *every* plugin, even
-  fully deterministic ones — which a headless k8s Job cannot satisfy. This adapter
-  always sets that variable; it is not configurable because there is no non-interactive
-  alternative. With it set, generation runs locally against `generation_provider` (or
-  promptfoo's own default model, which needs `OPENAI_API_KEY`) — no promptfoo.app
-  account or network egress to promptfoo's cloud is required.
+- **Without remote-generation disabled, headless jobs block** on promptfoo's
+  interactive cloud email-verification prompt. This adapter always disables
+  hosted inference and requires `generation_provider` instead.
 - **promptfoo returns exit code 0 even when test cases fail or error.** Pass/fail
   outcome must be read from `eval.json`'s `results.stats`, not the CLI return code. A
   non-zero return code means the CLI itself could not run (bad config, crash).
@@ -130,22 +145,17 @@ pod's own projected ServiceAccount token) was sufficient auth; a cluster with a
 self-signed service certificate additionally needs
 `MLFLOW_TRACKING_INSECURE_TLS=true` (or a proper CA bundle in production).
 
-## Garak overlap (verified, not assumed)
+## Garak overlap (local-capable subset)
 
-Compared promptfoo's real plugin catalog (`promptfoo redteam plugins`, 170+ entries) against
-Garak 0.17.0's real probe catalog (42 top-level probe modules). They overlap on jailbreak /
-prompt-injection, encoding/obfuscation attacks, and harmful-content/toxicity categories.
-promptfoo has no equivalent gap on the Garak side worth calling out separately, but promptfoo
-covers real estate Garak does not:
+Compared against Garak's probe catalog, local-capable promptfoo plugins still
+complement Garak on areas such as `prompt-extraction`, `pii:*`, injection-style
+checks (`sql-injection`, `shell-injection`), `cross-session-leak`, and
+`excessive-agency` / `hallucination`.
 
-- RAG-specific attacks (`rag-poisoning`, `rag-document-exfiltration`, `rag-source-attribution`)
-- API/access-control attacks in the OWASP API Top 10 style (`bola`, `bfla`, `rbac`, `debug-access`)
-- MCP-specific attacks (`mcp`)
-- Industry-vertical compliance packs (`financial:*`, `medical:*`, `insurance:*`, `telecom:*`,
-  `realestate:*`, `pharmacy:*`, `ecommerce:*`, `coding-agent:*`)
-
-This is why the two are complementary in `provider.yaml`'s `agent.complements`, not a
-duplicate-adapter situation.
+Several promptfoo catalog highlights (**RAG packs, `ssrf`/`bola`/`bfla`/`mcp`,
+industry verticals**) are **remote-only** and are **not** available through this
+adapter without depending on `api.promptfoo.app` (Enterprise On-Prem for
+air-gapped use of those plugins).
 
 ## Metrics
 
@@ -169,8 +179,8 @@ See `provider.yaml` for the full annotated list. Key ones:
 |---|---|---|
 | `prompts` / `tests` | promptfoo-eval | Generate a config from these instead of `config_yaml` |
 | `config_yaml` | promptfoo-eval | Pass through an existing promptfoo project config verbatim (providers are always overwritten with the EvalHub model endpoint) |
-| `plugins` | promptfoo-redteam | Plugin IDs to run; defaults to an OWASP LLM Top 10-mapped subset |
-| `generation_provider` | promptfoo-redteam | Provider used to generate adversarial content; unset falls back to promptfoo's default (requires `OPENAI_API_KEY`) |
+| `plugins` | promptfoo-redteam | Local-capable plugin IDs; remote-only IDs are rejected |
+| `generation_provider` | promptfoo-redteam | **Required.** Used for attack generation and grading |
 
 ## Container image
 

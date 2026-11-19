@@ -26,13 +26,17 @@ from evalhub.adapter.models.job import (
 from evalhub.models.api import OCICoordinates
 from main import (
     PromptfooAdapter,
+    _OWASP_DEFAULT_PLUGINS,
     _build_eval_config,
     _build_evaluate_options,
     _build_redteam_config,
     _build_target_provider,
     _compute_metrics,
     _compute_plugin_breakdown,
+    _is_remote_only_plugin,
+    _promptfoo_env,
     _resolve_api_key,
+    _validate_redteam_selection,
 )
 
 # ---------------------------------------------------------------------------
@@ -200,7 +204,7 @@ def test_build_eval_config_passthrough_preserves_other_evaluate_options():
 
 
 def test_build_redteam_config_defaults():
-    """Default redteam config uses OWASP plugin set, purpose='An AI assistant', numTests=5."""
+    """Default redteam config uses local OWASP plugin set, purpose='An AI assistant', numTests=5."""
     config = MagicMock()
     config.id = "job-1"
     config.parameters = {}
@@ -211,8 +215,11 @@ def test_build_redteam_config_defaults():
     assert pf_config["targets"] == [provider]
     assert pf_config["redteam"]["purpose"] == "An AI assistant"
     assert pf_config["redteam"]["numTests"] == 5
-    assert len(pf_config["redteam"]["plugins"]) > 0
+    assert [p["id"] for p in pf_config["redteam"]["plugins"]] == list(
+        _OWASP_DEFAULT_PLUGINS
+    )
     assert all(p["numTests"] == 5 for p in pf_config["redteam"]["plugins"])
+    assert not any(_is_remote_only_plugin(p["id"]) for p in pf_config["redteam"]["plugins"])
     assert pf_config["evaluateOptions"] == {"maxConcurrency": 4, "timeoutMs": 120_000}
 
 
@@ -228,6 +235,34 @@ def test_build_redteam_config_custom_plugins():
     pf_config = _build_redteam_config(config, {"id": "p"}, {})
     assert pf_config["redteam"]["plugins"] == [{"id": "sql-injection", "numTests": 2}]
     assert pf_config["redteam"]["purpose"] == "a bank assistant"
+
+
+def test_build_redteam_config_rejects_remote_only_plugins():
+    """Remote-only plugins that depend on api.promptfoo.app are rejected."""
+    config = MagicMock()
+    config.id = "job-1"
+    config.parameters = {"plugins": ["sql-injection", "rag-poisoning", "ssrf"]}
+    with pytest.raises(ValueError, match="remote-only plugins"):
+        _build_redteam_config(config, {"id": "p"}, {})
+
+
+def test_validate_redteam_selection_rejects_remote_strategies():
+    """Hosted strategies such as jailbreak:meta are rejected."""
+    with pytest.raises(ValueError, match="strategies"):
+        _validate_redteam_selection(["sql-injection"], ["jailbreak:meta"])
+
+
+def test_promptfoo_env_forces_cloud_disable_flags(monkeypatch):
+    """Adapter forces the full offline/hosted-inference kill-switch set."""
+    monkeypatch.setenv("PROMPTFOO_DISABLE_REMOTE_GENERATION", "0")
+    monkeypatch.setenv("PROMPTFOO_DISABLE_TELEMETRY", "0")
+    env = _promptfoo_env()
+    assert env["PROMPTFOO_DISABLE_REMOTE_GENERATION"] == "1"
+    assert env["PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION"] == "1"
+    assert env["PROMPTFOO_DISABLE_TELEMETRY"] == "1"
+    assert env["PROMPTFOO_DISABLE_UPDATE"] == "1"
+    assert env["PROMPTFOO_DISABLE_SHARING"] == "1"
+    assert env["PROMPTFOO_SELF_HOSTED"] == "1"
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +409,11 @@ def test_promptfoo_redteam_happy_path(monkeypatch):
 
     config = copy.deepcopy(adapter.job_spec)
     config.benchmark_id = "promptfoo-redteam"
-    config.parameters = {"plugins": ["sql-injection"], "num_tests_per_plugin": 1}
+    config.parameters = {
+        "plugins": ["sql-injection"],
+        "num_tests_per_plugin": 1,
+        "generation_provider": "openai:chat:internal-model",
+    }
 
     rows = [
         {
@@ -413,6 +452,66 @@ def test_promptfoo_redteam_happy_path(monkeypatch):
         "sql-injection"
     ] == pytest.approx(0.5)
     assert results.additional_info["severity_by_plugin"]["sql-injection"] == "high"
+
+
+@pytest.mark.integration
+def test_promptfoo_redteam_requires_generation_provider(monkeypatch):
+    """Red-team jobs must set generation_provider; hosted inference is disabled."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam"
+    config.parameters = {"plugins": ["sql-injection"], "num_tests_per_plugin": 1}
+
+    import main as main_mod
+
+    monkeypatch.setattr(
+        main_mod,
+        "_run_promptfoo_cli",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("CLI must not run")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="generation_provider"):
+        adapter.run_benchmark_job(config, callbacks)
+
+    failed_statuses = [
+        c
+        for c in callbacks.report_status.call_args_list
+        if c.args[0].status == JobStatus.FAILED
+    ]
+    assert len(failed_statuses) == 1
+
+
+@pytest.mark.integration
+def test_promptfoo_redteam_fails_on_zero_evaluated_tests(monkeypatch):
+    """Vacuous red-team results (0 tests) are reported as failure."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam"
+    config.parameters = {
+        "plugins": ["sql-injection"],
+        "num_tests_per_plugin": 1,
+        "generation_provider": "openai:chat:internal-model",
+    }
+    empty_eval = _eval_json(0, 0, 0)
+
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        if args[0] == "redteam" and args[1] == "generate":
+            return _FakeCompletedProcess(0, "")
+        if args[0] == "eval":
+            out_path = Path(args[args.index("-o") + 1])
+            out_path.write_text(json.dumps(empty_eval))
+            return _FakeCompletedProcess(0, "")
+        raise AssertionError(f"unexpected promptfoo invocation: {args}")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+    with pytest.raises(RuntimeError, match="zero tests"):
+        adapter.run_benchmark_job(config, callbacks)
 
 
 @pytest.mark.integration

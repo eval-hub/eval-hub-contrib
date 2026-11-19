@@ -33,17 +33,15 @@ regardless of which EvalHub exports the job configured:
    ``promptfooconfig.yaml``, which embeds the target model's plaintext
    ``apiKey`` (see ``_build_target_provider``).
 
-VERIFIED OPERATIONAL CONSTRAINT (promptfoo 0.123.1, checked 2026-09-21):
-``redteam generate`` / ``redteam run`` refuse to proceed non-interactively
-unless ``PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=1`` is set in the
-environment — without it, every plugin (even fully deterministic ones like
-sql-injection) blocks on an interactive email-verification prompt against
-promptfoo's cloud service, which a headless k8s Job cannot satisfy. With the
-flag set, generation runs locally against ``generation_provider`` (or
-promptfoo's own default model, requiring OPENAI_API_KEY) instead of
-promptfoo's hosted service. This adapter always sets that flag; it is not
-exposed as a configurable parameter because there is no non-interactive
-alternative.
+CLOUD / HOSTED-INFERENCE CONSTRAINT (promptfoo 0.123.1):
+By default promptfoo can send red-team generation and grading to
+``api.promptfoo.app``. This adapter always forces offline-safe env flags
+(``PROMPTFOO_DISABLE_REMOTE_GENERATION`` and related) and requires an
+explicit ``generation_provider`` for ``promptfoo-redteam`` so attack
+generation and grading use an operator-controlled model — never
+promptfoo-hosted inference. Remote-only plugins/strategies (no local
+generator in the MIT repo) are rejected up front; a red-team run that
+produces zero evaluated tests is treated as failure.
 """
 
 from __future__ import annotations
@@ -98,6 +96,10 @@ _ADAPTER_VERSION = "0.1.0"
 # eval-hub deployment.
 PROMPTFOO_EVAL_JSON_MAX_BYTES = 5_000_000
 
+# Local-capable OWASP-oriented defaults for promptfoo 0.123.1. Remote-only
+# plugins (rag-poisoning, ssrf, system-prompt-override,
+# indirect-prompt-injection, industry packs, …) are intentionally excluded —
+# with remote generation disabled they return zero tests.
 _OWASP_DEFAULT_PLUGINS = [
     "excessive-agency",
     "hallucination",
@@ -106,14 +108,167 @@ _OWASP_DEFAULT_PLUGINS = [
     "pii:session",
     "pii:api-db",
     "prompt-extraction",
-    "rag-poisoning",
     "shell-injection",
     "sql-injection",
-    "ssrf",
-    "system-prompt-override",
     "cross-session-leak",
-    "indirect-prompt-injection",
 ]
+
+# Scalar IDs from promptfoo 0.123.1 REMOTE_ONLY_PLUGIN_IDS (plus family
+# prefixes expanded below). These have no local generator and POST to
+# api.promptfoo.app when remote generation is enabled.
+_REMOTE_ONLY_PLUGIN_IDS = frozenset(
+    {
+        "agentic:memory-poisoning",
+        "ascii-smuggling",
+        "bfla",
+        "bola",
+        "cca",
+        "competitors",
+        "coppa",
+        "data-exfil",
+        "ferpa",
+        "goal-misalignment",
+        "harmful:misinformation-disinformation",
+        "harmful:specialized-advice",
+        "hijacking",
+        "indirect-prompt-injection",
+        "mcp",
+        "model-identification",
+        "off-topic",
+        "rag-document-exfiltration",
+        "rag-poisoning",
+        "rag-source-attribution",
+        "reasoning-dos",
+        "religion",
+        "special-token-injection",
+        "ssrf",
+        "system-prompt-override",
+        "wordplay",
+    }
+)
+
+_REMOTE_ONLY_PLUGIN_PREFIXES = (
+    "medical:",
+    "financial:",
+    "pharmacy:",
+    "insurance:",
+    "ecommerce:",
+    "telecom:",
+    "realestate:",
+    "coding-agent:",
+    "bias:",
+    "agentic:",
+    "teen-safety:",
+)
+
+# Unaligned harmful plugins use promptfoo's hosted /task/harmful endpoint.
+_UNALIGNED_HARM_PLUGIN_IDS = frozenset(
+    {
+        "harmful:child-exploitation",
+        "harmful:hate",
+        "harmful:indiscriminate-weapons",
+        "harmful:non-violent-crime",
+        "harmful:self-harm",
+        "harmful:sex-crime",
+        "harmful:sexual-content",
+        "harmful:violent-crime",
+        "harmful:chemical-biological-weapons",
+        "harmful:copyright-violations",
+        "harmful:cybercrime",
+        "harmful:graphic-content",
+        "harmful:harassment-bullying",
+        "harmful:illegal-activities",
+        "harmful:illegal-drugs",
+        "harmful:unsafe-practices",
+        "harmful:insults",
+        "harmful:profanity",
+        "harmful:radicalization",
+        "harmful:illegal-drugs:meth",
+        "harmful:weapons:ied",
+        "harmful:cybercrime:malicious-code",
+    }
+)
+
+# Strategies that require promptfoo hosted generation (docs + 0.123.1 source).
+_REMOTE_ONLY_STRATEGY_IDS = frozenset(
+    {
+        "audio",
+        "citation",
+        "gcg",
+        "goat",
+        "best-of-n",
+        "math-prompt",
+        "jailbreak:composite",
+        "jailbreak:goblin",
+        "jailbreak:hydra",
+        "jailbreak:likert",
+        "jailbreak:meta",
+    }
+)
+
+# Deterministic / local encoding-style strategies safe with remote disabled.
+_LOCAL_STRATEGY_IDS = frozenset(
+    {
+        "basic",
+        "base64",
+        "rot13",
+        "leetspeak",
+        "homoglyph",
+        "hex",
+        "jailbreak",
+        "prompt-injection",
+        "emoji",
+        "morse",
+        "piglatin",
+        "reverse",
+        "kebabcase",
+        "camelcase",
+        "multilingual",
+    }
+)
+
+
+def _is_remote_only_plugin(plugin_id: str) -> bool:
+    """Return True if *plugin_id* requires promptfoo hosted generation."""
+    if plugin_id in _REMOTE_ONLY_PLUGIN_IDS or plugin_id in _UNALIGNED_HARM_PLUGIN_IDS:
+        return True
+    return any(plugin_id.startswith(prefix) for prefix in _REMOTE_ONLY_PLUGIN_PREFIXES)
+
+
+def _strategy_id(strategy: Any) -> str | None:
+    """Extract a strategy id from a string or ``{"id": ...}`` object."""
+    if isinstance(strategy, str):
+        return strategy
+    if isinstance(strategy, dict):
+        sid = strategy.get("id")
+        return str(sid) if sid is not None else None
+    return None
+
+
+def _validate_redteam_selection(plugin_ids: list[str], strategies: list[Any]) -> None:
+    """Reject remote-only plugins/strategies that depend on api.promptfoo.app."""
+    remote_plugins = sorted({pid for pid in plugin_ids if _is_remote_only_plugin(pid)})
+    if remote_plugins:
+        raise ValueError(
+            "promptfoo-redteam rejects remote-only plugins that require "
+            f"api.promptfoo.app: {remote_plugins}. Choose local-capable "
+            "plugins (see provider.yaml) or omit them from parameters.plugins."
+        )
+
+    strategy_ids = [sid for sid in (_strategy_id(s) for s in strategies) if sid]
+    remote_strategies = sorted(
+        {
+            sid
+            for sid in strategy_ids
+            if sid in _REMOTE_ONLY_STRATEGY_IDS or sid not in _LOCAL_STRATEGY_IDS
+        }
+    )
+    if remote_strategies:
+        raise ValueError(
+            "promptfoo-redteam rejects strategies that require hosted "
+            f"generation or are not in the local allowlist: {remote_strategies}. "
+            f"Allowed strategies: {sorted(_LOCAL_STRATEGY_IDS)}."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -264,9 +419,10 @@ def _build_redteam_config(
     params = config.parameters or {}
 
     purpose = params.get("purpose", "An AI assistant")
-    plugin_ids = params.get("plugins") or list(_OWASP_DEFAULT_PLUGINS)
-    strategies = _without_connection_options(params.get("strategies", []))
+    plugin_ids = list(params.get("plugins") or _OWASP_DEFAULT_PLUGINS)
+    strategies = _without_connection_options(list(params.get("strategies") or []))
     num_tests = int(params.get("num_tests_per_plugin", 5))
+    _validate_redteam_selection(plugin_ids, strategies)
 
     plugins = [{"id": pid, "numTests": num_tests} for pid in plugin_ids]
 
@@ -297,6 +453,11 @@ def _promptfoo_env(
     ``OPENAI_API_KEY`` / ``OPENAI_BASE_URL`` so that promptfoo's
     ``generation_provider`` and ``--grader`` can reach cluster-internal
     models that are not configured through the target provider YAML block.
+
+    Cloud / hosted-inference kill switches are always forced on — the
+    redteam-only flag alone is not enough (see promptfoo envars docs:
+    ``PROMPTFOO_DISABLE_REMOTE_GENERATION`` is the superset that disables
+    all promptfoo-hosted inference fallbacks).
     """
     env = dict(os.environ)
     # Auxiliary provider settings must be supplied from the model Secret by
@@ -304,9 +465,12 @@ def _promptfoo_env(
     for name in list(env):
         if name.endswith(("_API_KEY", "_BASE_URL", "_API_BASE", "_API_HOST")):
             env.pop(name)
-    # See module docstring: required for non-interactive red-team generation.
+    env["PROMPTFOO_DISABLE_REMOTE_GENERATION"] = "1"
     env["PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION"] = "1"
-    env.setdefault("PROMPTFOO_DISABLE_TELEMETRY", "1")
+    env["PROMPTFOO_DISABLE_TELEMETRY"] = "1"
+    env["PROMPTFOO_DISABLE_UPDATE"] = "1"
+    env["PROMPTFOO_DISABLE_SHARING"] = "1"
+    env["PROMPTFOO_SELF_HOSTED"] = "1"
     if api_key:
         env["OPENAI_API_KEY"] = api_key
     if base_url:
@@ -609,13 +773,25 @@ class PromptfooAdapter(FrameworkAdapter):
             )
 
             parameters = config.parameters or {}
-            generation_provider = parameters.get("generation_provider") or provider["id"]
-            gen_provider_url, gen_provider_api_key = _role_connection(config, "generation_provider")
+            generation_provider = parameters.get("generation_provider")
+            if is_redteam and not generation_provider:
+                raise ValueError(
+                    "promptfoo-redteam requires parameters.generation_provider "
+                    "so attack generation and grading use an operator-controlled "
+                    "model. promptfoo-hosted inference (api.promptfoo.app) is "
+                    "disabled by this adapter."
+                )
+            generation_provider = generation_provider or provider["id"]
+            gen_provider_url, gen_provider_api_key = _role_connection(
+                config, "generation_provider"
+            )
             judge_url, judge_api_key = _role_connection(config, "judge")
             judge_model = parameters.get("judge_model") or generation_provider
             for model in (generation_provider, judge_model):
                 if not isinstance(model, str) or not model.startswith("openai:"):
-                    raise ValueError("Secret-based promptfoo model roles require an openai: provider ID")
+                    raise ValueError(
+                        "Secret-based promptfoo model roles require an openai: provider ID"
+                    )
             if is_redteam:
                 # promptfoo redteam test-case generation is always a separate
                 # step from `eval` here (never `redteam run`, which does not
@@ -698,6 +874,13 @@ class PromptfooAdapter(FrameworkAdapter):
             eval_json_raw = eval_json_path.read_bytes()
             eval_json = json.loads(eval_json_raw)
             evaluation_results, pass_rate, n_evaluated = _compute_metrics(eval_json)
+            if is_redteam and n_evaluated == 0:
+                raise RuntimeError(
+                    "promptfoo-redteam completed but evaluated zero tests. "
+                    "This usually means the selected plugins/strategies are "
+                    "remote-only (no local generator) or generation produced "
+                    "no cases. Refusing to report a vacuous pass rate."
+                )
 
             eval_id = eval_json.get("evalId", "unknown")
             additional_info: dict[str, Any] = {"promptfoo_eval_id": eval_id}
