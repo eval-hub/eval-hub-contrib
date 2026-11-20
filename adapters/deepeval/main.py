@@ -379,6 +379,23 @@ class DeepEvalAdapter(FrameworkAdapter):
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.POST_PROCESSING)
             )
 
+            sample_artifacts = []
+            if save_samples:
+                # Validate native scores before aggregation; export IDs and scores without raw input.
+                metric_name = benchmark_id.replace("-", "_") + "_score"
+                rows = []
+                for index, case in enumerate(eval_results.test_results):
+                    if len(case.metrics_data) != 1:
+                        raise ValueError("Per-sample export requires exactly one metric per test case")
+                    score = case.metrics_data[0].score
+                    if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
+                        raise ValueError(f"Invalid per-sample score for test result {index}")
+                    rows.append({"sample_id": str(index), "prediction": score, "metric": metric_name})
+                sample_artifacts = [
+                    MlflowArtifact("sample_results.jsonl", "".join(json.dumps(row, allow_nan=False) + "\n" for row in rows).encode(), "application/x-ndjson"),
+                    MlflowArtifact("manifest.json", json.dumps({"primary_score": {"metric": metric_name}, "estimand": "mean"}).encode(), "application/json"),
+                ]
+
             evaluation_results = self._extract_results(eval_results, benchmark_id)
             overall_score = self._compute_overall_score(evaluation_results, benchmark_id)
 
@@ -395,24 +412,6 @@ class DeepEvalAdapter(FrameworkAdapter):
                 indent=2,
                 default=str,
             ).encode()
-
-            sample_artifacts = []
-            if save_samples:
-                # Each native test result carries its own score and input, even if evaluation reorders cases.
-                metric_name = benchmark_id.replace("-", "_") + "_score"
-                rows = []
-                for index, case in enumerate(eval_results.test_results):
-                    if len(case.metrics_data) != 1:
-                        raise ValueError("Per-sample export requires exactly one metric per test case")
-                    score = case.metrics_data[0].score
-                    if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
-                        raise ValueError(f"Invalid per-sample score for test result {index}")
-                    rows.append({"sample_id": str(index), "input": getattr(case, "input", None),
-                                 "prediction": score, "metric": metric_name})
-                sample_artifacts = [
-                    MlflowArtifact("sample_results.jsonl", "".join(json.dumps(row, allow_nan=False) + "\n" for row in rows).encode(), "application/x-ndjson"),
-                    MlflowArtifact("manifest.json", json.dumps({"primary_score": {"metric": metric_name}, "estimand": "mean"}).encode(), "application/json"),
-                ]
 
             oci_artifact = None
             oci_exports = config.exports.oci if config.exports else None
@@ -434,16 +433,21 @@ class DeepEvalAdapter(FrameworkAdapter):
                     "io.github.eval-hub.model": config.model.name,
                     "io.github.eval-hub.job_id": config.id,
                 })
-                # Upload only this run's files, excluding unrelated/stale local artifacts.
-                with tempfile.TemporaryDirectory(prefix="deepeval-oci-") as staging:
-                    for name in ["results_summary.json", *(artifact.path for artifact in sample_artifacts)]:
-                        (Path(staging) / name).write_bytes((results_dir / name).read_bytes())
-                    oci_artifact = callbacks.create_oci_artifact(
-                        OCIArtifactSpec(files_path=Path(staging), coordinates=coords)
-                    )
-                if oci_artifact is None:
-                    raise RuntimeError("OCI export returned no artifact reference")
-                logger.info("OCI artifact created: %s", oci_artifact.reference)
+                try:
+                    # Upload only this run's files, excluding unrelated/stale local artifacts.
+                    with tempfile.TemporaryDirectory(prefix="deepeval-oci-") as staging:
+                        for name in ["results_summary.json", *(artifact.path for artifact in sample_artifacts)]:
+                            (Path(staging) / name).write_bytes((results_dir / name).read_bytes())
+                        oci_artifact = callbacks.create_oci_artifact(
+                            OCIArtifactSpec(files_path=Path(staging), coordinates=coords)
+                        )
+                    if oci_artifact is None:
+                        raise RuntimeError("OCI export returned no artifact reference")
+                    logger.info("OCI artifact created: %s", oci_artifact.reference)
+                except Exception as exc:
+                    if save_samples:
+                        raise
+                    logger.warning("OCI summary export failed (job still completes): %s", str(exc) or type(exc).__name__)
 
             duration = time.time() - start_time
             job_results = JobResults(

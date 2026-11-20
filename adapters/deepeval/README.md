@@ -138,6 +138,9 @@ make push-deepeval REGISTRY=quay.io/your-org VERSION=v1.0.0
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
+| `save_sample_results` | boolean | No | `false` | Strict boolean: opt in to per-sample CI artifacts; configured persistence failures fail the evaluation. |
+| `max_tokens` | integer | No | `1024` | Positive output-token limit for each judge completion. |
+| `judge_structured_outputs` | boolean | No | `false` | Enable native JSON-schema output for compatible judge endpoints. |
 | `eval_model_name` | string | No | model.name | Judge model name (e.g. `microsoft-phi-4`, `gpt-4o`). Defaults to the evaluated model. |
 | `threshold` | float | No | `0.5` | Minimum pass threshold for metric scores |
 | `dataset_format` | string | No | `csv` | Input dataset format: `csv`, `jsonl`, or `json`. Use `jsonl` for multi-turn benchmarks. |
@@ -193,14 +196,18 @@ values configure the auxiliary connection.
 ## Per-sample CI artifacts
 
 Set `parameters.save_sample_results: true` to export per-test observations; the
-default is `false`. `sample_results.jsonl` contains a run-local `sample_id`, the
-native test result input and numeric `prediction`. The manifest declares the
+default is `false`. `sample_results.jsonl` contains a run-local `sample_id`, numeric `prediction`, and metric name. Raw inputs and
+conversation turns are omitted. The manifest declares the
 benchmark's aggregate metric and mean estimand. Each observation is taken from
-its own native result, so test execution order cannot swap scores between inputs.
+its own native result, so test execution order does not detach scores from their native result.
 Invalid/nonfinite scores or an unexpected number of metrics fail the export.
 Configured OCI and MLflow exports contain identical sample and manifest bytes;
-with no remote export, files remain in the local results directory. Opted-in
+with no remote export, local mode retains files in its job results directory.
+In Kubernetes, `/app/results` is ephemeral pod storage and disappears with the
+pod; configure OCI or MLflow to retain artifacts. Opted-in
 persistence errors fail the evaluation instead of silently discarding samples.
+When samples are disabled, diagnostic-only OCI/MLflow upload failures are logged
+as warnings and evaluation still succeeds.
 
 Judge responses are bounded by `parameters.max_tokens` (positive integer,
 default 1024). For self-hosted OpenAI-compatible endpoints that support JSON
