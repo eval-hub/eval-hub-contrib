@@ -700,7 +700,7 @@ def test_tokenless_adapter_discovers_own_pod_account(adapter, monkeypatch):
     monkeypatch.setenv("KUBECONFIG", "/trusted/kubeconfig")
     monkeypatch.setenv("HOSTNAME", "adapter-pod")
     monkeypatch.setattr(adapter.__class__, "_current_namespace", staticmethod(lambda: "tenant"))
-    with patch("builtins.open", side_effect=FileNotFoundError), patch("kubernetes.config.load_kube_config") as load, patch("kubernetes.client.CoreV1Api") as core:
+    with patch("pathlib.Path.is_file", return_value=True), patch("builtins.open", side_effect=FileNotFoundError), patch("kubernetes.config.load_kube_config") as load, patch("kubernetes.client.CoreV1Api") as core:
         core.return_value.read_namespaced_pod.return_value = SimpleNamespace(spec=SimpleNamespace(service_account_name="evalhub-job"))
         assert adapter._current_service_account() == "evalhub-job"
         load.assert_called_once_with(config_file="/trusted/kubeconfig")
@@ -710,7 +710,7 @@ def test_tokenless_adapter_discovers_own_pod_account(adapter, monkeypatch):
 @pytest.mark.parametrize("failure", ["forbidden", "missing_account"])
 def test_tokenless_discovery_never_silently_changes_account(adapter, monkeypatch, failure):
     monkeypatch.setenv("KUBECONFIG", "/trusted/kubeconfig")
-    with patch("kubernetes.config.load_kube_config"), patch("kubernetes.client.CoreV1Api") as core:
+    with patch("pathlib.Path.is_file", return_value=True), patch("kubernetes.config.load_kube_config"), patch("kubernetes.client.CoreV1Api") as core:
         if failure == "forbidden":
             core.return_value.read_namespaced_pod.side_effect = RuntimeError("forbidden")
         else:
@@ -740,3 +740,17 @@ def test_provider_defaults_match_sample_manifest(adapter, tmp_path):
     for benchmark in provider["benchmarks"]:
         assert benchmark["primary_score"] == {"metric": metric, "lower_is_better": False}
         assert benchmark["pass_criteria"]["threshold"] == 0.5
+
+
+@pytest.mark.parametrize("hostname", [None, "developer-laptop"])
+def test_local_kubeconfig_does_not_lookup_laptop_as_pod(adapter, monkeypatch, hostname):
+    """A laptop uses namespace-default child identity without querying a fictitious pod."""
+    monkeypatch.setenv("KUBECONFIG", "/local/kubeconfig")
+    if hostname:
+        monkeypatch.setenv("HOSTNAME", hostname)
+    else:
+        monkeypatch.delenv("HOSTNAME", raising=False)
+    with patch("pathlib.Path.is_file", return_value=False), patch("kubernetes.config.load_kube_config") as load, patch("kubernetes.client.CoreV1Api") as core:
+        assert adapter._current_service_account() is None
+        load.assert_not_called()
+        core.assert_not_called()

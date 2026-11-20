@@ -265,6 +265,10 @@ class SWEBenchAdapter(FrameworkAdapter):
         """Read the pod account via configured kubeconfig or legacy token discovery."""
         # Token-less eval-hub adapters use their existing kubeconfig to inspect their own pod.
         if os.environ.get("KUBECONFIG"):
+            # eval-hub projects this namespace file even into token-less pods.
+            # A local kubeconfig alone does not mean the adapter is running in a pod.
+            if not Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace").is_file():
+                return None
             from kubernetes import client, config
 
             try:

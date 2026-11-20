@@ -127,8 +127,8 @@ the cluster-scoped SCC binding):
 sed 's/NAMESPACE/my-namespace/g' rbac.yaml | oc apply -n my-namespace -f -
 ```
 
-With `KUBECONFIG` configured, the adapter reads its own Pod through the Kubernetes
-API and uses that Pod's service account for child Jobs. This requires the `pods/get`
+With `KUBECONFIG` configured and the pod namespace file mounted, the adapter reads
+its own Pod through the Kubernetes API and uses that Pod's service account for child Jobs. This requires the `pods/get`
 permission already included above; discovery failure stops the run rather than
 silently selecting the namespace default. Without a kubeconfig, legacy token
 discovery is retained, falling back to the namespace default when unavailable. Job parameters cannot select
@@ -180,9 +180,12 @@ samples remain on the local filesystem.
 SWE-bench's Kubernetes client honors `KUBECONFIG` when no in-cluster token is
 mounted. Child Jobs inherit the adapter pod namespace selected by eval-hub for
 the request tenant (`X-Tenant`); job parameters cannot override it. Outside a pod,
-the namespace falls back to `default`. With `KUBECONFIG`, the account is read from the adapter Pod using its hostname
-and namespace; discovery errors fail the run. Without it, legacy pod-token
-discovery and the namespace-default fallback remain.
+the namespace falls back to `default`. With `KUBECONFIG` and a mounted pod
+namespace file, the account is read from the adapter Pod using its hostname
+and namespace; discovery errors fail the run.
+When running locally with `KUBECONFIG` and no pod namespace file, no Pod lookup
+is attempted: child Jobs use the namespace default account. Without `KUBECONFIG`,
+legacy pod-token discovery and the namespace-default fallback remain.
 Job parameters cannot select the service account. Child pods never automatically
 mount the account token.
 All such credentials must be provisioned by the cluster, not copied from a laptop.
