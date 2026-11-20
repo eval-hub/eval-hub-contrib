@@ -13,7 +13,7 @@ The adapter is a thin orchestration layer:
   4. Reports resolve_rate as the overall_score
 
 Architecture:
-    JobSpec (predictions file, registry, namespace)
+    JobSpec (predictions file, registry); namespace inherited from adapter pod
         -> run_instances_k8s() creates K8s Jobs
         -> each Job applies patch + runs tests in a SWE-bench image
         -> adapter grades results via swebench.harness.grading
@@ -24,9 +24,12 @@ import base64
 import json
 import logging
 import os
+import shutil
+import socket
 import sys
 import time
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from evalhub.adapter import (
@@ -40,12 +43,12 @@ from evalhub.adapter import (
     JobStatus,
     JobStatusUpdate,
     MessageInfo,
-    OCIArtifactSpec,
     OCIArtifactResult,
+    OCIArtifactSpec,
     configure_telemetry,
 )
-from evalhub.models.api import OCICoordinates
 from evalhub.adapter.mlflow import MlflowArtifact
+from evalhub.models.api import OCICoordinates
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -96,13 +99,17 @@ class SWEBenchAdapter(FrameworkAdapter):
             dataset_name = SUPPORTED_BENCHMARKS[benchmark_id]
             params = config.parameters or {}
 
+            save_samples = self._sample_results_enabled(config)
+
             predictions_path = params.get("predictions_path")
             if predictions_path is None:
                 predictions_path = "gold"
             elif not predictions_path:
                 raise ValueError('predictions_path must not be empty - pass a file path or "gold"')
             k8s_registry = params.get("k8s_registry", "docker.io/swebench")
+            # Keep child Jobs in the tenant namespace assigned to this adapter pod.
             k8s_namespace = self._current_namespace()
+            service_account = self._current_service_account()
             max_workers = int(params.get("max_workers", 10))
             timeout = int(params.get("timeout_per_instance", 1800))
             split = params.get("split", "test")
@@ -134,6 +141,9 @@ class SWEBenchAdapter(FrameworkAdapter):
             logger.info("Evaluating %d instances", len(dataset))
 
             if not dataset:
+                # Replace stale diagnostics with an explicit empty run; skip remote exports.
+                _, _, summary = self._process_results({}, config)
+                self._save_artifacts({}, summary, config)
                 return self._empty_results(config, start_time)
 
             # -- Phase 3: RUNNING_EVALUATION --
@@ -153,7 +163,7 @@ class SWEBenchAdapter(FrameworkAdapter):
                 timeout=timeout,
                 cleanup=True,
                 instance_image_tag=instance_image_tag,
-                service_account=self._current_service_account(),
+                service_account=service_account,
             )
 
             # -- Phase 4: POST_PROCESSING --
@@ -166,15 +176,25 @@ class SWEBenchAdapter(FrameworkAdapter):
             )
 
             artifact_files = self._save_artifacts(results, summary, config)
+            # Zero completed attempts is an infrastructure failure, not a measured 0% score.
+            if summary["completed"] == 0:
+                details = "; ".join(
+                    f"{iid}: {r['error']}" for iid, r in results.items() if r.get("error")
+                )
+                raise RuntimeError(
+                    f"No SWE-bench instances completed ({len(dataset)} selected, {summary['errors']} runner errors)"
+                    + (f": {details}" if details else "; see saved runner diagnostics")
+                )
 
             oci_artifact: OCIArtifactResult | None = None
             oci_exports = config.exports.oci if config.exports else None
             if oci_exports is not None:
+                # The repository lifecycle reserves this phase for configured OCI exports.
                 callbacks.report_status(
                     JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
                 )
                 oci_artifact = self._persist_oci_artifact(
-                    artifact_files, oci_exports.coordinates, callbacks
+                    artifact_files, oci_exports.coordinates, callbacks, fail_on_error=save_samples
                 )
 
             duration = time.time() - start_time
@@ -194,21 +214,30 @@ class SWEBenchAdapter(FrameworkAdapter):
             summary_bytes = json.dumps(summary, indent=2).encode()            
             result_bytes =  json.dumps(results, indent=2).encode()
 
-            callbacks.mlflow.save(
-               job_results,
-                config,
-                artifacts= [
-                    MlflowArtifact("summary.json", summary_bytes, "application/json"),
-                    MlflowArtifact("results.json", result_bytes, "application/json")
-                ]
-            )
+            artifacts = [
+                MlflowArtifact("summary.json", summary_bytes, "application/json"),
+                MlflowArtifact("results.json", result_bytes, "application/json"),
+            ]
+            # Export identical sample and metric-declaration bytes to both artifact stores.
+            for path in artifact_files:
+                if path.name in {"sample_results.jsonl", "manifest.json"}:
+                    content_type = "application/x-ndjson" if path.suffix == ".jsonl" else "application/json"
+                    artifacts.append(MlflowArtifact(path.name, path.read_bytes(), content_type))
+            run_id = callbacks.mlflow.save(job_results, config, artifacts=artifacts)
+            if run_id:
+                job_results.mlflow_run_id = run_id
+            elif config.experiment_name:
+                if save_samples:
+                    raise RuntimeError("MLflow per-sample results export returned no run ID")
+                logger.warning(
+                    "MLflow experiment is configured but no run ID was returned; "
+                    "MLflow results cannot be resolved from this evaluation"
+                )
 
             return job_results
 
         except Exception as e:
             logger.error("SWE-bench evaluation failed: %s", e, exc_info=True)
-            duration = time.time() - start_time
-
             callbacks.report_status(
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
@@ -219,18 +248,18 @@ class SWEBenchAdapter(FrameworkAdapter):
                 )
             )
 
-            return JobResults(
-                id=config.id,
-                benchmark_id=config.benchmark_id,
-                benchmark_index=config.benchmark_index,
-                model_name=config.model.name if config.model else "",
-                results=[],
-                overall_score=None,
-                num_examples_evaluated=0,
-                duration_seconds=duration,
-            )
+            # Let the entry point exit nonzero without reporting completed results.
+            raise
 
     # -- Helpers ---------------------------------------------------------------
+
+    @staticmethod
+    def _sample_results_enabled(config: JobSpec) -> bool:
+        """Require an explicit boolean opt-in before publishing per-instance records."""
+        enabled = (config.parameters or {}).get("save_sample_results", False)
+        if type(enabled) is not bool:
+            raise ValueError("parameters.save_sample_results must be a boolean")
+        return enabled
 
     @staticmethod
     def _current_namespace() -> str:
@@ -242,19 +271,41 @@ class SWEBenchAdapter(FrameworkAdapter):
 
     @staticmethod
     def _current_service_account() -> str | None:
-        """Read the pod's own SA name from the mounted service account token."""
+        """Read the pod account via configured kubeconfig or legacy token discovery."""
+        # Token-less eval-hub adapters use their existing kubeconfig to inspect their own pod.
+        if os.environ.get("KUBECONFIG"):
+            # eval-hub projects this namespace file even into token-less pods.
+            # A local kubeconfig alone does not mean the adapter is running in a pod.
+            if not Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace").is_file():
+                return None
+            from kubernetes import client, config
+
+            try:
+                config.load_kube_config(config_file=os.environ["KUBECONFIG"])
+                pod_name = os.environ.get("HOSTNAME") or socket.gethostname()
+                pod = client.CoreV1Api().read_namespaced_pod(
+                    pod_name, SWEBenchAdapter._current_namespace()
+                )
+                if not pod.spec.service_account_name:
+                    raise ValueError("Adapter pod has no service account")
+                return pod.spec.service_account_name
+            except Exception as exc:
+                # Do not silently switch identities when configured pod discovery fails.
+                raise RuntimeError(
+                    f"Could not discover adapter pod service account via kubeconfig: {str(exc) or type(exc).__name__}"
+                ) from exc
         try:
             with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
                 token = f.read().strip()
             payload = token.split(".")[1]
             # JWT base64 padding
             payload += "=" * (-len(payload) % 4)
-            claims = json.loads(base64.b64decode(payload))
+            claims = json.loads(base64.urlsafe_b64decode(payload))
             # sub is "system:serviceaccount:<ns>:<sa-name>"
             parts = claims.get("sub", "").split(":")
             if len(parts) == 4 and parts[0] == "system" and parts[1] == "serviceaccount":
                 return parts[3]
-        except (OSError, json.JSONDecodeError, IndexError, KeyError):
+        except (OSError, ValueError, IndexError, KeyError, AttributeError, TypeError):
             logger.warning("Could not determine service account from token, child Jobs will use namespace default")
         return None
 
@@ -381,6 +432,7 @@ class SWEBenchAdapter(FrameworkAdapter):
         self, results: dict, summary: dict, config: JobSpec
     ) -> list[Path]:
         """Save result artifacts to local files for OCI persistence."""
+        save_samples = self._sample_results_enabled(config)
         base_path = self._get_results_dir(config)
         base_path.mkdir(parents=True, exist_ok=True)
 
@@ -390,8 +442,26 @@ class SWEBenchAdapter(FrameworkAdapter):
         results_path = base_path / "results.json"
         results_path.write_text(json.dumps(results, indent=2))
 
+        files = [summary_path, results_path]
+        if save_samples:
+            # resolve_rate divides by completed instances; infrastructure failures are
+            # diagnostics, not scored observations, and must not alter that denominator.
+            records = [
+                {"sample_id": instance_id, "instance_id": instance_id,
+                 "resolve_rate": float(bool(result.get("resolved"))), "completed": True}
+                for instance_id, result in results.items() if result.get("completed")
+            ]
+            sample_path = base_path / "sample_results.jsonl"
+            sample_path.write_text("".join(json.dumps(row, allow_nan=False) + "\n" for row in records))
+            manifest_path = base_path / "manifest.json"
+            manifest_path.write_text(json.dumps({"primary_score": {"metric": "resolve_rate"}, "estimand": "mean"}))
+            files.extend([sample_path, manifest_path])
+        else:
+            # A reused local results directory must not expose samples from an earlier run.
+            for name in ("sample_results.jsonl", "manifest.json"):
+                (base_path / name).unlink(missing_ok=True)
         logger.info("Artifacts saved to %s", base_path)
-        return [summary_path, results_path]
+        return files
 
     def _get_results_dir(self, config: JobSpec) -> Path:
         """Get the results directory, respecting local_jobs_base_path."""
@@ -404,23 +474,32 @@ class SWEBenchAdapter(FrameworkAdapter):
         files: list[Path],
         coordinates: OCICoordinates,
         callbacks: JobCallbacks,
+        *,
+        fail_on_error: bool = False,
     ) -> OCIArtifactResult | None:
         """Create an OCI artifact from result files."""
         if not files:
             return None
 
+        # Explicit sample persistence is required to succeed. Without that opt-in,
+        # preserve the existing warning-only behavior for diagnostic OCI exports.
         try:
-            artifact_dir = files[0].parent
-            result = callbacks.create_oci_artifact(
-                OCIArtifactSpec(
-                    files_path=artifact_dir,
-                    coordinates=coordinates,
+            # The SDK uploads a directory, so isolate exactly this run's selected files.
+            with TemporaryDirectory(prefix="swebench-oci-") as staging:
+                artifact_dir = Path(staging)
+                for path in files:
+                    shutil.copy2(path, artifact_dir / path.name)
+                result = callbacks.create_oci_artifact(
+                    OCIArtifactSpec(files_path=artifact_dir, coordinates=coordinates)
                 )
-            )
-            logger.info("OCI artifact created from %s", artifact_dir)
-            return result
+                if result is None and fail_on_error:
+                    raise RuntimeError("OCI export returned no artifact reference")
+                logger.info("OCI artifact created from %s", artifact_dir)
+                return result
         except Exception as e:
-            logger.warning("Failed to create OCI artifact: %s", e)
+            if fail_on_error:
+                raise RuntimeError(f"OCI per-sample results upload failed: {e}") from e
+            logger.warning("Failed to create OCI artifact; evaluation results are preserved: %s", e)
             return None
 
     def _empty_results(self, config: JobSpec, start_time: float) -> JobResults:
