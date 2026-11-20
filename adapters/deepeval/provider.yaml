@@ -177,8 +177,8 @@ parameters:
     description: Enable native JSON-schema enforcement for compatible judge endpoints.
   - name: max_tokens
     type: integer
-    default: 1024
-    description: Maximum output tokens for each judge completion.
+    default: null
+    description: Optional positive output-token limit for each judge completion; omitted by default to preserve DeepEval behavior.
   - name: save_sample_results
     type: boolean
     default: false

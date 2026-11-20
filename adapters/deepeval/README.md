@@ -139,7 +139,7 @@ make push-deepeval REGISTRY=quay.io/your-org VERSION=v1.0.0
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `save_sample_results` | boolean | No | `false` | Strict boolean: opt in to per-sample CI artifacts; configured persistence failures fail the evaluation. |
-| `max_tokens` | integer | No | `1024` | Positive output-token limit for each judge completion. |
+| `max_tokens` | integer | No | unset | Optional positive output-token limit for each judge completion; omitted by default to preserve DeepEval behavior. |
 | `judge_structured_outputs` | boolean | No | `false` | Enable native JSON-schema output for compatible judge endpoints. |
 | `eval_model_name` | string | No | model.name | Judge model name (e.g. `microsoft-phi-4`, `gpt-4o`). Defaults to the evaluated model. |
 | `threshold` | float | No | `0.5` | Minimum pass threshold for metric scores |
@@ -209,8 +209,8 @@ persistence errors fail the evaluation instead of silently discarding samples.
 When samples are disabled, diagnostic-only OCI/MLflow upload failures are logged
 as warnings and evaluation still succeeds.
 
-Judge responses are bounded by `parameters.max_tokens` (positive integer,
-default 1024). For self-hosted OpenAI-compatible endpoints that support JSON
+Set `parameters.max_tokens` to a positive integer to bound judge output tokens.
+When omitted or null, the adapter passes no token-limit override to DeepEval. For self-hosted OpenAI-compatible endpoints that support JSON
 schema, set `parameters.judge_structured_outputs: true` to use DeepEval's native
 schema-constrained generation. Its default is false. The adapter preserves the
 real model name and credentials, and lets DeepEval provide `response_format`

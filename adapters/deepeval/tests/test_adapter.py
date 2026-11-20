@@ -386,7 +386,7 @@ def test_build_conversational_test_cases_raises_on_all_invalid():
         _build_conversational_test_cases(records, "knowledge-retention")
 
 
-@pytest.mark.parametrize("value", [None, False, 0, -1, "1024"])
+@pytest.mark.parametrize("value", [False, 0, -1, "1024"])
 def test_judge_rejects_invalid_token_limit(value):
     from main import _resolve_judge_model
     with pytest.raises(ValueError, match="max_tokens must be a positive integer"):

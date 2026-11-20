@@ -216,7 +216,7 @@ def _build_conversational_test_cases(
     return test_cases
 
 
-def _resolve_judge_model(judge_name: str, model_url: str, *, max_tokens: int = 1024, structured_outputs: bool = False) -> Any:
+def _resolve_judge_model(judge_name: str, model_url: str, *, max_tokens: int | None = None, structured_outputs: bool = False) -> Any:
     """Return a GPTModel pointed at an OpenAI-compatible endpoint.
 
     Both the judge endpoint and credential come from the model auth Secret.
@@ -224,7 +224,7 @@ def _resolve_judge_model(judge_name: str, model_url: str, *, max_tokens: int = 1
     """
     from deepeval.models.llms import GPTModel
 
-    if type(max_tokens) is not int or max_tokens <= 0:
+    if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
         raise ValueError("parameters.max_tokens must be a positive integer")
 
     if type(structured_outputs) is not bool:
@@ -251,7 +251,8 @@ def _resolve_judge_model(judge_name: str, model_url: str, *, max_tokens: int = 1
         model=judge_name,
         base_url=url,
         api_key=api_key or "EMPTY",
-        generation_kwargs={"max_tokens": max_tokens},
+        # Preserve DeepEval's token-limit default unless the job supplies an override.
+        generation_kwargs={"max_tokens": max_tokens} if max_tokens is not None else {},
     )
     # DeepEval supplies response_format itself in schema/JSON mode; do not pass it twice.
     if not judge.supports_structured_outputs() and not judge.supports_json_mode():
@@ -360,7 +361,7 @@ class DeepEvalAdapter(FrameworkAdapter):
                 JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
             )
 
-            judge = _resolve_judge_model(judge_name, model_url, max_tokens=config.parameters.get("max_tokens", 1024), structured_outputs=config.parameters.get("judge_structured_outputs", False))
+            judge = _resolve_judge_model(judge_name, model_url, max_tokens=config.parameters.get("max_tokens"), structured_outputs=config.parameters.get("judge_structured_outputs", False))
             metric = _create_metric(benchmark_id, judge, threshold)
             throttle_value = float(config.parameters.get("throttle_value", 0))
             max_concurrent = int(config.parameters.get("max_concurrent", 1))
