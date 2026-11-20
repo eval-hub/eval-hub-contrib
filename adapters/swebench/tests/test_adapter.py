@@ -484,11 +484,13 @@ def test_persistence_phase_is_reserved_for_configured_oci(
     assert callbacks.create_oci_artifact.call_count == int(oci)
 
 
+@pytest.mark.parametrize("save_samples", [False, True])
 @pytest.mark.parametrize("stale", [False, True])
 def test_no_matching_instances_cleans_owned_outputs_and_skips_exports(
-    adapter, runner_runtime, tmp_path, stale
+    adapter, runner_runtime, tmp_path, stale, save_samples
 ):
     config, callbacks, runner, loader = runner_runtime
+    config.parameters["save_sample_results"] = save_samples
     owned = ("sample_results.jsonl", "manifest.json", "summary.json", "results.json")
     if stale:
         for name in owned:
@@ -500,9 +502,15 @@ def test_no_matching_instances_cleans_owned_outputs_and_skips_exports(
     assert result.num_examples_evaluated == 0
     assert result.oci_artifact is None
     assert result.mlflow_run_id is None
-    assert all(not (tmp_path / name).exists() for name in owned)
+    assert (tmp_path / "sample_results.jsonl").exists() == save_samples
+    assert (tmp_path / "manifest.json").exists() == save_samples
+    if save_samples:
+        assert (tmp_path / "sample_results.jsonl").read_text() == ""
+    assert json.loads((tmp_path / "results.json").read_text()) == {}
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["total"] == summary["completed"] == summary["errors"] == 0
     assert {path.name for path in tmp_path.iterdir()} == (
-        {"unrelated.txt"} if stale else set()
+        {"summary.json", "results.json"} | ({"sample_results.jsonl", "manifest.json"} if save_samples else set()) | ({"unrelated.txt"} if stale else set())
     )
     if stale:
         assert (tmp_path / "unrelated.txt").read_text() == "keep"
@@ -684,3 +692,51 @@ def test_opted_in_oci_success_returns_reference_and_current_samples(
         call.args[0].status == JobStatus.FAILED
         for call in callbacks.report_status.call_args_list
     )
+
+
+def test_tokenless_adapter_discovers_own_pod_account(adapter, monkeypatch):
+    """Existing kubeconfig supplies API access; caller parameters never select the account."""
+    from types import SimpleNamespace
+    monkeypatch.setenv("KUBECONFIG", "/trusted/kubeconfig")
+    monkeypatch.setenv("HOSTNAME", "adapter-pod")
+    monkeypatch.setattr(adapter.__class__, "_current_namespace", staticmethod(lambda: "tenant"))
+    with patch("builtins.open", side_effect=FileNotFoundError), patch("kubernetes.config.load_kube_config") as load, patch("kubernetes.client.CoreV1Api") as core:
+        core.return_value.read_namespaced_pod.return_value = SimpleNamespace(spec=SimpleNamespace(service_account_name="evalhub-job"))
+        assert adapter._current_service_account() == "evalhub-job"
+        load.assert_called_once_with(config_file="/trusted/kubeconfig")
+        core.return_value.read_namespaced_pod.assert_called_once_with("adapter-pod", "tenant")
+
+
+@pytest.mark.parametrize("failure", ["forbidden", "missing_account"])
+def test_tokenless_discovery_never_silently_changes_account(adapter, monkeypatch, failure):
+    monkeypatch.setenv("KUBECONFIG", "/trusted/kubeconfig")
+    with patch("kubernetes.config.load_kube_config"), patch("kubernetes.client.CoreV1Api") as core:
+        if failure == "forbidden":
+            core.return_value.read_namespaced_pod.side_effect = RuntimeError("forbidden")
+        else:
+            core.return_value.read_namespaced_pod.return_value.spec.service_account_name = None
+        with pytest.raises(RuntimeError, match="Could not discover adapter pod service account"):
+            adapter._current_service_account()
+
+
+def test_provider_defaults_match_sample_manifest(adapter, tmp_path):
+    import yaml
+    provider = yaml.safe_load((FIXTURE_DIR.parent / "provider.yaml").read_text())
+    config = adapter.job_spec.model_copy(deep=True)
+    config.parameters["save_sample_results"] = True
+    with patch.object(adapter, "_get_results_dir", return_value=tmp_path):
+        observations = {
+            "rejected": {"completed": True, "resolved": False},
+            "resolved": {"completed": True, "resolved": True},
+            "timeout": {"completed": False, "resolved": False},
+        }
+        _, score, summary = adapter._process_results(observations, config)
+        assert score == 0.5 and summary["completed"] == 2 and summary["errors"] == 1
+        adapter._save_artifacts(observations, summary, config)
+        rows = [json.loads(line) for line in (tmp_path / "sample_results.jsonl").read_text().splitlines()]
+        assert {row["sample_id"]: row["resolve_rate"] for row in rows} == {"rejected": 0.0, "resolved": 1.0}
+    metric = json.loads((tmp_path / "manifest.json").read_text())["primary_score"]["metric"]
+    assert len(provider["benchmarks"]) == 3
+    for benchmark in provider["benchmarks"]:
+        assert benchmark["primary_score"] == {"metric": metric, "lower_is_better": False}
+        assert benchmark["pass_criteria"]["threshold"] == 0.5

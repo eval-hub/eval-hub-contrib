@@ -21,6 +21,11 @@ benchmarks:
       500 human-verified solvable instances from SWE-bench.
       The primary benchmark for comparing coding agents.
     category: code_generation
+    primary_score:
+      metric: resolve_rate
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
     metrics:
       - resolve_rate
       - resolved_count
@@ -37,6 +42,11 @@ benchmarks:
     description: >-
       300 curated instances from SWE-bench, designed for faster evaluation.
     category: code_generation
+    primary_score:
+      metric: resolve_rate
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
     metrics:
       - resolve_rate
       - resolved_count
@@ -53,6 +63,11 @@ benchmarks:
     description: >-
       Full SWE-bench dataset with 2294 instances across 12 Python repositories.
     category: code_generation
+    primary_score:
+      metric: resolve_rate
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
     metrics:
       - resolve_rate
       - resolved_count

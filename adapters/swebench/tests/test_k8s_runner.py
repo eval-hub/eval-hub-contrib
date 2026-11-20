@@ -91,7 +91,7 @@ def test_unreadable_existing_job_is_not_reused(test_spec, monkeypatch, tmp_path)
     logs.assert_not_called()
 
 
-@pytest.mark.parametrize("logs", ["partial test output", "", k8s_runner.APPLY_PATCH_FAIL])
+@pytest.mark.parametrize("logs", ["partial test output", ""])
 def test_failed_child_job_is_not_graded(test_spec, monkeypatch, tmp_path, logs):
     """A failed Job must remain diagnostic even when partial output is gradeable."""
     monkeypatch.setattr(k8s_runner, "RUN_EVALUATION_LOG_DIR", tmp_path)
@@ -131,3 +131,19 @@ def test_terminal_job_failure_without_failed_pod_count(reason):
     ))
     assert k8s_runner._wait_for_job(batch, "job", "tenant", poll_interval=0) is False
     batch.read_namespaced_job.assert_called_once()
+
+
+def test_rejected_patch_is_a_scored_zero(test_spec, monkeypatch, tmp_path):
+    """Patch rejection belongs in the resolve-rate denominator without test grading."""
+    monkeypatch.setattr(k8s_runner, "RUN_EVALUATION_LOG_DIR", tmp_path)
+    monkeypatch.setattr(k8s_runner, "_wait_for_job", MagicMock(return_value=False))
+    monkeypatch.setattr(k8s_runner, "_get_pod_logs", MagicMock(return_value=k8s_runner.APPLY_PATCH_FAIL + "\n"))
+    grade = MagicMock()
+    monkeypatch.setattr(k8s_runner, "get_eval_report", grade)
+    batch = MagicMock()
+    result = k8s_runner.run_instance_k8s(
+        test_spec, {}, "rejected", "registry.example", "tenant", 60, batch, MagicMock()
+    )
+    assert result == {"completed": True, "resolved": False}
+    grade.assert_not_called()
+    batch.delete_namespaced_job.assert_called_once()

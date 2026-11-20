@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import shutil
+import socket
 import sys
 import time
 from pathlib import Path
@@ -140,10 +141,9 @@ class SWEBenchAdapter(FrameworkAdapter):
             logger.info("Evaluating %d instances", len(dataset))
 
             if not dataset:
-                # A no-match rerun must not leave earlier results beside its zero score.
-                base_path = self._get_results_dir(config)
-                for name in ("sample_results.jsonl", "manifest.json", "summary.json", "results.json"):
-                    (base_path / name).unlink(missing_ok=True)
+                # Replace stale diagnostics with an explicit empty run; skip remote exports.
+                _, _, summary = self._process_results({}, config)
+                self._save_artifacts({}, summary, config)
                 return self._empty_results(config, start_time)
 
             # -- Phase 3: RUNNING_EVALUATION --
@@ -262,7 +262,23 @@ class SWEBenchAdapter(FrameworkAdapter):
 
     @staticmethod
     def _current_service_account() -> str | None:
-        """Infer the pod account, falling back to the namespace default."""
+        """Read the pod account via configured kubeconfig or legacy token discovery."""
+        # Token-less eval-hub adapters use their existing kubeconfig to inspect their own pod.
+        if os.environ.get("KUBECONFIG"):
+            from kubernetes import client, config
+
+            try:
+                config.load_kube_config(config_file=os.environ["KUBECONFIG"])
+                pod_name = os.environ.get("HOSTNAME") or socket.gethostname()
+                pod = client.CoreV1Api().read_namespaced_pod(
+                    pod_name, SWEBenchAdapter._current_namespace()
+                )
+                if not pod.spec.service_account_name:
+                    raise ValueError("Adapter pod has no service account")
+                return pod.spec.service_account_name
+            except Exception as exc:
+                # Do not silently switch identities when configured pod discovery fails.
+                raise RuntimeError("Could not discover adapter pod service account via kubeconfig") from exc
         try:
             with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
                 token = f.read().strip()

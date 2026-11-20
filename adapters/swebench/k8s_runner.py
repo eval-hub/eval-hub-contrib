@@ -345,6 +345,11 @@ def run_instance_k8s(
     test_output_path = log_dir / LOG_TEST_OUTPUT
     test_output_path.write_text(logs)
 
+    # A rejected model patch is an evaluated attempt, not an infrastructure failure.
+    if not success and APPLY_PATCH_FAIL in logs.splitlines():
+        logger.info("Model patch could not be applied for %s", instance_id)
+        return {"completed": True, "resolved": False}
+
     if not success:
         # Partial test output from evictions/timeouts is diagnostic, never a scored failure.
         logger.error("Job %s did not complete successfully for %s; skipping grading", job_name, instance_id)

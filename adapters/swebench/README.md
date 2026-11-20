@@ -127,8 +127,11 @@ the cluster-scoped SCC binding):
 sed 's/NAMESPACE/my-namespace/g' rbac.yaml | oc apply -n my-namespace -f -
 ```
 
-Child Jobs inherit the adapter pod service account when it can be discovered;
-otherwise Kubernetes uses the namespace default. Job parameters cannot select
+With `KUBECONFIG` configured, the adapter reads its own Pod through the Kubernetes
+API and uses that Pod's service account for child Jobs. This requires the `pods/get`
+permission already included above; discovery failure stops the run rather than
+silently selecting the namespace default. Without a kubeconfig, legacy token
+discovery is retained, falling back to the namespace default when unavailable. Job parameters cannot select
 a service account. Child pods
 disable service-account token automounting for both init and evaluation containers.
 
@@ -160,13 +163,14 @@ ID as `sample_id` and a numeric `resolve_rate` observation. Omitted or `false`
 disables sample/manifest output; only boolean values are accepted.
 When at least one instance completes, their mean matches the aggregate resolve
 rate. Incomplete infrastructure runs remain in diagnostic artifacts and are
-excluded from scored observations. If none complete, the aggregate falls back to
+excluded from scored observations. A model patch that fails to apply is an
+unresolved observation (0), included in both the aggregate denominator and sample
+file. If none complete, the aggregate falls back to
 0.0, but the sample file is empty and cannot produce a confidence interval.
-If no prediction IDs match the selected dataset, the adapter instead returns 0.0
-before writing artifacts or invoking OCI/MLflow exporters; that run creates no
-sample file or artifact reference. On a reused local path, it removes the four
-adapter-owned output files (samples, manifest, summary, and results) so earlier
-outputs cannot be mistaken for this run; unrelated files are preserved.
+If no prediction IDs match the selected dataset, the adapter returns 0.0 and
+writes fresh empty `summary.json`/`results.json`, skipping OCI/MLflow exporters.
+With sample persistence enabled it also writes an empty sample file and manifest;
+otherwise stale sample/manifest files are removed. Unrelated files are preserved.
 When enabled, configured OCI and MLflow exports include the same JSONL bytes
 and primary-metric manifest. Sample/manifest files from a reused results
 directory are removed when persistence is disabled. Invalid flags fail before
@@ -176,8 +180,9 @@ samples remain on the local filesystem.
 SWE-bench's Kubernetes client honors `KUBECONFIG` when no in-cluster token is
 mounted. Child Jobs inherit the adapter pod namespace selected by eval-hub for
 the request tenant (`X-Tenant`); job parameters cannot override it. Outside a pod,
-the namespace falls back to `default`. The account comes from pod-token discovery,
-then the namespace default.
+the namespace falls back to `default`. With `KUBECONFIG`, the account is read from the adapter Pod using its hostname
+and namespace; discovery errors fail the run. Without it, legacy pod-token
+discovery and the namespace-default fallback remain.
 Job parameters cannot select the service account. Child pods never automatically
 mount the account token.
 All such credentials must be provisioned by the cluster, not copied from a laptop.
