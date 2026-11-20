@@ -449,19 +449,25 @@ def run_instances_k8s(
     lock = threading.Lock()
 
     def process(ts: TestSpec):
-        pred = predictions[ts.instance_id]
-        result = run_instance_k8s(
-            test_spec=ts,
-            prediction=pred,
-            run_id=run_id,
-            registry=registry,
-            namespace=namespace,
-            timeout=timeout,
-            batch_v1=batch_v1,
-            core_v1=core_v1,
-            image_tag=instance_image_tag,
-            service_account=service_account,
-        )
+        try:
+            pred = predictions[ts.instance_id]
+            result = run_instance_k8s(
+                test_spec=ts,
+                prediction=pred,
+                run_id=run_id,
+                registry=registry,
+                namespace=namespace,
+                timeout=timeout,
+                batch_v1=batch_v1,
+                core_v1=core_v1,
+                image_tag=instance_image_tag,
+                service_account=service_account,
+            )
+        except Exception as exc:
+            # Threads must report every attempted instance, including unexpected local failures.
+            logger.exception("Runner failed for %s", ts.instance_id)
+            result = {"completed": False, "resolved": False,
+                      "error": str(exc) or type(exc).__name__}
         with lock:
             results[ts.instance_id] = result
             if result["completed"]:

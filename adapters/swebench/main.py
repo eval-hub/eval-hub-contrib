@@ -176,6 +176,15 @@ class SWEBenchAdapter(FrameworkAdapter):
             )
 
             artifact_files = self._save_artifacts(results, summary, config)
+            # Zero completed attempts is an infrastructure failure, not a measured 0% score.
+            if summary["completed"] == 0:
+                details = "; ".join(
+                    f"{iid}: {r['error']}" for iid, r in results.items() if r.get("error")
+                )
+                raise RuntimeError(
+                    f"No SWE-bench instances completed ({len(dataset)} selected, {summary['errors']} runner errors)"
+                    + (f": {details}" if details else "; see saved runner diagnostics")
+                )
 
             oci_artifact: OCIArtifactResult | None = None
             oci_exports = config.exports.oci if config.exports else None
@@ -282,7 +291,9 @@ class SWEBenchAdapter(FrameworkAdapter):
                 return pod.spec.service_account_name
             except Exception as exc:
                 # Do not silently switch identities when configured pod discovery fails.
-                raise RuntimeError("Could not discover adapter pod service account via kubeconfig") from exc
+                raise RuntimeError(
+                    f"Could not discover adapter pod service account via kubeconfig: {str(exc) or type(exc).__name__}"
+                ) from exc
         try:
             with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
                 token = f.read().strip()

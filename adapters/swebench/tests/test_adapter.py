@@ -519,15 +519,25 @@ def test_no_matching_instances_cleans_owned_outputs_and_skips_exports(
     callbacks.mlflow.save.assert_not_called()
 
 
-def test_no_completed_instances_writes_empty_samples(adapter, runner_runtime, tmp_path):
+@pytest.mark.parametrize("save_samples", [False, True])
+def test_all_infrastructure_failures_fail_evaluation(adapter, runner_runtime, tmp_path, save_samples):
     config, callbacks, runner, _ = runner_runtime
-    config.parameters["save_sample_results"] = True
-    runner.return_value = {"a": {"completed": False, "resolved": False}}
-    result = adapter.run_benchmark_job(config, callbacks)
-    assert result.overall_score == 0.0
-    assert (tmp_path / "sample_results.jsonl").read_text() == ""
-    assert (tmp_path / "manifest.json").exists()
-    callbacks.mlflow.save.assert_called_once()
+    config.parameters["save_sample_results"] = save_samples
+    runner.return_value = {"a": {"completed": False, "resolved": False, "error": "quota exceeded"}}
+    with pytest.raises(RuntimeError, match="No SWE-bench instances completed.*quota exceeded"):
+        adapter.run_benchmark_job(config, callbacks)
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["completed"] == 0 and summary["errors"] == 1
+    assert json.loads((tmp_path / "results.json").read_text())["a"]["error"] == "quota exceeded"
+    assert (tmp_path / "sample_results.jsonl").exists() == save_samples
+    if save_samples:
+        assert (tmp_path / "sample_results.jsonl").read_text() == ""
+    failure = callbacks.report_status.call_args.args[0]
+    assert failure.status == JobStatus.FAILED
+    assert "quota exceeded" in failure.error_message.message
+    callbacks.mlflow.save.assert_not_called()
+    callbacks.create_oci_artifact.assert_not_called()
+
 
 
 @pytest.mark.parametrize("destination", ["local", "oci", "mlflow"])
@@ -715,8 +725,9 @@ def test_tokenless_discovery_never_silently_changes_account(adapter, monkeypatch
             core.return_value.read_namespaced_pod.side_effect = RuntimeError("forbidden")
         else:
             core.return_value.read_namespaced_pod.return_value.spec.service_account_name = None
-        with pytest.raises(RuntimeError, match="Could not discover adapter pod service account"):
+        with pytest.raises(RuntimeError, match="Could not discover adapter pod service account") as raised:
             adapter._current_service_account()
+        assert ("forbidden" if failure == "forbidden" else "Adapter pod has no service account") in str(raised.value)
 
 
 def test_provider_defaults_match_sample_manifest(adapter, tmp_path):
@@ -754,3 +765,17 @@ def test_local_kubeconfig_does_not_lookup_laptop_as_pod(adapter, monkeypatch, ho
         assert adapter._current_service_account() is None
         load.assert_not_called()
         core.assert_not_called()
+
+
+@pytest.mark.parametrize("cause", ["403 Forbidden", "404 Pod not found in tenant", ""])
+def test_account_discovery_error_is_reported_through_api(adapter, runner_runtime, monkeypatch, cause):
+    config, callbacks, _, _ = runner_runtime
+    monkeypatch.delattr(adapter, "_current_service_account")
+    monkeypatch.setenv("KUBECONFIG", "/trusted/kubeconfig")
+    with patch("pathlib.Path.is_file", return_value=True), patch("kubernetes.config.load_kube_config"), patch("kubernetes.client.CoreV1Api") as core:
+        core.return_value.read_namespaced_pod.side_effect = RuntimeError(cause)
+        with pytest.raises(RuntimeError, match="Could not discover adapter pod service account"):
+            adapter.run_benchmark_job(config, callbacks)
+    failure = callbacks.report_status.call_args.args[0]
+    assert failure.status == JobStatus.FAILED
+    assert (cause or "RuntimeError") in failure.error_message.message

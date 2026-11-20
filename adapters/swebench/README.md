@@ -165,8 +165,11 @@ When at least one instance completes, their mean matches the aggregate resolve
 rate. Incomplete infrastructure runs remain in diagnostic artifacts and are
 excluded from scored observations. A model patch that fails to apply is an
 unresolved observation (0), included in both the aggregate denominator and sample
-file. If none complete, the aggregate falls back to
-0.0, but the sample file is empty and cannot produce a confidence interval.
+file. If instances were selected but none complete, the evaluation fails instead
+of reporting a measured 0% score. Local diagnostics are retained; any opted-in
+sample file is empty and cannot produce a confidence interval. Unexpected worker
+exceptions are retained as diagnostic records with their error cause, so selected
+instances do not silently disappear from the results.
 If no prediction IDs match the selected dataset, the adapter returns 0.0 and
 writes fresh empty `summary.json`/`results.json`, skipping OCI/MLflow exporters.
 With sample persistence enabled it also writes an empty sample file and manifest;
@@ -182,7 +185,8 @@ mounted. Child Jobs inherit the adapter pod namespace selected by eval-hub for
 the request tenant (`X-Tenant`); job parameters cannot override it. Outside a pod,
 the namespace falls back to `default`. With `KUBECONFIG` and a mounted pod
 namespace file, the account is read from the adapter Pod using its hostname
-and namespace; discovery errors fail the run.
+and namespace; discovery errors fail the run and expose the underlying cause
+in the evaluation API error message.
 When running locally with `KUBECONFIG` and no pod namespace file, no Pod lookup
 is attempted: child Jobs use the namespace default account. Without `KUBECONFIG`,
 legacy pod-token discovery and the namespace-default fallback remain.

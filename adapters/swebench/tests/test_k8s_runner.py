@@ -147,3 +147,32 @@ def test_rejected_patch_is_a_scored_zero(test_spec, monkeypatch, tmp_path):
     assert result == {"completed": True, "resolved": False}
     grade.assert_not_called()
     batch.delete_namespaced_job.assert_called_once()
+
+
+@pytest.mark.parametrize("error", [OSError("disk full"), AttributeError("job status absent")])
+def test_worker_exception_is_retained_as_diagnostic(test_spec, monkeypatch, tmp_path, error):
+    """One failed thread cannot silently shrink the selected instance population."""
+    monkeypatch.setattr(k8s_runner, "RUN_EVALUATION_LOG_DIR", tmp_path)
+    monkeypatch.setattr(k8s_runner.k8s_config, "load_incluster_config", MagicMock())
+    monkeypatch.setattr(k8s_runner.k8s_client, "BatchV1Api", MagicMock())
+    monkeypatch.setattr(k8s_runner.k8s_client, "CoreV1Api", MagicMock())
+    other = SimpleNamespace(instance_id="other-instance")
+    monkeypatch.setattr(k8s_runner, "get_test_specs_from_dataset", lambda *a, **k: [test_spec, other])
+
+    def evaluate(**kwargs):
+        if kwargs["test_spec"] is test_spec:
+            raise error
+        return {"completed": True, "resolved": False}
+
+    monkeypatch.setattr(k8s_runner, "run_instance_k8s", evaluate)
+    results = k8s_runner.run_instances_k8s(
+        predictions={test_spec.instance_id: {}, other.instance_id: {}}, dataset=[],
+        run_id="threads", registry="registry.example", namespace="tenant",
+        max_workers=2, timeout=60, cleanup=False,
+    )
+    assert len(results) == 2
+    assert results[test_spec.instance_id] == {"completed": False, "resolved": False, "error": str(error)}
+    assert results[other.instance_id] == {"completed": True, "resolved": False}
+    import json
+    summary = json.loads((tmp_path / "threads" / "summary.json").read_text())
+    assert summary["stats"] == {"completed": 1, "resolved": 0, "error": 1}
