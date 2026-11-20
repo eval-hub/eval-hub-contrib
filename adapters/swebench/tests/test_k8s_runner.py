@@ -89,3 +89,45 @@ def test_unreadable_existing_job_is_not_reused(test_spec, monkeypatch, tmp_path)
     assert result == {"completed": False, "resolved": False}
     wait.assert_not_called()
     logs.assert_not_called()
+
+
+@pytest.mark.parametrize("logs", ["partial test output", "", k8s_runner.APPLY_PATCH_FAIL])
+def test_failed_child_job_is_not_graded(test_spec, monkeypatch, tmp_path, logs):
+    """A failed Job must remain diagnostic even when partial output is gradeable."""
+    monkeypatch.setattr(k8s_runner, "RUN_EVALUATION_LOG_DIR", tmp_path)
+    monkeypatch.setattr(k8s_runner, "_wait_for_job", MagicMock(return_value=False))
+    monkeypatch.setattr(k8s_runner, "_get_pod_logs", MagicMock(return_value=logs))
+    grade = MagicMock(return_value={test_spec.instance_id: {"resolved": False}})
+    monkeypatch.setattr(k8s_runner, "get_eval_report", grade)
+    batch = MagicMock()
+    result = k8s_runner.run_instance_k8s(
+        test_spec, {}, "failed-run", "registry.example", "tenant", 60, batch, MagicMock()
+    )
+    assert result == {"completed": False, "resolved": False}
+    grade.assert_not_called()
+    batch.delete_namespaced_job.assert_called_once()
+    assert not list(tmp_path.rglob(k8s_runner.LOG_REPORT))
+    assert next(tmp_path.rglob(k8s_runner.LOG_TEST_OUTPUT)).read_text() == logs
+
+
+def test_successful_child_with_failing_tests_is_a_scored_observation(test_spec, monkeypatch, tmp_path):
+    """An orderly completed test run can legitimately be unresolved."""
+    monkeypatch.setattr(k8s_runner, "RUN_EVALUATION_LOG_DIR", tmp_path)
+    monkeypatch.setattr(k8s_runner, "_wait_for_job", MagicMock(return_value=True))
+    monkeypatch.setattr(k8s_runner, "_get_pod_logs", MagicMock(return_value="FAILED test_example"))
+    monkeypatch.setattr(k8s_runner, "get_eval_report", MagicMock(return_value={test_spec.instance_id: {"resolved": False}}))
+    result = k8s_runner.run_instance_k8s(
+        test_spec, {}, "unresolved-run", "registry.example", "tenant", 60, MagicMock(), MagicMock()
+    )
+    assert result == {"completed": True, "resolved": False}
+
+
+@pytest.mark.parametrize("reason", ["DeadlineExceeded", "BackoffLimitExceeded"])
+def test_terminal_job_failure_without_failed_pod_count(reason):
+    """Terminal Job conditions stop polling even when pod counts lag behind."""
+    batch = MagicMock()
+    batch.read_namespaced_job.return_value = client.V1Job(status=client.V1JobStatus(
+        conditions=[client.V1JobCondition(type="Failed", status="True", reason=reason)]
+    ))
+    assert k8s_runner._wait_for_job(batch, "job", "tenant", poll_interval=0) is False
+    batch.read_namespaced_job.assert_called_once()

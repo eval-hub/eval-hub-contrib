@@ -192,3 +192,11 @@ disabled, diagnostic OCI export failures retain their prior warning-only
 behavior and leave the OCI artifact reference unset.
 `PERSISTING_ARTIFACTS` is reported only for configured OCI exports, as required
 by the repository lifecycle; local writes and MLflow-only exports skip that phase.
+
+### MLflow failure-detail dependency
+
+Until [SDK PR #204](https://github.com/eval-hub/eval-hub-sdk/pull/204) is released
+and included in the image, the SDK can report a generic MLflow failure before the
+adapter reports the backend cause. Evaluation still fails, but full backend error
+detail in the evaluation API is not guaranteed. A separate follow-up PR will
+update the SDK dependency; this PR keeps the existing version constraint.

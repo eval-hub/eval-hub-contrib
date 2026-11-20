@@ -13,7 +13,7 @@ The adapter is a thin orchestration layer:
   4. Reports resolve_rate as the overall_score
 
 Architecture:
-    JobSpec (predictions file, registry, namespace)
+    JobSpec (predictions file, registry); namespace inherited from adapter pod
         -> run_instances_k8s() creates K8s Jobs
         -> each Job applies patch + runs tests in a SWE-bench image
         -> adapter grades results via swebench.harness.grading

@@ -258,6 +258,9 @@ def _wait_for_job(
             return True
         if job.status.failed and job.status.failed > 0:
             return False
+        # DeadlineExceeded can be terminal before Kubernetes records a failed pod count.
+        if any(c.type == "Failed" and c.status == "True" for c in (job.status.conditions or [])):
+            return False
 
         time.sleep(poll_interval)
 
@@ -343,13 +346,9 @@ def run_instance_k8s(
     test_output_path.write_text(logs)
 
     if not success:
-        logger.info(
-            "Job %s exited non-zero for %s (%s)",
-            job_name, instance_id,
-            "patch apply failed" if APPLY_PATCH_FAIL in logs else "non-zero exit",
-        )
-        if APPLY_PATCH_FAIL in logs:
-            return {"completed": False, "resolved": False}
+        # Partial test output from evictions/timeouts is diagnostic, never a scored failure.
+        logger.error("Job %s did not complete successfully for %s; skipping grading", job_name, instance_id)
+        return {"completed": False, "resolved": False}
 
     if not logs.strip():
         logger.error("No logs captured for %s", instance_id)
