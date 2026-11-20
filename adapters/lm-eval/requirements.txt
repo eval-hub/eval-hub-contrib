@@ -8,6 +8,8 @@
 # benchmark) is generated from this release's task configs, and the registry job
 # fails if it no longer matches. [ifeval] and [math] supply langdetect / math-verify,
 # needed by ifeval, leaderboard_ifeval, hendrycks_math500 and leaderboard_math_hard.
+# scripts/harden_sglang.py backports the opt-in trust_remote_code default for
+# SGLang. Image builds and test setup apply it after installing this pinned wheel.
 # 0.4.13 is the latest release.
 lm_eval[api,ifeval,math]==0.4.13
 

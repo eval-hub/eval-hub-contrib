@@ -6,7 +6,9 @@ USER 0
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY scripts/harden_sglang.py scripts/harden_sglang.py
+RUN pip install --no-cache-dir -r requirements.txt && \
+    python scripts/harden_sglang.py
 
 # Copy adapter implementation
 COPY main.py _tasks.py _benchmarks.py _execution.py _results.py ./
