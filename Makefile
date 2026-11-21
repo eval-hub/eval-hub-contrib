@@ -610,7 +610,7 @@ build-and-push-skillevaluator: image-skillevaluator
 test-skillevaluator:
 	@echo "Running SkillEvaluator adapter tests..."
 	cd adapters/skillevaluator && \
-	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	{ test -d .venv || uv venv --python $(PYTHON_VERSION) .venv; } && \
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v -m "not live_cli"
 	@echo "✅ SkillEvaluator tests passed"
@@ -622,11 +622,11 @@ test-skillevaluator:
 test-skillevaluator-live:
 	@echo "Running SkillEvaluator live-CLI contract tests..."
 	cd adapters/skillevaluator && \
-	test -d .venv || uv venv --python $(PYTHON_VERSION) .venv && \
+	{ test -d .venv || uv venv --python $(PYTHON_VERSION) .venv; } && \
 	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
-	test -d .venv-skillevaluator || uv venv --python $(PYTHON_VERSION) .venv-skillevaluator && \
+	{ test -d .venv-skillevaluator || uv venv --python $(PYTHON_VERSION) .venv-skillevaluator; } && \
 	uv pip install --quiet --python .venv-skillevaluator/bin/python -r requirements-skillevaluator.txt && \
-	test -d .venv-skillspector || uv venv --python $(PYTHON_VERSION) .venv-skillspector && \
+	{ test -d .venv-skillspector || uv venv --python $(PYTHON_VERSION) .venv-skillspector; } && \
 	uv pip install --quiet --python .venv-skillspector/bin/python -r requirements-skillspector.txt && \
 	SKILLEVALUATOR_BIN="$$(pwd)/.venv-skillevaluator/bin/skillevaluator" \
 	SKILLEVALUATOR_SKILLSPECTOR_PATH="$$(pwd)/.venv-skillspector/bin/skillspector" \

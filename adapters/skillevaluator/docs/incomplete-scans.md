@@ -29,7 +29,7 @@ In a job file:
 ```yaml
 benchmarks:
   - id: skill-security
-    provider_id: skillevaluator
+    provider_id: <provider id returned at registration>
     parameters:
       on_incomplete: report          # fail (default) | report
     test_data_ref:
@@ -40,7 +40,7 @@ or with flags (applies to every `-b` benchmark in the command):
 
 ```sh
 evalhub eval run --name skill-gate --model-url http://unused/v1 --model-name unused \
-  --provider skillevaluator -b skill-security \
+  --provider "$SKILLEVALUATOR_PROVIDER_ID" -b skill-security \
   --test-data-git-url https://github.com/example-org/agent-skills.git --test-data-git-ref v1.2.0 \
   --test-data-git-sub-path skills/changelog-formatter \
   --param on_incomplete=report --wait

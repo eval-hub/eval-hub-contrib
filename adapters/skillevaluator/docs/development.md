@@ -40,8 +40,21 @@ CI also enforces lint (`ruff==0.17.4`) and docstring coverage of at least 80% (`
 
 1. Change the commit in `requirements-skillevaluator.txt` / `requirements-skillspector.txt` (and the SkillSpector
    version SkillEvaluator documents).
-2. Run `make test-skillevaluator-live`. A schema change fails here first, and so does a command that starts
-   downloading Gitleaks or SkillSpector (the job pod has no egress).
+2. Run `make test-skillevaluator-live`. A schema change fails here first. The download guard only detects a
+   Gitleaks or SkillSpector download that lands in the paths it checks under `HOME` (`.local/share/skillevaluator`
+   and files named `*gitleaks*`), and it runs with network access, so it does not prove the job pod (which has no
+   egress) can run offline.
+   To check that, build the image and run each benchmark with the network disabled, a read-only root and a skill
+   mounted at `/test_data` (`security-scan` takes `--no-llm`; the exit code is 0 for a pass and 1 for a failed gate,
+   and any other code means the tool itself failed):
+
+   ```sh
+   docker run --rm --network=none --read-only --tmpfs /tmp -e HOME=/tmp -w /tmp \
+     -v "$PWD/tests/fixtures/skills/good-skill:/test_data/skill:ro" \
+     -e SKILLEVALUATOR_SKILLSPECTOR_PATH=/opt/skillspector/bin/skillspector \
+     --entrypoint /opt/skillevaluator/bin/skillevaluator IMAGE \
+     security-scan --no-llm /test_data/skill -r json -o /tmp/out
+   ```
 3. If the report shape changed, regenerate `tests/fixtures/reports/*.json` from real output (redact `message`,
    `line_content`, `suggestion` and `[CATEGORY-SEVERITY]` lines; normalise paths) and update `_results.py`.
 4. Re-run the container checks in `.github/workflows/test-skillevaluator.yml`.

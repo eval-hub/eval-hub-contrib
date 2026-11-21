@@ -13,6 +13,7 @@ an EvalHub server that must already have the provider registered ([Running](runn
   | `EVALHUB_BASE_URL` | EvalHub server URL |
   | `EVALHUB_TOKEN` | API token; store it as a CI secret and never echo it |
   | `EVALHUB_PROFILE` | Optional: a named profile instead of the two above |
+  | `SKILLEVALUATOR_PROVIDER_ID` | The provider id the server returned when you [registered the provider](running.md#2-register-the-provider); the server generates it, so it is not `skillevaluator` |
 
 - **`jq`**, for [`examples/gate-results.sh`](../examples/gate-results.sh).
 - **Reachability:** the cluster, not the CI runner, fetches the skill. A `git` source must be cloneable from the
@@ -54,13 +55,14 @@ jobs:
         env:
           EVALHUB_BASE_URL: ${{ vars.EVALHUB_BASE_URL }}
           EVALHUB_TOKEN: ${{ secrets.EVALHUB_TOKEN }}
+          SKILLEVALUATOR_PROVIDER_ID: ${{ vars.SKILLEVALUATOR_PROVIDER_ID }}
           SKILL_PATH: skills/changelog-formatter
         run: |
           set +e
           evalhub eval run \
             --name "skill-gate-${GITHUB_SHA::8}" \
             --model-url http://unused/v1 --model-name unused \
-            --provider skillevaluator \
+            --provider "${SKILLEVALUATOR_PROVIDER_ID}" \
             -b skill-quality -b skill-security -b skill-pii \
             --test-data-git-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" \
             --test-data-git-ref "${GITHUB_SHA}" \
@@ -85,6 +87,12 @@ jobs:
 
 Notes:
 
+- **Pull requests from forks cannot run this gate.** GitHub does not give repository secrets to `pull_request`
+  workflows triggered from a fork, so `evalhub` has no `EVALHUB_TOKEN` and the step fails even when the skill is
+  fine. Decide how fork contributions are handled, for example by running the gate only for pull requests from
+  the same repository (`if: github.event.pull_request.head.repo.full_name == github.repository`) and having a
+  maintainer run it for a fork's changes from a trusted branch. Do not switch to `pull_request_target` just to
+  get the secret unless you have thought through what that workflow checks out and runs.
 - The flags apply the same source and parameters to every `-b` benchmark. `min_score` is only used by
   `skill-quality`, and `on_incomplete` by the two scans. For different settings per benchmark, use a job file
   ([`examples/skill-eval.yaml`](../examples/skill-eval.yaml)) instead of flags.
