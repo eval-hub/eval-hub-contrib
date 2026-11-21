@@ -5,7 +5,7 @@ an EvalHub server that must already have the provider registered ([Running](runn
 
 ## What the pipeline needs
 
-- **The CLI:** `pip install "eval-hub-sdk[cli]~=1.0.6"` (the SDK needs Python 3.11 or later).
+- **The CLI:** `pip install "eval-hub-sdk[cli]~=1.1.0"` (the SDK needs Python 3.12 or later).
 - **Server and credentials**, from the environment so nothing lands in the job file or logs:
 
   | Variable | Purpose |
@@ -49,7 +49,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install "eval-hub-sdk[cli]~=1.0.6"
+      - run: pip install "eval-hub-sdk[cli]~=1.1.0"
       - name: Evaluate skill
         env:
           EVALHUB_BASE_URL: ${{ vars.EVALHUB_BASE_URL }}
@@ -98,7 +98,7 @@ Notes:
 The steps are the same. A shell fragment you can adapt (GitLab CI, Jenkins, Tekton):
 
 ```sh
-pip install "eval-hub-sdk[cli]~=1.0.6"      # EVALHUB_BASE_URL and EVALHUB_TOKEN come from CI secrets
+pip install "eval-hub-sdk[cli]~=1.1.0"      # EVALHUB_BASE_URL and EVALHUB_TOKEN come from CI secrets
 set +e
 evalhub eval run --config ci/skill-eval.yaml --wait --timeout 900 --format json > result.json 2> run.log
 rc=$?

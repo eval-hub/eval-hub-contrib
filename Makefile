@@ -615,8 +615,9 @@ test-skillevaluator:
 	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v -m "not live_cli"
 	@echo "✅ SkillEvaluator tests passed"
 
-# Contract test against the real pinned CLIs (SkillEvaluator and SkillSpector are not on PyPI, so
-# each is installed from its pinned commit into its own venv). Needs git and network access.
+# Contract test against the real pinned CLIs (SkillSpector is not on PyPI and SkillEvaluator is not
+# published for every release, so each is installed from its pinned commit into its own venv).
+# Needs git and network access.
 .PHONY: test-skillevaluator-live
 test-skillevaluator-live:
 	@echo "Running SkillEvaluator live-CLI contract tests..."

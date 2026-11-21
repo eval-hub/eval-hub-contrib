@@ -14,8 +14,9 @@
 
 - SkillEvaluator documents a CLI and a versioned JSON report, not a Python API, so the adapter drives the CLI and
   parses the report. An unexpected report shape fails the job loudly instead of producing a plausible score.
-- SkillEvaluator and SkillSpector are not published on PyPI. Each is installed from a pinned release commit into
-  its own virtualenv in the image (`requirements-skillevaluator.txt`, `requirements-skillspector.txt`), so
+- SkillSpector is not published on PyPI, and SkillEvaluator is only published there for some releases. Both are
+  installed from a pinned release commit into their own virtualenv in the image
+  (`requirements-skillevaluator.txt`, `requirements-skillspector.txt`), so the two are pinned the same way and
   neither dependency stack constrains the adapter's. `git` exists only in the build stage.
 - Tier 1 `publication_status` is ignored: upstream reports `incomplete` whenever Tier 2 or Tier 3 did not run,
   which is the normal case here.

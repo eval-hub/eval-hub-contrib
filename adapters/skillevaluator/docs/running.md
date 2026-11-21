@@ -4,7 +4,7 @@ You need an EvalHub server with a Kubernetes job runtime, the `evalhub` CLI poin
 cluster can pull from.
 
 ```sh
-pip install "eval-hub-sdk[cli]~=1.0.6"
+pip install "eval-hub-sdk[cli]~=1.1.0"
 evalhub config set base_url https://evalhub.example.com
 evalhub config set token "$EVALHUB_TOKEN"
 ```
@@ -21,10 +21,12 @@ make push-skillevaluator  REGISTRY=registry.example.com/myorg VERSION=0.1.0
 ## 2. Register the provider
 
 Copy `provider.yaml`, set `runtime.k8s.image` to the image you pushed (a digest-pinned reference is best), and
-register it:
+register it. The server generates the provider id, and `evalhub providers create` (SDK 1.1.0 and later) rejects a
+spec file with a top-level `id:`, so drop that line from your copy:
 
 ```sh
-evalhub providers create --file provider.yaml
+grep -v '^id:' provider.yaml > provider-register.yaml
+evalhub providers create --file provider-register.yaml
 evalhub providers list          # note the provider id
 ```
 
@@ -33,8 +35,8 @@ If your server rejects `image_pull_policy: always` for provider registration, us
 ## 3. Describe the job
 
 [`examples/skill-eval.yaml`](../examples/skill-eval.yaml) evaluates one skill from a git repository with all
-three benchmarks. `model` is required by the job schema but unused. Use the provider id returned above (or
-`skillevaluator` if your server keeps the manifest id).
+three benchmarks. `model` is required by the job schema but unused. The example files use the manifest id `skillevaluator` as a
+placeholder for `provider_id`; replace it with the provider id returned above.
 
 ```yaml
 name: skill-gate

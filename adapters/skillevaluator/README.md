@@ -34,7 +34,8 @@ expected; if the staged material holds several, set `parameters.skill_path` (rel
 
 ```sh
 make image-skillevaluator push-skillevaluator REGISTRY=registry.example.com/myorg VERSION=0.1.0
-evalhub providers create --file adapters/skillevaluator/provider.yaml
+grep -v '^id:' adapters/skillevaluator/provider.yaml > provider-register.yaml  # the server assigns the id
+evalhub providers create --file provider-register.yaml
 evalhub eval run --config adapters/skillevaluator/examples/skill-eval.yaml --wait
 ```
 

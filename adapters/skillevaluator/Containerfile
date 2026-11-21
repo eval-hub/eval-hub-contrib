@@ -1,5 +1,5 @@
-# Stage 1: build SkillEvaluator and SkillSpector into isolated venvs. Neither is on PyPI, so
-# pip needs git; git stays in this stage and never reaches the runtime image.
+# Stage 1: build SkillEvaluator and SkillSpector into isolated venvs from pinned release commits
+# (SkillSpector is not on PyPI), so pip needs git; git stays in this stage and never reaches the runtime image.
 FROM registry.access.redhat.com/ubi9/python-312:latest AS tools
 USER 0
 RUN dnf install -y --nodocs git-core && dnf clean all
