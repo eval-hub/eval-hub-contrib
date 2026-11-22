@@ -347,7 +347,11 @@ def load_collection(
                     )
                 )
             )
-            if not candidate and len(files) > 1:
+            # Recursive discovery meets files that are not trajectories at all, so a
+            # collection of several files ignores one. A manifest-listed file is not
+            # that case: the producer named it, so it has to reach schema validation and
+            # be reported as invalid input rather than silently dropped.
+            if not candidate and len(files) > 1 and manifest_entry is None:
                 outcome.update(status="ignored", reason="not_atif")
                 continue
             if not isinstance(data, dict):

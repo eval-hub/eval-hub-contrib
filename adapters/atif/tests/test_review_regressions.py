@@ -808,6 +808,34 @@ def test_manifest_content_errors_follow_invalid_input_policy(
         adapter.run_benchmark_job(job_spec, FakeCallbacks())
 
 
+def test_a_manifest_listed_non_trajectory_is_invalid_input(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    good = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
+    empty = tmp_path / "0-1.json"
+    empty.write_text("{}")
+    _write_manifest(
+        tmp_path,
+        [
+            _manifest_row("0-0.json", 0, 0, good),
+            _manifest_row("0-1.json", 0, 1, empty.read_bytes()),
+        ],
+    )
+    job_spec.parameters.update(
+        trajectory_path=str(tmp_path), invalid_input_policy="skip_invalid"
+    )
+
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+    assert _metrics(result)["atif_trajectory_count"] == 1.0
+    assert result.evaluation_metadata["atif_invalid_input_count"] == 1
+
+    job_spec.parameters.update(invalid_input_policy="fail_fast")
+    with pytest.raises(ATIFLoadError, match="0-1.json"):
+        adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+
 def test_absent_manifest_entry_is_invalid_under_skip_invalid(
     adapter, job_spec, tmp_path, monkeypatch
 ):
