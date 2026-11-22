@@ -711,6 +711,22 @@ def test_manifest_entry_count_and_unlisted_files_are_ignored(
     ] == ["accepted", "accepted"]
 
 
+def test_a_single_manifest_entry_is_a_complete_result(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    payload = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
+    _write_manifest(tmp_path, [_manifest_row("0-0.json", 0, 0, payload)])
+    job_spec.parameters.update(trajectory_path=str(tmp_path))
+
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+    metrics = _metrics(result)
+    assert metrics["atif_manifest_entry_count"] == 1.0
+    assert metrics["atif_trajectory_count"] == 1.0
+    assert result.evaluation_metadata["atif_complete"] is True
+
+
 def test_unscored_job_publishes_no_overall_score(
     adapter, job_spec, tmp_path, monkeypatch
 ):
