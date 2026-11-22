@@ -1,7 +1,10 @@
 id: atif
 name: ATIF Trajectory Adapter
 description: Evaluate pre-recorded ATIF trajectories using an OpenAI-compatible judge.
-type: builtin
+# Community provider: the image is published as quay.io/evalhub/community-atif and
+# the provider is registered from the community provider configuration rather
+# than being bundled with the platform.
+type: community
 
 runtime:
   k8s:
@@ -22,6 +25,8 @@ benchmarks:
     category: agentic
     metrics:
       - atif_overall_score
+      - atif_trajectory_count
+      - atif_manifest_entry_count
       - atif_failure_categorization_rate
     tags:
       - atif
@@ -36,7 +41,7 @@ parameters:
   - name: trajectory_path
     type: string
     default: /test_data
-    description: Path to an ATIF file or mixed producer directory. Requires job experiment_name for durable MLflow artifacts.
+    description: Path to an ATIF file or mixed producer directory. A top-level manifest.jsonl (NeMo Gym export) is authoritative and fixes evaluation order; without one, recursive discovery applies. Requires job experiment_name for durable MLflow artifacts.
   - name: scoring_mode
     type: string
     default: auto
@@ -87,7 +92,7 @@ parameters:
   - name: invalid_input_policy
     type: string
     default: skip_invalid
-    description: skip_invalid records invalid candidates and continues; fail_fast aborts. No valid inputs always fails.
+    description: skip_invalid records invalid candidates and continues; fail_fast aborts. Manifest rows follow the same policy, including empty manifests and absent entries. No valid inputs always fails.
   - name: max_steps_per_trajectory
     type: integer
     default: 500
@@ -133,4 +138,4 @@ parameters:
   - name: partial_result_policy
     type: string
     default: fail_fast
-    description: Use fail_fast or skip_failed_trajectory when a trajectory cannot be scored
+    description: Use fail_fast or skip_failed_trajectory when a trajectory cannot be scored. fail_fast also aborts on a manifest SHA-256 mismatch, naming the file; skip_failed_trajectory withholds that entry's score and counts it in atif_failed_trajectory_count.
