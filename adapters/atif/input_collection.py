@@ -15,6 +15,11 @@ from evalhub.models.atif import Trajectory
 from pydantic import ValidationError
 
 MAX_COLLECTION_BYTES = 64 * 1024 * 1024
+# Producer provenance the ATIF model does not declare is preserved from the raw payload
+# before validation, so a rejected file still reports what its producer wrote. The model
+# stays the contract: the fields are not moved into the trajectory.
+MAX_UNDECLARED_ROOT_BYTES = 4 * 1024
+DECLARED_ROOT_FIELDS = frozenset(Trajectory.model_fields)
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 
 
@@ -100,6 +105,18 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise ValueError("duplicate JSON object key")
         result[key] = value
     return result
+
+
+def _bounded_provenance(fields: dict[str, Any]) -> dict[str, Any]:
+    """Keep producer fields small enough to belong in a report.
+
+    A file is bounded by ``max_file_bytes``, but the report copies what is preserved, so
+    an oversized blob is replaced by its key names rather than duplicated into MLflow.
+    """
+    encoded = json.dumps(fields, default=str)
+    if len(encoded) <= MAX_UNDECLARED_ROOT_BYTES:
+        return fields
+    return {"_keys": sorted(fields), "_preserved": False, "_bytes": len(encoded)}
 
 
 def load_manifest(
@@ -366,6 +383,15 @@ def load_collection(
                     "conflicting_schema",
                 )
             data.setdefault("schema_version", alias)
+            undeclared_root = {
+                key: value
+                for key, value in data.items()
+                if key not in DECLARED_ROOT_FIELDS
+            }
+            if undeclared_root:
+                outcome["producer_undeclared_root"] = _bounded_provenance(
+                    undeclared_root
+                )
             pending = [data]
             while pending:
                 node = pending.pop()

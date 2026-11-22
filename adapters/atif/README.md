@@ -46,9 +46,20 @@ evaluation order, and unlisted JSON files are not loaded. The manifest has its o
 4 MiB bound and is not charged to trajectory file or collection-byte accounting.
 When `expected_sha256` is present it is compared with SHA-256 of the exact
 trajectory file bytes (the Gym exporter hashes the UTF-8 JSON bytes it writes,
-including the final newline); absent digests are recorded as unverified. Manifest
-task/rollout identifiers and verification status are carried in persisted
-provenance. Without `manifest.jsonl`, legacy recursive discovery is unchanged.
+including the final newline); absent digests are recorded as unverified. NeMo Gym
+writes no digest inside the trajectory document, so there is no in-file value to
+leave unverified. Manifest task/rollout identifiers and verification status are
+carried in persisted provenance. Without `manifest.jsonl`, legacy recursive discovery
+is unchanged.
+
+The ATIF model stays the contract: a root field it does not declare is rejected as
+`invalid_schema`, and producer metadata belongs in the declared `extra` object, which
+is copied to `provenance.producer_extra`. So that a rejected file is still
+diagnosable, the undeclared root fields are captured from the raw payload before
+validation and recorded under `producer_undeclared_root` on that file's entry in
+`atif_input_outcomes`, which the `atif/evaluation_results.json` report artifact
+carries. The copy is capped at 4 KiB per file; past the cap only the key names are
+kept, with `_preserved: false`.
 
 Manifest rows follow `invalid_input_policy`. `skip_invalid` records the rejected
 row as an invalid input (`ATIF manifest contains no entries` included) and keeps

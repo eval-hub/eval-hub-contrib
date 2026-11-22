@@ -894,6 +894,43 @@ def test_a_manifest_listed_non_trajectory_is_invalid_input(
         adapter.run_benchmark_job(job_spec, FakeCallbacks())
 
 
+def test_undeclared_root_provenance_is_preserved_in_the_report(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    good = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
+    trajectory = {
+        **_valid_trajectory(),
+        "producer_sha256": "abc123",
+        "nemo_gym_task": {"id": "mcqa-1", "split": "train"},
+    }
+    undeclared = _write_entry(tmp_path, "0-1.json", trajectory)
+    _write_manifest(
+        tmp_path,
+        [
+            _manifest_row("0-0.json", 0, 0, good),
+            _manifest_row("0-1.json", 0, 1, undeclared),
+        ],
+    )
+    job_spec.parameters.update(
+        trajectory_path=str(tmp_path), invalid_input_policy="skip_invalid"
+    )
+
+    callbacks = FakeCallbacks()
+    result = adapter.run_benchmark_job(job_spec, callbacks)
+
+    # The model stays the contract: the file is invalid input under skip_invalid.
+    assert _metrics(result)["atif_trajectory_count"] == 1.0
+    assert result.evaluation_metadata["atif_invalid_input_count"] == 1
+    outcomes = callbacks.mlflow.calls[0][0].evaluation_metadata["atif_input_outcomes"]
+    assert outcomes[-1]["reason"] == "invalid_schema"
+    # ... and what the producer wrote before validation is still recoverable.
+    assert outcomes[-1]["producer_undeclared_root"] == {
+        "producer_sha256": "abc123",
+        "nemo_gym_task": {"id": "mcqa-1", "split": "train"},
+    }
+
+
 def test_absent_manifest_entry_is_invalid_under_skip_invalid(
     adapter, job_spec, tmp_path, monkeypatch
 ):
