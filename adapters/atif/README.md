@@ -233,7 +233,8 @@ unscored job cannot be mistaken for a passing one. This covers every root beyond
 `max_subagent_depth` and every judge call failing under
 `skip_failed_trajectory`. A genuine zero keeps `atif_overall_score=0.0` with
 `atif_trajectory_count > 0`, and `atif_complete` is only ever true when at least
-one trajectory scored with no invalid input. Downstream, an absent score means the
+one trajectory scored and no input was left unscored, invalid or withheld for a
+digest mismatch. Downstream, an absent score means the
 platform test result is nil and `EvaluationThresholdViolated` does not fire; the
 adapter emits one warning per unscored job.
 

@@ -596,10 +596,15 @@ class ATIFAdapter(FrameworkAdapter):
                 },
                 "atif_context_byte_limit": self._max_context_bytes,
                 "atif_training_eligible_count": len(eligible_paths),
+                # A run is complete only when every input it was given was either
+                # scored or accepted: an entry withheld for a digest mismatch leaves a
+                # gap in the export, exactly like an invalid one, so a consumer cannot
+                # read `atif_complete: true` over a partially scored manifest.
                 "atif_complete": bool(scored)
                 and all(item.get("complete", False) for item in scored)
                 and not any(
-                    item["status"] == "invalid" for item in self._input_outcomes
+                    item["status"] in ("invalid", "failed")
+                    for item in self._input_outcomes
                 ),
                 "atif_manifest_entry_count": manifest_entry_count,
                 "atif_trajectories": scored,

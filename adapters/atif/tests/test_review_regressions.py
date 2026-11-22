@@ -767,6 +767,36 @@ def test_empty_manifest_is_invalid_under_skip_invalid_only(adapter, job_spec, tm
         adapter.run_benchmark_job(job_spec, FakeCallbacks())
 
 
+def test_a_withheld_entry_makes_the_run_incomplete(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    scored = _write_entry(
+        tmp_path, "0-0.json", {**_valid_trajectory(), "trajectory_id": "a"}
+    )
+    withheld = _write_entry(
+        tmp_path, "0-1.json", {**_valid_trajectory(), "trajectory_id": "b"}
+    )
+    bad = _manifest_row("0-1.json", 0, 1, withheld)
+    bad["expected_sha256"] = "0" * 64
+    _write_manifest(tmp_path, [_manifest_row("0-0.json", 0, 0, scored), bad])
+    job_spec.parameters.update(
+        trajectory_path=str(tmp_path),
+        invalid_input_policy="skip_invalid",
+        partial_result_policy="skip_failed_trajectory",
+    )
+
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+    metrics = _metrics(result)
+    assert metrics["atif_trajectory_count"] == 1.0
+    assert metrics["atif_manifest_entry_count"] == 2.0
+    assert result.evaluation_metadata["atif_failed_trajectory_count"] == 1
+    # One entry scored, so a score is published - but the export was not fully scored.
+    assert metrics["atif_overall_score"] > 0.0
+    assert result.evaluation_metadata["atif_complete"] is False
+
+
 def test_a_fully_withheld_export_completes_under_fail_fast_input_policy(
     adapter, job_spec, tmp_path, monkeypatch
 ):
