@@ -767,17 +767,34 @@ def test_empty_manifest_is_invalid_under_skip_invalid_only(adapter, job_spec, tm
         adapter.run_benchmark_job(job_spec, FakeCallbacks())
 
 
-def test_manifest_row_errors_follow_invalid_input_policy(
+def test_manifest_duplicate_identity_is_fatal_under_every_policy(
     adapter, job_spec, tmp_path, monkeypatch
 ):
     install_judge(adapter, monkeypatch)
     payload = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
     rows = [
         _manifest_row("0-0.json", 0, 0, payload),
-        # Repeated rollout identity: the second row is the rejected one.
+        # Repeated rollout identity: the second row repeats the first entry.
         _manifest_row("0-0.json", 0, 0, payload),
     ]
     _write_manifest(tmp_path, rows)
+
+    for policy in ("skip_invalid", "fail_fast"):
+        job_spec.parameters.update(
+            trajectory_path=str(tmp_path), invalid_input_policy=policy
+        )
+        with pytest.raises(ATIFLoadError, match="row 2"):
+            adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+
+def test_manifest_content_errors_follow_invalid_input_policy(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    payload = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
+    bad_digest = _manifest_row("0-0.json", 1, 0, payload)
+    bad_digest["expected_sha256"] = "not-a-digest"
+    _write_manifest(tmp_path, [_manifest_row("0-0.json", 0, 0, payload), bad_digest])
 
     job_spec.parameters.update(
         trajectory_path=str(tmp_path), invalid_input_policy="skip_invalid"

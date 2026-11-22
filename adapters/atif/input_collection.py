@@ -38,6 +38,15 @@ class CollectionBudgetError(ATIFLoadError):
     """Fatal collection-wide resource limit, independent of invalid-file policy."""
 
 
+class UnsafeManifestRowError(ValueError):
+    """A manifest row that breaks a boundary rather than carrying bad content.
+
+    An unsafe path or a repeated identity makes the manifest's own account of the
+    export untrustworthy, so no ``invalid_input_policy`` may skip it: skipping would
+    score the rest of an export whose file list cannot be believed.
+    """
+
+
 class ATIFDigestMismatchError(ATIFLoadError):
     """Provenance failure governed by ``partial_result_policy``, not by
     ``invalid_input_policy``: the bytes were readable, they just did not match
@@ -153,7 +162,7 @@ def load_manifest(
                 or ".." in posix_path.parts
                 or "." in posix_path.parts
             ):
-                raise ValueError("unsafe manifest path")
+                raise UnsafeManifestRowError("unsafe manifest path")
             task_index, rollout_index = row["_ng_task_index"], row["_ng_rollout_index"]
             if (
                 isinstance(task_index, bool)
@@ -173,13 +182,27 @@ def load_manifest(
                 )
             candidate = root.joinpath(*posix_path.parts)
             if any(part.is_symlink() for part in (candidate, *candidate.parents)):
-                raise ValueError("unsafe manifest path: symlinks are not allowed")
+                raise UnsafeManifestRowError(
+                    "unsafe manifest path: symlinks are not allowed"
+                )
             resolved = candidate.resolve(strict=True)
-            resolved.relative_to(root)
+            try:
+                resolved.relative_to(root)
+            except ValueError:
+                raise UnsafeManifestRowError(
+                    "unsafe manifest path: outside the input root"
+                ) from None
             if not resolved.is_file():
-                raise ValueError("manifest trajectory is not a regular file")
+                raise UnsafeManifestRowError(
+                    "manifest trajectory is not a regular file"
+                )
             if resolved in seen_paths or (task_index, rollout_index) in seen_rollouts:
-                raise ValueError("manifest contains duplicate path or rollout identity")
+                raise UnsafeManifestRowError(
+                    "manifest contains duplicate path or rollout identity"
+                )
+        except UnsafeManifestRowError as exc:
+            detail = f"invalid ATIF manifest row {line_number}: {exc}"
+            raise ATIFLoadError(detail, "invalid_manifest") from None
         except (json.JSONDecodeError, OSError, ValueError, TypeError) as exc:
             detail = f"invalid ATIF manifest row {line_number}: {exc}"
             if invalid_input_policy == "fail_fast":
