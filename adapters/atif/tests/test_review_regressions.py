@@ -767,6 +767,30 @@ def test_empty_manifest_is_invalid_under_skip_invalid_only(adapter, job_spec, tm
         adapter.run_benchmark_job(job_spec, FakeCallbacks())
 
 
+def test_a_fully_withheld_export_completes_under_fail_fast_input_policy(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    payload = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
+    row = _manifest_row("0-0.json", 0, 0, payload)
+    row["expected_sha256"] = "0" * 64
+    _write_manifest(tmp_path, [row])
+    job_spec.parameters.update(
+        trajectory_path=str(tmp_path),
+        invalid_input_policy="fail_fast",
+        partial_result_policy="skip_failed_trajectory",
+    )
+
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+    metrics = _metrics(result)
+    assert "atif_overall_score" not in metrics
+    assert metrics["atif_trajectory_count"] == 0.0
+    assert metrics["atif_manifest_entry_count"] == 1.0
+    assert result.evaluation_metadata["atif_failed_trajectory_count"] == 1
+    assert result.evaluation_metadata["atif_invalid_input_count"] == 0
+
+
 def test_manifest_duplicate_identity_is_fatal_under_every_policy(
     adapter, job_spec, tmp_path, monkeypatch
 ):

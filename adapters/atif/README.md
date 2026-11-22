@@ -58,8 +58,10 @@ invalid input: it is governed by `partial_result_policy`, failing the job with t
 offending file named under `fail_fast`, or withholding that entry's score and
 incrementing `atif_failed_trajectory_count` under `skip_failed_trajectory`.
 Unreadable manifests, unsafe paths, duplicate identities and exceeded entry
-budgets stay fatal under both policies, and manifest-driven discovery with
-`skip_invalid` may end with no accepted trajectories rather than a hard failure.
+budgets stay fatal under both policies. Manifest-driven discovery accepts an empty
+result instead of failing - with `skip_invalid` because nothing usable survived, and
+under either policy when every entry was withheld for a digest mismatch, since a
+producer's wrong digest is not malformed input.
 
 The default `invalid_input_policy=skip_invalid` skips invalid candidates and records
 per-file outcomes. `fail_fast` aborts instead. No usable input always fails. Limits

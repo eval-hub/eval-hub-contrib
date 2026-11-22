@@ -287,6 +287,7 @@ def load_collection(
     trajectories: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     total_bytes = total_steps = 0
+    digest_withheld = 0
     for path in files:
         manifest_entry = (manifest_entries or {}).get(path.resolve())
         manifest_provenance = (
@@ -327,6 +328,7 @@ def load_collection(
                 # skip_failed_trajectory: the entry contributes no score and is
                 # counted as a failed trajectory, not as an invalid input.
                 outcome.update(status="failed", reason="digest_mismatch")
+                digest_withheld += 1
                 continue
             if manifest_provenance is not None and manifest_entry.expected_sha256:
                 manifest_provenance["digest_verified"] = True
@@ -473,6 +475,10 @@ def load_collection(
         seen_ids.update(node_ids)
         outcome.update(status="accepted", trajectory_id=trajectory["trajectory_id"])
         trajectories.append(trajectory)
-    if not trajectories and not allow_empty:
+    # An export whose every entry was withheld for provenance is a complete, correctly
+    # scored result with nothing in it: the adapter reports the counts and withholds the
+    # score. `invalid_input_policy` governs malformed input, not a producer's wrong
+    # digest, so that case may not be turned into a failure by `fail_fast`.
+    if not trajectories and not allow_empty and not digest_withheld:
         raise ATIFLoadError("No usable ATIF trajectories remain after input validation")
     return trajectories
