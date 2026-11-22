@@ -294,7 +294,9 @@ def load_collection(
                 "task_index": manifest_entry.task_index,
                 "rollout_index": manifest_entry.rollout_index,
                 "expected_sha256": manifest_entry.expected_sha256,
-                "digest_verified": manifest_entry.expected_sha256 is not None,
+                # Set only once the comparison below succeeded: a declared digest is
+                # a claim, not a verdict.
+                "digest_verified": False,
             }
             if manifest_entry
             else None
@@ -326,6 +328,8 @@ def load_collection(
                 # counted as a failed trajectory, not as an invalid input.
                 outcome.update(status="failed", reason="digest_mismatch")
                 continue
+            if manifest_provenance is not None and manifest_entry.expected_sha256:
+                manifest_provenance["digest_verified"] = True
             data = json.loads(raw)
             candidate = path.name == "trajectory.json" or path.name.endswith(
                 ".atif.json"

@@ -1237,6 +1237,35 @@ def test_manifest_digest_mismatch_is_rejected(tmp_path: Path):
         adapter._load_trajectories(files, invalid_input_policy="fail_fast")
 
 
+def test_a_mismatched_digest_is_not_reported_as_verified(tmp_path: Path):
+    trajectory_path = _write_json(tmp_path / "trajectory.json", _valid_trajectory())
+    (tmp_path / "manifest.jsonl").write_text(
+        json.dumps(
+            {
+                "trajectory_path": trajectory_path.name,
+                "_ng_task_index": 0,
+                "_ng_rollout_index": 0,
+                "expected_sha256": "0" * 64,
+            }
+        )
+        + "\n"
+    )
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+    files = adapter._discover_atif_files(str(tmp_path))
+
+    loaded = adapter._load_trajectories(
+        files,
+        invalid_input_policy="skip_invalid",
+        partial_result_policy="skip_failed_trajectory",
+    )
+
+    assert loaded == []
+    outcome = adapter._input_outcomes[0]
+    assert outcome["status"] == "failed"
+    assert outcome["nemo_gym_manifest"]["digest_verified"] is False
+    assert outcome["nemo_gym_manifest"]["expected_sha256"] == "0" * 64
+
+
 def test_manifest_rejects_path_traversal(tmp_path: Path):
     (tmp_path / "manifest.jsonl").write_text(
         json.dumps(
