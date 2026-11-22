@@ -197,9 +197,10 @@ def load_manifest(
                     "manifest trajectory is not a regular file"
                 )
             if resolved in seen_paths or (task_index, rollout_index) in seen_rollouts:
-                raise UnsafeManifestRowError(
-                    "manifest contains duplicate path or rollout identity"
-                )
+                # A duplicate is one row the producer wrote twice: `skip_invalid` drops
+                # the second and scores the first, `fail_fast` names it. Only a path that
+                # cannot be trusted is fatal regardless of policy.
+                raise ValueError("manifest contains duplicate path or rollout identity")
         except UnsafeManifestRowError as exc:
             detail = f"invalid ATIF manifest row {line_number}: {exc}"
             raise ATIFLoadError(detail, "invalid_manifest") from None

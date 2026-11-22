@@ -57,11 +57,15 @@ reports its counts; `fail_fast` aborts naming the row. A digest mismatch is not 
 invalid input: it is governed by `partial_result_policy`, failing the job with the
 offending file named under `fail_fast`, or withholding that entry's score and
 incrementing `atif_failed_trajectory_count` under `skip_failed_trajectory`.
-Unreadable manifests, unsafe paths, duplicate identities and exceeded entry
-budgets stay fatal under both policies. Manifest-driven discovery accepts an empty
-result instead of failing - with `skip_invalid` because nothing usable survived, and
-under either policy when every entry was withheld for a digest mismatch, since a
-producer's wrong digest is not malformed input.
+A row that repeats a path or a task/rollout identity is one the producer wrote
+twice, so it follows the same policy: `skip_invalid` keeps the first and counts the
+second, `fail_fast` names it. Unreadable manifests, unsafe paths (absolute,
+traversal, symlink, outside the input root, non-regular) and exceeded entry budgets
+stay fatal under both policies, because a manifest whose file list cannot be trusted
+no longer describes the export. Manifest-driven discovery accepts an empty result
+instead of failing - with `skip_invalid` because nothing usable survived, and under
+either policy when every entry was withheld for a digest mismatch, since a producer's
+wrong digest is not malformed input.
 
 The default `invalid_input_policy=skip_invalid` skips invalid candidates and records
 per-file outcomes. `fail_fast` aborts instead. No usable input always fails. Limits

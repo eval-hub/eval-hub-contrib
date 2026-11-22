@@ -821,7 +821,7 @@ def test_a_fully_withheld_export_completes_under_fail_fast_input_policy(
     assert result.evaluation_metadata["atif_invalid_input_count"] == 0
 
 
-def test_manifest_duplicate_identity_is_fatal_under_every_policy(
+def test_manifest_duplicate_identity_follows_invalid_input_policy(
     adapter, job_spec, tmp_path, monkeypatch
 ):
     install_judge(adapter, monkeypatch)
@@ -833,12 +833,16 @@ def test_manifest_duplicate_identity_is_fatal_under_every_policy(
     ]
     _write_manifest(tmp_path, rows)
 
-    for policy in ("skip_invalid", "fail_fast"):
-        job_spec.parameters.update(
-            trajectory_path=str(tmp_path), invalid_input_policy=policy
-        )
-        with pytest.raises(ATIFLoadError, match="row 2"):
-            adapter.run_benchmark_job(job_spec, FakeCallbacks())
+    job_spec.parameters.update(
+        trajectory_path=str(tmp_path), invalid_input_policy="skip_invalid"
+    )
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+    assert _metrics(result)["atif_trajectory_count"] == 1.0
+    assert result.evaluation_metadata["atif_invalid_input_count"] == 1
+
+    job_spec.parameters.update(invalid_input_policy="fail_fast")
+    with pytest.raises(ATIFLoadError, match="row 2"):
+        adapter.run_benchmark_job(job_spec, FakeCallbacks())
 
 
 def test_manifest_content_errors_follow_invalid_input_policy(
