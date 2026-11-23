@@ -41,7 +41,9 @@ agent:
     - "Optional attacker/scorer upstreams use model.auth.secret_ref role keys attacker_url/attacker_api-key and scorer_url/scorer_api-key (not plaintext job parameters)"
   result_interpretation:
     - "overall_score is pass_rate: resisted / n_evaluated among scored probes (success|failure only; error/undetermined excluded) (== 1 - attack_success_rate). LOWER means more vulnerable."
-    - "n_evaluated counts scored objectives/probes only; pass_rate is omitted when n_evaluated is 0"
+    - "n_evaluated counts scored objectives/probes only; the job fails when n_evaluated is 0 (broken target/scorer) instead of completing with an unknown score"
+    - "Scores require the results API export; CLI summary rates are never used"
+    - "additional_info records attacker_model / scorer_model and whether each falls back to the target (self-grading)"
 
 runtime:
   k8s:

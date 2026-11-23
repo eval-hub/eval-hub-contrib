@@ -335,18 +335,19 @@ def test_compute_metrics_mixed_scored_and_errors():
     assert pass_rate == pytest.approx(0.5)
 
 
-def test_compute_metrics_summary_fallback():
-    """When attack_results are empty, fall back to objective_achieved_rate."""
+def test_compute_metrics_empty_attack_results_is_unknown():
+    """Empty attack_results never invent a score from CLI summary rates."""
     export = {
         "attack_results": {},
         "objective_achieved_rate": 40,
         "total_attacks": 10,
     }
     results, pass_rate, n_evaluated = _compute_metrics(export)
-    assert n_evaluated == 10
-    assert pass_rate == pytest.approx(0.6)
+    assert n_evaluated == 0
+    assert pass_rate is None
     by_name = {r.metric_name: r.metric_value for r in results}
-    assert by_name["attack_success_rate"] == pytest.approx(0.4)
+    assert "pass_rate" not in by_name
+    assert "attack_success_rate" not in by_name
 
 
 def test_compute_metrics_zero_attacks_is_unknown():
@@ -415,8 +416,15 @@ def test_run_benchmark_job_happy_path(pyrit_adapter, mock_callbacks, monkeypatch
     assert results.num_examples_evaluated == 2
     assert results.additional_info["scenario"] == "foundry.red_team_agent"
     assert results.additional_info["scenario_result_id"] == result_id
+    assert results.additional_info["metrics_source"] == "results_api"
+    assert results.additional_info["attacker_model"] == config.model.name
+    assert results.additional_info["scorer_model"] == config.model.name
+    assert results.additional_info["attacker_uses_target"] is True
+    assert results.additional_info["scorer_uses_target"] is True
     assert "attacker_provider_api_key" not in results.additional_info
     assert "pyrit_scan_json_b64" in (results.evaluation_metadata or {})
+    assert "attacker=" in (results.eval_card.safety_evaluations[0].benchmark or "")
+    assert "same as target" in (results.eval_card.developer_footnotes or "")
 
     phases = [c.args[0].phase for c in mock_callbacks.report_status.call_args_list]
     assert JobPhase.INITIALIZING in phases
@@ -424,6 +432,99 @@ def test_run_benchmark_job_happy_path(pyrit_adapter, mock_callbacks, monkeypatch
     assert JobPhase.POST_PROCESSING in phases
     # No OCI export configured on this fixture → no PERSISTING_ARTIFACTS.
     assert JobPhase.PERSISTING_ARTIFACTS not in phases
+
+
+@pytest.mark.integration
+def test_run_benchmark_job_fails_when_nothing_scored(
+    pyrit_adapter, mock_callbacks, monkeypatch
+):
+    """All error/undetermined outcomes must fail the job (William #1)."""
+    import main as main_mod
+
+    config = copy.deepcopy(pyrit_adapter.job_spec)
+    config.parameters = {"scenario": "foundry.red_team_agent"}
+    export = {
+        "attack_results": {
+            "baseline": [
+                {"outcome": "error", "objective": "a"},
+                {"outcome": "undetermined", "objective": "b"},
+            ]
+        }
+    }
+
+    monkeypatch.setattr(
+        main_mod,
+        "_run_pyrit_scan",
+        lambda *a, **k: _FakeCompletedProcess(
+            0, stdout="Result ID: 605d715b-7c07-4bde-a8f9-22fea0b50c4f\n"
+        ),
+    )
+    monkeypatch.setattr(main_mod, "_fetch_scan_results", lambda **k: export)
+    monkeypatch.setattr(main_mod, "_stop_pyrit_server", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "_resolve_api_key", lambda _c: "sk-test")
+
+    with pytest.raises(RuntimeError, match="no probes were scored"):
+        pyrit_adapter.run_benchmark_job(config, mock_callbacks)
+
+    failed = [
+        c
+        for c in mock_callbacks.report_status.call_args_list
+        if c.args[0].status == JobStatus.FAILED
+    ]
+    assert len(failed) == 1
+
+
+@pytest.mark.integration
+def test_run_benchmark_job_fails_without_result_id(
+    pyrit_adapter, mock_callbacks, monkeypatch
+):
+    """Missing Result ID must not score from CLI summary (William #2)."""
+    import main as main_mod
+
+    config = copy.deepcopy(pyrit_adapter.job_spec)
+    config.parameters = {"scenario": "foundry.red_team_agent"}
+
+    monkeypatch.setattr(
+        main_mod,
+        "_run_pyrit_scan",
+        lambda *a, **k: _FakeCompletedProcess(
+            0, stdout="Attack Results: 4\nSuccess Rate:   0%\n"
+        ),
+    )
+    monkeypatch.setattr(main_mod, "_stop_pyrit_server", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "_resolve_api_key", lambda _c: "sk-test")
+
+    with pytest.raises(RuntimeError, match="refusing to score from CLI summary"):
+        pyrit_adapter.run_benchmark_job(config, mock_callbacks)
+
+
+@pytest.mark.integration
+def test_run_benchmark_job_fails_when_results_fetch_fails(
+    pyrit_adapter, mock_callbacks, monkeypatch
+):
+    """Results API failure must not fall back to summary scoring (William #2)."""
+    import main as main_mod
+
+    config = copy.deepcopy(pyrit_adapter.job_spec)
+    config.parameters = {"scenario": "foundry.red_team_agent"}
+
+    monkeypatch.setattr(
+        main_mod,
+        "_run_pyrit_scan",
+        lambda *a, **k: _FakeCompletedProcess(
+            0, stdout="Result ID: 605d715b-7c07-4bde-a8f9-22fea0b50c4f\n"
+        ),
+    )
+
+    def boom(**_kwargs):
+        raise TimeoutError("backend down")
+
+    monkeypatch.setattr(main_mod, "_fetch_scan_results", boom)
+    monkeypatch.setattr(main_mod, "_stop_pyrit_server", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "_resolve_api_key", lambda _c: "sk-test")
+
+    with pytest.raises(RuntimeError, match="Failed to fetch pyrit scenario results"):
+        pyrit_adapter.run_benchmark_job(config, mock_callbacks)
 
 
 @pytest.mark.integration

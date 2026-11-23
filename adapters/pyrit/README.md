@@ -16,8 +16,10 @@ source contract, not auto-mounted on contrib merge alone).
 
 `overall_score` / `pass_rate` = resisted / `n_evaluated` among **scored**
 probes only (`success` \| `failure`). `error` / `undetermined` are excluded
-so a broken endpoint cannot look like a perfect pass. If nothing was scored,
-`pass_rate` is omitted (`None`), never `1.0`.
+so a broken endpoint cannot look like a perfect pass. If nothing was scored
+(`n_evaluated == 0`), the job **fails** rather than completing with
+`overall_score=None`. Scores come only from the results API export — CLI
+summary rates are never used (they cannot distinguish errors from resists).
 **Lower pass_rate ⇒ more vulnerable.**
 
 ## How a job runs
@@ -42,6 +44,7 @@ adapters/pyrit/
   main.py                 # PyritAdapter (FrameworkAdapter)
   provider.yaml           # EvalHub provider / benchmark catalog
   Containerfile           # UBI9 python-311 + unixODBC + pyrit==1.1.0
+                          # (3.11 intentional for pyrit/pyodbc; CI unit tests use 3.12)
   requirements.txt        # SDK + pyyaml (unit tests)
   requirements-pyrit.txt  # pyrit runtime pin (image only)
   requirements-test.txt
@@ -87,7 +90,10 @@ role files — not plaintext job parameters:
 | scorer (objective judge) | `scorer_url`, `scorer_api-key` |
 
 Optional `parameters.attacker_provider` / `parameters.scorer_provider` set only
-the model **ids**. Legacy `*_api_key` job parameters are rejected. Target and
+the model **ids**. When role keys / model ids are omitted, attacker and scorer
+fall back to the target (self-grading); the job records
+`attacker_model` / `scorer_model` and `*_uses_target` in `additional_info`
+and the eval card. Legacy `*_api_key` job parameters are rejected. Target and
 role credentials written into the job-local `.env` must never appear in
 `additional_info`, MLflow params, or OCI artifacts.
 

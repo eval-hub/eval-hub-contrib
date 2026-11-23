@@ -91,12 +91,6 @@ SECRET_PARAM_NAMES: frozenset[str] = frozenset(
 _RESULT_ID_RE = re.compile(
     r"Result ID:\s*([0-9a-fA-F-]{36}|\S+)", re.MULTILINE
 )
-_SUCCESS_RATE_RE = re.compile(
-    r"Success Rate:\s*(\d+)%", re.MULTILINE
-)
-_ATTACK_RESULTS_RE = re.compile(
-    r"Attack Results:\s*(\d+)", re.MULTILINE
-)
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +187,29 @@ def _resolve_scan_timeout(params: dict[str, Any] | None) -> int:
     return int(params["scan_timeout"])
 
 
+def _role_metadata(config: JobSpec, env: dict[str, str]) -> dict[str, Any]:
+    """Describe attacker/scorer routing (no secrets) for additional_info / cards."""
+    target_model = config.model.name or ""
+    target_endpoint = env.get("OPENAI_CHAT_ENDPOINT", "")
+    attacker_model = env.get("ADVERSARIAL_CHAT_MODEL", "")
+    scorer_model = env.get("OBJECTIVE_SCORER_CHAT_MODEL", "")
+    attacker_endpoint = env.get("ADVERSARIAL_CHAT_ENDPOINT", "")
+    scorer_endpoint = env.get("OBJECTIVE_SCORER_CHAT_ENDPOINT", "")
+    attacker_uses_target = (
+        attacker_model == target_model and attacker_endpoint == target_endpoint
+    )
+    scorer_uses_target = (
+        scorer_model == target_model and scorer_endpoint == target_endpoint
+    )
+    return {
+        "target_model": target_model,
+        "attacker_model": attacker_model,
+        "scorer_model": scorer_model,
+        "attacker_uses_target": attacker_uses_target,
+        "scorer_uses_target": scorer_uses_target,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Env / conf / argv
 # ---------------------------------------------------------------------------
@@ -230,6 +247,18 @@ def _build_pyrit_env(config: JobSpec, work_dir: Path, api_key: str) -> dict[str,
     env["OBJECTIVE_SCORER_CHAT_MODEL"] = str(
         params.get("scorer_provider") or config.model.name
     )
+
+    role_info = _role_metadata(config, env)
+    if role_info["attacker_uses_target"] or role_info["scorer_uses_target"]:
+        logger.warning(
+            "Auxiliary role(s) fall back to the target model "
+            "(attacker_uses_target=%s, scorer_uses_target=%s). "
+            "Self-grading may understate risk; set attacker_*/scorer_* "
+            "secret_ref keys and optional parameters.attacker_provider / "
+            "scorer_provider for independent models.",
+            role_info["attacker_uses_target"],
+            role_info["scorer_uses_target"],
+        )
 
     return env
 
@@ -390,18 +419,6 @@ def _parse_scenario_result_id(output: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _parse_summary_fallback(output: str) -> dict[str, Any]:
-    """Parse Success Rate / Attack Results from CLI summary when API fetch fails."""
-    asr_match = _SUCCESS_RATE_RE.search(output or "")
-    n_match = _ATTACK_RESULTS_RE.search(output or "")
-    payload: dict[str, Any] = {"attack_results": {}}
-    if asr_match:
-        payload["objective_achieved_rate"] = int(asr_match.group(1))
-    if n_match:
-        payload["total_attacks"] = int(n_match.group(1))
-    return payload
-
-
 def _fetch_scan_results(
     *,
     server_url: str,
@@ -453,7 +470,13 @@ def _compute_metrics(
     pass_rate: float | None
     attack_success_rate: float | None
 
-    if rows:
+    if not rows:
+        # Per-attack rows are required. CLI summary rates cannot distinguish
+        # error/undetermined from true resistance, so they are never scored.
+        n_evaluated = 0
+        pass_rate = None
+        attack_success_rate = None
+    else:
         successes = 0
         failures = 0
         for row in rows:
@@ -470,18 +493,6 @@ def _compute_metrics(
         else:
             attack_success_rate = successes / n_evaluated
             pass_rate = failures / n_evaluated
-    else:
-        # CLI summary fallback. Refuse to invent a perfect score when PyRIT
-        # reports zero attack results (asr 0% / n=0 would otherwise become 1.0).
-        n_evaluated = int(scan_export.get("total_attacks") or 0)
-        asr_pct = scan_export.get("objective_achieved_rate")
-        if n_evaluated <= 0 or asr_pct is None:
-            pass_rate = None
-            attack_success_rate = None
-            n_evaluated = 0
-        else:
-            attack_success_rate = float(asr_pct) / 100.0
-            pass_rate = 1.0 - attack_success_rate
 
     evaluation_results: list[EvaluationResult] = [
         EvaluationResult(
@@ -511,11 +522,33 @@ def _compute_metrics(
 
 
 def _build_eval_card(
-    config: JobSpec, pass_rate: float | None, n_evaluated: int
+    config: JobSpec,
+    pass_rate: float | None,
+    n_evaluated: int,
+    *,
+    role_info: dict[str, Any] | None = None,
 ) -> EvalCardMetadata:
     """Build EvalCardMetadata describing the PyRIT safety scan."""
     scenario = (config.parameters or {}).get("scenario", "unknown")
     zero_shot = round(pass_rate, 4) if pass_rate is not None else None
+    roles = role_info or {}
+    attacker_model = roles.get("attacker_model") or config.model.name
+    scorer_model = roles.get("scorer_model") or config.model.name
+    benchmark = (
+        f"{config.benchmark_id}/{scenario} (pyrit {PYRIT_VERSION}), "
+        f"n={n_evaluated}; attacker={attacker_model}; scorer={scorer_model}"
+    )
+    footnotes = [
+        "PyRIT (MIT license) pyrit_scan scenario. pass_rate is the "
+        "fraction of attack objectives the model resisted "
+        "(== 1 - attack_success_rate).",
+        f"Attacker model: {attacker_model}"
+        + (" (same as target)" if roles.get("attacker_uses_target") else "")
+        + f"; scorer model: {scorer_model}"
+        + (" (same as target)" if roles.get("scorer_uses_target") else "")
+        + ".",
+        "Reference: https://github.com/Azure/PyRIT",
+    ]
     return EvalCardMetadata(
         modalities_input=["text"],
         modalities_output=["text"],
@@ -525,22 +558,14 @@ def _build_eval_card(
         safety_evaluations=[
             SafetyEvalEntry(
                 feature="adversarial scenario resistance",
-                benchmark=(
-                    f"{config.benchmark_id}/{scenario} "
-                    f"(pyrit {PYRIT_VERSION}), n={n_evaluated}"
-                ),
+                benchmark=benchmark,
                 metric="pass_rate",
                 zero_shot=zero_shot,
                 alt_prompting=None,
                 alt_prompting_description=None,
             )
         ],
-        developer_footnotes=(
-            "PyRIT (MIT license) pyrit_scan scenario. pass_rate is the "
-            "fraction of attack objectives the model resisted "
-            "(== 1 - attack_success_rate). "
-            "Reference: https://github.com/Azure/PyRIT"
-        ),
+        developer_footnotes=" ".join(footnotes),
     )
 
 
@@ -674,41 +699,47 @@ class PyritAdapter(FrameworkAdapter):
             )
 
             scenario_result_id = _parse_scenario_result_id(combined_output)
-            scan_export: dict[str, Any]
-            if scenario_result_id:
-                try:
-                    scan_export = _fetch_scan_results(
-                        server_url=DEFAULT_SERVER_URL,
-                        scenario_result_id=scenario_result_id,
-                    )
-                except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                    logger.warning(
-                        "Failed to fetch scenario results for %s (%s); "
-                        "falling back to CLI summary parse",
-                        scenario_result_id,
-                        exc,
-                    )
-                    scan_export = _parse_summary_fallback(combined_output)
-                    scan_export["scenario_result_id"] = scenario_result_id
-            else:
-                logger.warning(
+            if not scenario_result_id:
+                raise RuntimeError(
                     "Could not parse scenario result id from pyrit_scan output; "
-                    "falling back to CLI summary parse"
+                    "refusing to score from CLI summary "
+                    "(summary rates cannot distinguish error/undetermined)."
                 )
-                scan_export = _parse_summary_fallback(combined_output)
+            try:
+                scan_export = _fetch_scan_results(
+                    server_url=DEFAULT_SERVER_URL,
+                    scenario_result_id=scenario_result_id,
+                )
+            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"Failed to fetch pyrit scenario results for "
+                    f"{scenario_result_id}: {exc}. "
+                    "Refusing to score from CLI summary "
+                    "(summary rates cannot distinguish error/undetermined)."
+                ) from exc
 
             evaluation_results, pass_rate, n_evaluated = _compute_metrics(scan_export)
+            if n_evaluated == 0:
+                raise RuntimeError(
+                    "pyrit_scan completed but no probes were scored "
+                    "(all outcomes were error/undetermined, or attack_results "
+                    "were empty). Check the target and scorer endpoints; "
+                    "a broken endpoint must not report a completed score."
+                )
 
             results_path = work_dir / "scan_results.json"
             results_json_raw = json.dumps(scan_export, default=str).encode("utf-8")
             results_path.write_bytes(results_json_raw)
 
+            role_info = _role_metadata(config, env)
             additional_info: dict[str, Any] = {
                 "scenario": scenario,
                 "scenario_result_id": scenario_result_id
                 or scan_export.get("scenario_result_id")
                 or scan_export.get("id"),
                 "pyrit_version": PYRIT_VERSION,
+                "metrics_source": "results_api",
+                **role_info,
             }
             # Never copy raw job parameters (may contain API keys).
             safe_params = _strip_secret_params(config.parameters)
@@ -730,7 +761,9 @@ class PyritAdapter(FrameworkAdapter):
                     PYRIT_RESULTS_JSON_MAX_BYTES,
                 )
 
-            eval_card = _build_eval_card(config, pass_rate, n_evaluated)
+            eval_card = _build_eval_card(
+                config, pass_rate, n_evaluated, role_info=role_info
+            )
             env_card = _build_env_card(config)
 
             oci_artifact = None
