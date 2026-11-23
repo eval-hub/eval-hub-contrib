@@ -299,7 +299,13 @@ def confidence_interval(context: Context, raw: dict) -> dict:
                 f"benchmark {benchmark['id']!r}, provider {benchmark['provider_id']!r}, "
                 f"benchmark_index {benchmark['benchmark_index']})"
             )
-            data = read_table(downloaded, result_config(config, target), dataset=dataset)
+            # The source job supplies authoritative framework identity for native reports.
+            data = read_table(
+                downloaded,
+                result_config(config, target),
+                dataset=dataset,
+                provider_id=target["provider_id"],
+            )
             bounds = interval(data, calibration, target, shared=len(benchmarks) > 1, alpha=alpha)
             return {
                 "id": benchmark["id"],

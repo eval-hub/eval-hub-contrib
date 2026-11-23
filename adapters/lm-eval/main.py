@@ -29,6 +29,7 @@ mounted into the container) for user-authored benchmarks.
 """
 
 import logging
+import mimetypes
 import os
 import shutil
 import tempfile
@@ -51,6 +52,8 @@ from evalhub.adapter import (
     OCIArtifactSpec,
     resolve_model_credentials,
 )
+from evalhub.adapter.mlflow import MlflowFileArtifact
+from evalhub.adapter.settings import AdapterSettings
 
 from _execution import (
     build_cmd,
@@ -114,6 +117,28 @@ def _benchmark_ability(benchmark_id: str) -> str:
     return _ABILITY_MAP.get(
         benchmark_id, _ABILITY_MAP.get(f"lm-eval/{benchmark_id}", "custom")
     )
+
+
+def _save_mlflow_best_effort(
+    callbacks: JobCallbacks,
+    results: JobResults,
+    config: JobSpec,
+    artifacts: list[MlflowFileArtifact],
+) -> str | None:
+    """Export without letting an optional MLflow failure mark the job FAILED."""
+    mlflow = callbacks.mlflow  # type: ignore[attr-defined]
+    # SDK 1.0.7 reports FAILED before raising. Detach only its status callback
+    # during the synchronous save until the SDK supports best-effort exports.
+    original_callbacks = mlflow._callbacks
+    try:
+        mlflow._callbacks = None
+        return mlflow.save(results, config, artifacts=artifacts)
+    except Exception:  # noqa: BLE001 — optional exports must not fail the evaluation
+        # Exception text and tracebacks may contain credentials from the server.
+        logger.warning("MLflow export failed; continuing with evaluation results")
+        return None
+    finally:
+        mlflow._callbacks = original_callbacks
 
 
 class LMEvalAdapter(FrameworkAdapter):
@@ -181,9 +206,13 @@ class LMEvalAdapter(FrameworkAdapter):
                 extra_packages=["lm_eval", "transformers", "tokenizers", "datasets"],
             )
 
-            work_dir = Path(tempfile.mkdtemp(prefix="lmeval_"))
-            output_dir = work_dir / "output"
-            output_dir.mkdir()
+            local_base = self.local_jobs_base_path
+            if local_base is not None:
+                output_dir = local_base / "output"
+            else:
+                work_dir = Path(tempfile.mkdtemp(prefix="lmeval_"))
+                output_dir = work_dir / "output"
+            output_dir.mkdir(parents=True, exist_ok=True)
 
             creds = resolve_model_credentials()
             api_key = params.get("api_key") or (creds.api_key if creds else "") or ""
@@ -398,15 +427,26 @@ class LMEvalAdapter(FrameworkAdapter):
             # that drops all metrics (same sidecar behaviour as inspect adapter).
             experiment_name = (
                 getattr(config, "experiment_name", None) or ""
-            ).strip() or params.get("mlflow_experiment_name", "")
+            ).strip()
             if experiment_name:
-                try:
-                    mlflow_run_id = callbacks.mlflow.save(job_results, config)  # type: ignore[attr-defined]
-                    if mlflow_run_id:
-                        job_results.mlflow_run_id = mlflow_run_id
-                        logger.info("MLflow run: %s", mlflow_run_id)
-                except Exception:
-                    logger.warning("MLflow save failed", exc_info=True)
+                artifacts = [
+                    MlflowFileArtifact(
+                        path=file.relative_to(output_dir).as_posix(),
+                        local_path=file,
+                        content_type=mimetypes.guess_type(file.name)[0]
+                        or "application/octet-stream",
+                    )
+                    for file in sorted(output_dir.rglob("*"))
+                    if not file.is_symlink() and file.is_file()
+                ]
+                # The SDK streams these files; save must finish before finally
+                # removes the temporary output directory in Kubernetes mode.
+                mlflow_run_id = _save_mlflow_best_effort(
+                    callbacks, job_results, config, artifacts
+                )
+                if mlflow_run_id:
+                    job_results.mlflow_run_id = mlflow_run_id
+                    logger.info("MLflow run: %s", mlflow_run_id)
 
             return job_results
 
@@ -469,8 +509,10 @@ def main() -> None:
     try:
         from evalhub.adapter import DefaultCallbacks
 
-        job_spec_path = os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")
-        adapter = LMEvalAdapter(job_spec_path=job_spec_path)
+        # Preserve the container's k8s default while allowing the SDK to resolve
+        # local-mode job paths and callback configuration from the same settings.
+        settings = AdapterSettings(EVALHUB_MODE=os.getenv("EVALHUB_MODE", "k8s"))
+        adapter = LMEvalAdapter(settings=settings)
         logger.info("Job:       %s", adapter.job_spec.id)
         logger.info("Benchmark: %s", adapter.job_spec.benchmark_id)
         logger.info("Model:     %s", adapter.job_spec.model.name)

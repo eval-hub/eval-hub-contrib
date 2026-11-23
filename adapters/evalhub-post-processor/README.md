@@ -126,8 +126,33 @@ The adapter reads `calibration_data_ref[].data_config` and `results_data_ref.dat
 | `format` | `auto` (default), `json`, `jsonl`, `csv`, or `parquet`; `.ndjson` files are also recognized |
 | `path` | Relative file or directory within the downloaded artifact to read |
 | `columns` | Maps canonical roles to source column names; dotted paths can access nested JSON fields |
-| `selection` | Constant benchmark/metric identity for a file that has no identity columns |
+| `selection` | Benchmark/provider/metric identity: filters external rows when identity columns exist, supplies missing identity, or overrides native identity for an `eval_job` target |
 | `value_mappings` | Explicit string-category-to-number maps for `prediction` or `label`; every present category must be declared |
+
+For external results, the selected rows must identify at most one benchmark and
+provider. All selected calibration rows, across every calibration file/reference,
+must be consistent with those result identities and with each other. Conflicting
+metadata raises a `Results data contains multiple ...` or `Calibration data
+contains multiple ...` error before calibration labels are joined by sample ID.
+Narrow the appropriate reference using `data_config.selection` or `data_config.path`.
+External selectors must use the values stored in the file, rather than service
+benchmark names. For example, for rows containing `benchmark_id: niah-single-noise`,
+use `selection: {"benchmark_id": "niah-single-noise"}` even if the evaluation service
+uses a different benchmark name. Null or empty-string selector values are treated
+as omitted; they do not erase native metadata or disable consistency checks.
+A nonempty selection matching no rows raises a direct error naming the results
+or indexed calibration reference. Identity-conflict errors also identify the
+calibration reference index. When selectors match but the target metric rejects
+the rows, the error names the metric mismatch rather than blaming selection.
+Files without identity metadata remain supported.
+
+For `eval_job` references, the source job supplies the target identity. Explicit
+selection retains its existing override behavior for framework-native row names;
+the resulting identity must still match the source job's benchmark, provider,
+and selected metric. Without an override, conflicting row identities are filtered.
+Zero-match diagnostics distinguish a conflicting eval-job override from native
+identity fields excluded by the target. Shared calibration references that select
+another benchmark are still skipped for the current benchmark.
 
 The standalone Eval Hub API exposes result mappings alongside the result source:
 
@@ -160,6 +185,69 @@ require a sample identifier. Without a `columns.sample_id` mapping, the reader u
 mapping takes precedence and disables that fallback. Identifiers must be nonempty
 strings or integers. Predictions can also be stored at the metric's own key,
 `metrics[metric]`, or `scores[metric]`. A score object `{"value": 0.8}` is accepted.
+
+### Native GuideLLM reports
+
+For `eval_job` references, the source benchmark's `provider_id` plus native report
+markers identify GuideLLM; provider identity alone does not turn an unrelated
+aggregate summary into a request report. External references (S3, PVC, Git,
+Hugging Face, MLflow, or OCI) identify native reports through a nonempty
+`metadata.guidellm_version` together with a `benchmarks` field. Version metadata
+alone is treated as a summary, allowing usable sibling sample files to be read.
+
+The reader selects `benchmarks[0].requests.successful`, including for default
+sweep and multi-rate/concurrency reports. This deliberately matches the GuideLLM
+adapter's `_parse_results`, which reports metrics from `benchmarks[0]`. Later
+strategies are not pooled or substituted if the first has no usable requests.
+No API field or JSONPath configuration is required. The selected section must
+contain a nonempty array of successful request objects. When measurement timestamps
+are present, the reader first selects requests overlapping that window using the
+same inclusive boundaries as GuideLLM. Warmup/cooldown-only requests are excluded;
+requests crossing either boundary remain included. The selected count must equal
+that strategy's positive integer `metrics.request_totals.successful`; missing or
+invalid totals and count mismatches fail with an explicit error. GuideLLM versions
+can persist only a random request sample while aggregate metrics cover the full
+run. Such sampled reports cannot support an interval for the full successful
+request set. Provide a complete per-request export instead. The reader checks the
+actual total rather than `args.sample_requests`, which does not establish how many
+records were persisted. Duplicate selected sample IDs still fail normal validation.
+
+JSON arrays, `samples`/`records` wrappers, single records with a usable sample ID,
+and JSONL inputs bypass GuideLLM extraction. Unidentified aggregate summaries
+alongside usable sample files are skipped regardless of file order. If no usable
+samples remain, the job fails with a source-specific error naming every skipped
+summary. Positively identified
+but malformed native reports still fail rather than silently discard data.
+
+Recognized native reports with missing or incorrect sample-ID mappings fail with
+a file-specific error suggesting `columns.sample_id: request_id`, even when sibling
+files contain usable records. They are never silently skipped as summaries.
+
+Use the existing column mappings to select the desired request-level measurement:
+
+```json
+{
+  "columns": {
+    "sample_id": "request_id",
+    "prediction": "time_to_first_token_ms"
+  }
+}
+```
+
+External inputs still require a primary metric declaration in the result document
+or a companion manifest. Extracted records undergo the usual sample ID, numeric
+score, and calibration validation. A selected measurement must be finite and
+numeric for every request. In particular, `time_to_first_token_ms` can be null
+for non-streaming requests; these values are rejected, not filled or dropped.
+Select a metric/measurement that is available for the evaluation being processed.
+
+GuideLLM `request_id` values are local to a report. Label-only calibration joined
+to results must use IDs from the selected first strategy of that same report;
+IDs from another run cannot be matched automatically. Independent calibration
+observations can instead provide their own paired prediction and label using
+the existing calibration configuration, without joining by evaluation ID.
+Calibration parsing is unchanged. Files are fully downloaded before parsing;
+this is not streaming JSON processing.
 
 For a job with multiple benchmarks, calibration must carry both `benchmark_id`
 and `provider_id` in each row or its file's `selection`. This pair matches
