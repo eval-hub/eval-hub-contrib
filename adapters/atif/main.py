@@ -38,8 +38,10 @@ from pydantic import ValidationError
 from input_collection import (
     MAX_COLLECTION_BYTES,
     ATIFLoadError,
+    ATIFManifestEntry,
     CollectionBudgetError,
     load_collection,
+    load_manifest,
     read_bounded_config,
 )
 from judge_auth import read_job_auth_key, resolve_job_credentials
@@ -288,6 +290,13 @@ class ATIFAdapter(FrameworkAdapter):
             raise ValueError(
                 "partial_result_policy must be 'fail_fast' or 'skip_failed_trajectory'"
             )
+        invalid_input_policy = str(
+            params.get("invalid_input_policy", "skip_invalid")
+        ).lower()
+        if invalid_input_policy not in {"fail_fast", "skip_invalid"}:
+            raise ValueError(
+                "invalid_input_policy must be 'fail_fast' or 'skip_invalid'"
+            )
         job_timeout_seconds = float(params.get("job_timeout_seconds", 3600.0))
         if not math.isfinite(job_timeout_seconds) or job_timeout_seconds <= 0:
             raise ValueError("job_timeout_seconds must be positive")
@@ -389,7 +398,9 @@ class ATIFAdapter(FrameworkAdapter):
                 "ATIF requires experiment_name and MLflow artifact persistence"
             )
         atif_files = self._discover_atif_files(
-            str(trajectory_path), max_files=max_files
+            str(trajectory_path),
+            max_files=max_files,
+            invalid_input_policy=invalid_input_policy,
         )
 
         trajectories = self._load_trajectories(
@@ -402,9 +413,8 @@ class ATIFAdapter(FrameworkAdapter):
             max_collection_bytes=int(
                 params.get("max_collection_bytes", MAX_COLLECTION_BYTES)
             ),
-            invalid_input_policy=str(
-                params.get("invalid_input_policy", "skip_invalid")
-            ),
+            invalid_input_policy=invalid_input_policy,
+            partial_result_policy=partial_result_policy,
         )
 
         callbacks.report_status(
@@ -467,6 +477,7 @@ class ATIFAdapter(FrameworkAdapter):
         successful_roots = [
             item for item in scored if item.get("status", "scored") == "scored"
         ]
+        avg_score: float | None = None
         if subagent_aggregation == "hierarchical" and successful_roots:
             avg_score = sum(item["aggregate_score"] for item in successful_roots) / len(
                 successful_roots
@@ -479,7 +490,8 @@ class ATIFAdapter(FrameworkAdapter):
             avg_score = sum(item["score"] for item in scored_for_metrics) / len(
                 scored_for_metrics
             )
-        else:
+        # A genuine zero average still reports 0.0; nothing scored reports nothing.
+        if avg_score is None and scored_for_metrics:
             avg_score = 0.0
         detectable_failures = sum(
             item["detectable_failure_count"] for item in scored_for_metrics
@@ -523,28 +535,47 @@ class ATIFAdapter(FrameworkAdapter):
             for item in self._flatten_scored_trajectories(scored)
         ]
 
+        # AC4: publish atif_trajectory_count and the manifest entry count on every
+        # job; publish the score-derived metrics only when something scored.
+        manifest_entry_count = len(getattr(self, "_manifest_entries", {}) or {})
+        result_metrics: list[EvaluationResult] = []
+        if scored_for_metrics:
+            result_metrics.append(
+                EvaluationResult(
+                    metric_name="atif_overall_score",
+                    metric_value=avg_score,
+                    metric_type="float",
+                )
+            )
+            result_metrics.append(
+                EvaluationResult(
+                    metric_name="atif_failure_categorization_rate",
+                    metric_value=categorization_rate,
+                    metric_type="float",
+                )
+            )
+        result_metrics.append(
+            EvaluationResult(
+                metric_name="atif_trajectory_count",
+                metric_value=float(len(scored_for_metrics)),
+                metric_type="float",
+            )
+        )
+        if manifest_entry_count:
+            result_metrics.append(
+                EvaluationResult(
+                    metric_name="atif_manifest_entry_count",
+                    metric_value=float(manifest_entry_count),
+                    metric_type="float",
+                )
+            )
+
         detailed_result = JobResults(
             id=config.id,
             benchmark_id=config.benchmark_id,
             benchmark_index=config.benchmark_index,
             model_name=config.model.name,
-            results=[
-                EvaluationResult(
-                    metric_name="atif_overall_score",
-                    metric_value=avg_score,
-                    metric_type="float",
-                ),
-                EvaluationResult(
-                    metric_name="atif_trajectory_count",
-                    metric_value=float(len(scored_for_metrics)),
-                    metric_type="float",
-                ),
-                EvaluationResult(
-                    metric_name="atif_failure_categorization_rate",
-                    metric_value=categorization_rate,
-                    metric_type="float",
-                ),
-            ],
+            results=result_metrics,
             overall_score=avg_score,
             num_examples_evaluated=len(scored_for_metrics),
             duration_seconds=time.monotonic() - start_time,
@@ -565,10 +596,17 @@ class ATIFAdapter(FrameworkAdapter):
                 },
                 "atif_context_byte_limit": self._max_context_bytes,
                 "atif_training_eligible_count": len(eligible_paths),
-                "atif_complete": all(item.get("complete", False) for item in scored)
+                # A run is complete only when every input it was given was either
+                # scored or accepted: an entry withheld for a digest mismatch leaves a
+                # gap in the export, exactly like an invalid one, so a consumer cannot
+                # read `atif_complete: true` over a partially scored manifest.
+                "atif_complete": bool(scored)
+                and all(item.get("complete", False) for item in scored)
                 and not any(
-                    item["status"] == "invalid" for item in self._input_outcomes
+                    item["status"] in ("invalid", "failed")
+                    for item in self._input_outcomes
                 ),
+                "atif_manifest_entry_count": manifest_entry_count,
                 "atif_trajectories": scored,
                 "atif_trajectory_metadata": [
                     self._extract_trajectory_metadata(trajectory)
@@ -602,7 +640,8 @@ class ATIFAdapter(FrameworkAdapter):
                 "atif_failed_trajectory_count": sum(
                     item.get("status") == "failed"
                     for item in self._flatten_scored_trajectories(scored)
-                ),
+                )
+                + sum(item.get("status") == "failed" for item in self._input_outcomes),
                 "atif_unscored_trajectory_count": sum(
                     item.get("status") == "unscored"
                     for item in self._flatten_scored_trajectories(scored)
@@ -856,8 +895,15 @@ class ATIFAdapter(FrameworkAdapter):
         )
 
     def _discover_atif_files(
-        self, uri: str, *, max_files: int = MAX_ATIF_FILES
+        self,
+        uri: str,
+        *,
+        max_files: int = MAX_ATIF_FILES,
+        invalid_input_policy: str = "fail_fast",
     ) -> list[Path]:
+        self._manifest_entries: dict[Path, ATIFManifestEntry] = {}
+        self._manifest_present = False
+        self._manifest_pending_outcomes: list[dict[str, Any]] = []
         path = Path(uri)
         if any(part.is_symlink() for part in (path, *path.parents)):
             raise ATIFLoadError("Symlinks are not allowed in input paths")
@@ -870,6 +916,18 @@ class ATIFAdapter(FrameworkAdapter):
 
         if not path.is_dir():
             raise ATIFLoadError(f"ATIF input is neither a file nor directory: {path}")
+        manifest_path = path / "manifest.jsonl"
+        if manifest_path.exists() or manifest_path.is_symlink():
+            self._manifest_present = True
+            entries = load_manifest(
+                manifest_path,
+                path,
+                max_entries=max_files,
+                invalid_input_policy=invalid_input_policy,
+                outcomes=self._manifest_pending_outcomes,
+            )
+            self._manifest_entries = {entry.path: entry for entry in entries}
+            return [entry.path for entry in entries]
         files = []
         for candidate in path.rglob("*.json"):
             if candidate.is_file() or candidate.is_symlink():
@@ -943,8 +1001,13 @@ class ATIFAdapter(FrameworkAdapter):
         max_total_steps: int = MAX_TOTAL_STEPS,
         max_collection_bytes: int = MAX_COLLECTION_BYTES,
         invalid_input_policy: str = "fail_fast",
+        partial_result_policy: str = "fail_fast",
     ) -> list[dict[str, Any]]:
-        self._input_outcomes: list[dict[str, Any]] = []
+        # Manifest rows rejected under skip_invalid are recorded during discovery,
+        # so they survive into the same outcome list as per-file diagnostics.
+        self._input_outcomes: list[dict[str, Any]] = list(
+            getattr(self, "_manifest_pending_outcomes", [])
+        )
         return load_collection(
             files,
             max_file_bytes=max_file_bytes,
@@ -962,6 +1025,10 @@ class ATIFAdapter(FrameworkAdapter):
             ),
             source_path=self._source_path_for_manifest,
             outcomes=self._input_outcomes,
+            manifest_entries=getattr(self, "_manifest_entries", {}),
+            partial_result_policy=partial_result_policy,
+            allow_empty=bool(getattr(self, "_manifest_present", False))
+            and invalid_input_policy == "skip_invalid",
         )
 
     @staticmethod
@@ -1395,7 +1462,11 @@ class ATIFAdapter(FrameworkAdapter):
             await asyncio.gather(*workers, return_exceptions=True)
         results = [indexed_results[i] for i in range(len(trajectories))]
         if not any(item.get("status") == "scored" for item in results):
-            raise JudgeResponseError("No usable scored trajectories remain")
+            # Nothing scored is a legitimate outcome, not a crash: the report
+            # publishes counts with no overall score instead of a fabricated 0.0.
+            logger.warning(
+                "ATIF job scored no trajectories; publishing unscored counts only"
+            )
         if subagent_aggregation == "separate":
             # Keep nested scores in metadata, but exclude them from the top-level
             # aggregate. ``aggregate_score`` is still useful to callers inspecting
