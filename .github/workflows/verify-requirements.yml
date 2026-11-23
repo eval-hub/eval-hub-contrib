@@ -36,9 +36,11 @@ jobs:
           - adapter: inspect
             file: adapters/inspect/constraints.txt
             python-version: '3.12'
+            index-url: https://packages.redhat.com/api/pypi/public-rhai/cpu-torch2.13-el9.8/simple/
           - adapter: lighteval
             file: adapters/lighteval/requirements.txt
             python-version: '3.12'
+            index-url: https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,6 +80,6 @@ jobs:
         with:
           mode: python-index
           requirements-file: ${{ matrix.file }}
-          index-url: https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
+          index-url: ${{ matrix.index-url }}
           python-version: ${{ matrix.python-version }}
           timeout-seconds: '60'

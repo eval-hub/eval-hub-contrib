@@ -362,7 +362,11 @@ from `adapters/inspect/`:
 #    excluded because pip does not accept URLs in constraints files)
 { echo "# Transitive dependency pins for the Inspect adapter image, applied with: pip install -r requirements.txt -c constraints.txt"
   echo "# Generated; do not edit by hand. Regenerate (and re-audit) with the command in README.md → Updating dependencies."
-  uv pip compile requirements.txt --universal --python-version 3.12 --no-header --no-annotate | grep -v " @ git"
+  uv pip compile requirements.txt \
+    --index https://packages.redhat.com/api/pypi/public-rhai/cpu-torch2.13-el9.8/simple/ \
+    --default-index https://pypi.org/simple \
+    --index-strategy first-index \
+    --universal --python-version 3.12 --no-header --no-annotate | grep -v " @ git"
 } > constraints.txt
 
 # 2. Audit every pinned version for known vulnerabilities
