@@ -650,10 +650,11 @@ def test_unsupported_benchmarks_are_catalog_ids_and_not_exposed():
 
 @pytest.mark.parametrize("benchmark_id", sorted(UNSUPPORTED_BENCHMARKS))
 def test_unsupported_benchmark_fails_with_the_reason(benchmark_id):
-    """A collection that still names pile_* gets the reason, not 'Unknown benchmark'."""
+    """Old collection entries get the compatibility reason instead of 'Unknown'."""
     for requested in (benchmark_id, f"lm-eval/{benchmark_id}"):
-        with pytest.raises(ValueError, match="not offered.*the-eye.eu.*pile_10k"):
+        with pytest.raises(ValueError, match="not offered") as error:
             resolve_tasks(requested, None)
+        assert UNSUPPORTED_BENCHMARKS[benchmark_id] in str(error.value)
 
 
 @pytest.mark.parametrize("benchmark_id", _OFFERED_LMEVALJOB_IDS)
@@ -1222,6 +1223,15 @@ def test_failure_hints_name_the_adapter_parameter():
         "AssertionError: Tokenizer is required for loglikelihood tasks"
     )
     assert failure_hint("some other failure") == ""
+
+
+def test_dataset_script_failure_does_not_suggest_enabling_remote_code():
+    hint = failure_hint(
+        "RuntimeError: Dataset scripts are no longer supported, but found dataset.py"
+    )
+    assert "Parquet, JSON, or CSV" in hint
+    assert "cannot enable dataset scripts" in hint
+    assert "trust_remote_code=true" not in hint
 
 
 # ── Credentials never reach evaluation_metadata ──────────────────────────────

@@ -182,10 +182,19 @@ def redact_cmd(cmd: list[str]) -> list[str]:
 #: lm-eval error text -> the adapter parameter that resolves it.
 _FAILURE_HINTS = (
     (
+        "Dataset scripts are no longer supported",
+        (
+            "dataset loading scripts are unsupported with datasets 5.2.0; use a "
+            "data-only Parquet, JSON, or CSV dataset through lm-eval/custom. "
+            "trust_remote_code cannot enable dataset scripts"
+        ),
+    ),
+    (
         "contains custom code which must be executed",
         (
-            "the dataset is defined by a loading script; set the job parameter "
-            "trust_remote_code=true to allow it (it executes code from the dataset repository)"
+            "for a HuggingFace tokenizer that requires custom code, set the job "
+            "parameter trust_remote_code=true only if you trust that tokenizer. "
+            "Dataset loading scripts remain unsupported"
         ),
     ),
     (
