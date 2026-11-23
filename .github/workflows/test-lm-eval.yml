@@ -40,6 +40,10 @@ jobs:
           SDK_DEP=$(grep 'eval-hub-sdk' requirements.txt)
           uv pip install --system "$SDK_DEP" -r requirements-test.txt
 
+      - name: Run Ruff
+        working-directory: adapters/lm-eval
+        run: python -m ruff check --config 'src = ["."]' .
+
       - name: Run unit tests
         working-directory: adapters/lm-eval
         run: pytest tests/ -v -m "not integration and not local and not lmeval"

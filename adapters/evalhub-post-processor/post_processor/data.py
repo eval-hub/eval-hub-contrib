@@ -31,6 +31,93 @@ ROLES = {
 }
 
 
+def has_guidellm_metadata(document: dict) -> bool:
+    """Read the native version marker consistently for detection and provider checks."""
+    metadata = document.get("metadata")
+    version = metadata.get("guidellm_version") if isinstance(metadata, dict) else None
+    return isinstance(version, str) and bool(version.strip())
+
+
+def is_guidellm_report(document: dict, provider_id: str | None) -> bool:
+    """Recognize native reports without treating aggregate summaries as request data."""
+    if has_guidellm_metadata(document) and "benchmarks" in document:
+        return True
+    benchmarks = document.get("benchmarks")
+    # Provider identity alone does not make every JSON artifact a native report.
+    return (
+        provider_id == "guidellm"
+        and isinstance(benchmarks, list)
+        and any(
+            isinstance(section, dict)
+            and (
+                section.get("type_") == "generative_benchmark"
+                or (
+                    isinstance(section.get("requests"), dict)
+                    and "successful" in section["requests"]
+                )
+            )
+            for section in benchmarks
+        )
+    )
+
+
+def extract_guidellm_records(document: dict, provider_id: str | None) -> list[dict]:
+    """Extract the first strategy, matching the GuideLLM adapter's reported metrics."""
+    if has_guidellm_metadata(document) and provider_id not in {None, "guidellm"}:
+        raise ValueError("GuideLLM report conflicts with the evaluation job provider")
+    if "benchmarks" not in document:
+        raise ValueError("GuideLLM report is missing its benchmarks array")
+    benchmarks = document["benchmarks"]
+    if not isinstance(benchmarks, list) or not benchmarks:
+        raise ValueError("GuideLLM report must contain a nonempty benchmarks array")
+    # The producer reports benchmarks[0] metrics even for sweep/multi-rate runs.
+    # Use the same observations rather than pooling different load strategies.
+    benchmark = benchmarks[0]
+    requests = benchmark.get("requests") if isinstance(benchmark, dict) else None
+    records = requests.get("successful") if isinstance(requests, dict) else None
+    if not isinstance(records, list) or any(not isinstance(row, dict) for row in records):
+        raise ValueError("GuideLLM requests.successful must be an array of record objects")
+    if not records:
+        raise ValueError("GuideLLM report contains no successful per-sample requests")
+    # GuideLLM may retain only a sampled request list while metrics cover the full run.
+    # The declared successful total, rather than args.sample_requests, proves completeness.
+    metrics = benchmark.get("metrics")
+    totals = metrics.get("request_totals") if isinstance(metrics, dict) else None
+    total = totals.get("successful") if isinstance(totals, dict) else None
+    if isinstance(total, bool) or not isinstance(total, int) or total <= 0:
+        raise ValueError(
+            "GuideLLM report requires a positive integer metrics.request_totals.successful "
+            "to verify complete per-request results"
+        )
+    # Stored requests include transient phases; totals count only requests overlapping
+    # the measurement window. Match GuideLLM's get_within_range before comparing counts.
+    timings = benchmark.get("scheduler_metrics")
+    timings = timings if isinstance(timings, dict) else {}
+    start = timings.get("measure_start_time", benchmark.get("start_time"))
+    end = timings.get("measure_end_time", benchmark.get("end_time"))
+    if start is not None or end is not None:
+        start = numeric(start, "GuideLLM measurement start")
+        end = numeric(end, "GuideLLM measurement end")
+        if end < start:
+            raise ValueError("GuideLLM measurement end must not precede its start")
+        measured = []
+        for row in records:
+            finished = numeric(row.get("request_end_time"), "GuideLLM request_end_time")
+            began = row.get("request_start_time")
+            # GuideLLM uses completion time for requests with no start timestamp.
+            boundary = finished if began is None else numeric(began, "GuideLLM request_start_time")
+            if finished >= start and boundary <= end:
+                measured.append(row)
+        records = measured
+    if len(records) != total:
+        raise ValueError(
+            f"GuideLLM report contains {len(records)} successful request records but "
+            f"metrics.request_totals.successful is {total}; sampled or inconsistent reports "
+            "cannot be used for confidence intervals. Provide complete per-request results."
+        )
+    return records
+
+
 def within(root: Path, name: str) -> Path:
     """Resolve an untrusted relative artifact path under its download directory."""
     if not isinstance(name, str) or "\\" in name or Path(name).is_absolute():
@@ -103,6 +190,7 @@ def read_table(
     *,
     dataset: str | None = None,
     calibration: bool = False,
+    provider_id: str | None = None,
 ) -> Table:
     """Load per-example records from supported files under a source path."""
     config = config or {}
@@ -146,6 +234,7 @@ def read_table(
     prefix = f"{dataset}: " if dataset else ""
     primary_scores: set[str] = set()
     estimands: set[str] = set()
+    unidentified_reports: list[str] = []
     for path in files:
         if path.is_symlink():
             raise ValueError("Data artifacts must not contain symbolic links")
@@ -164,6 +253,31 @@ def read_table(
                 records = obj.get("samples", obj.get("records", [obj]))
             else:
                 records = obj
+            # Keep usable samples on the generic path, even with report-like fields.
+            if (
+                not calibration
+                and isinstance(obj, dict)
+                and "samples" not in obj
+                and "records" not in obj
+                and table.get(obj, "sample_id") is None
+            ):
+                if is_guidellm_report(obj, provider_id):
+                    try:
+                        records = extract_guidellm_records(obj, provider_id)
+                        # A recognized report is sample data, never a skippable summary.
+                        if any(table.get(row, "sample_id") is None for row in records):
+                            raise ValueError(
+                                "GuideLLM request records are missing the mapped sample_id; "
+                                "set data_config.columns.sample_id to request_id "
+                                "(or the request identifier field in this report)"
+                            )
+                    except ValueError as exc:
+                        raise ValueError(f"{prefix}{path.name}: {exc}") from exc
+                elif "benchmarks" in obj or has_guidellm_metadata(obj):
+                    # Skip unrecognized summaries when another file supplies samples.
+                    # If no file is usable, preserve a source-specific error below.
+                    unidentified_reports.append(path.name)
+                    continue
         elif kind == "jsonl":
             records = [
                 json.loads(line)
@@ -202,6 +316,11 @@ def read_table(
                 "a sample identifier and an observed label. Model/judge predictions can be "
                 "supplied directly or joined from evaluation data by sample identifier."
             )
+        if unidentified_reports:
+            raise ValueError(
+                f"{prefix}{', '.join(unidentified_reports)}: Cannot identify the origin of nested "
+                "results; supply supported per-sample records"
+            )
         raise ValueError(
             f"{prefix}No per-example scores found; aggregate metrics cannot be used for PPI. "
             "Supply sample_id and score columns."
@@ -217,11 +336,52 @@ def sample_id(table: Table, row: dict) -> str:
     return str(value)
 
 
+def selected_identity(table: Table, row: dict, role: str) -> Any:
+    """Treat null/empty selectors as omitted so they cannot erase native identity."""
+    value = table.config.get("selection", {}).get(role)
+    return table.get(row, role) if value in (None, "") else value
+
+
+def require_selection_match(table: Table, count: int, reference: str, target: dict) -> None:
+    """Distinguish unmatched selectors from target filtering when no rows survive."""
+    selection = {
+        role: value
+        for role, value in table.config.get("selection", {}).items()
+        if value not in (None, "")
+    }
+    if count or not selection:
+        return
+    if any(role in target for role in ("benchmark_id", "provider_id")):
+        if any(
+            role in target and str(value) != str(target[role]) for role, value in selection.items()
+        ):
+            raise ValueError(
+                f"{reference}.data_config.selection conflicts with the evaluation-job target; "
+                "selection overrides must use the source job's benchmark/provider/metric identity"
+            )
+        raise ValueError(
+            f"{reference}: no rows match the evaluation-job target after selection overrides; "
+            "check native identity fields not covered by selection"
+        )
+    # With no target, matching checks only external row-versus-selector values.
+    if any(matching(table, row, {}, shared=False) for row in table.rows):
+        raise ValueError(
+            f"{reference}: rows match data_config.selection but none match "
+            f"the target metric {target['metric']!r}; check native metric values "
+            "and the primary_score.metric declaration"
+        )
+    raise ValueError(
+        f"{reference}.data_config.selection matched no rows; "
+        "use the file's native benchmark_id/provider_id/metric values, "
+        "not the evaluation service's benchmark names"
+    )
+
+
 def matching(table: Table, row: dict, target: dict, *, shared: bool) -> bool:
     """Check whether a record belongs to the selected benchmark and metric."""
     selection = table.config.get("selection", {})
     selectors = {
-        role: selection.get(role, table.get(row, role))
+        role: selected_identity(table, row, role)
         for role in ("benchmark_id", "provider_id", "metric")
     }
     if shared and any(selectors[role] in (None, "") for role in ("benchmark_id", "provider_id")):
@@ -232,7 +392,20 @@ def matching(table: Table, row: dict, target: dict, *, shared: bool) -> bool:
     for role, value in selectors.items():
         if value is None or value == "":
             continue
-        if str(value) != str(target.get(role, "")):
+        # External selections filter native metadata; eval-job selections retain
+        # their existing role as overrides for framework-native identity names.
+        external = not any(key in target for key in ("benchmark_id", "provider_id"))
+        row_value = table.get(row, role)
+        if (
+            external
+            and role in selection
+            and row_value not in (None, "")
+            and str(row_value) != str(value)
+        ):
+            return False
+        # External inputs have no authoritative job identity. Preserve their native
+        # metadata; only compare identities supplied by an eval_job target.
+        if role in target and str(value) != str(target[role]):
             return False
     return True
 
@@ -249,26 +422,51 @@ def prediction(table: Table, row: dict, metric: str) -> Any:
     return None
 
 
+def validate_external_identity(
+    table: Table, row: dict, identities: dict[str, set[str]], reference: str
+) -> None:
+    """Require one consistent external group across results and all calibration inputs."""
+    for role, values in identities.items():
+        value = selected_identity(table, row, role)
+        if value not in (None, ""):
+            values.add(str(value))
+        if len(values) > 1:
+            source = "Results" if reference == "results_data_ref" else "Calibration"
+            raise ValueError(
+                f"{source} data contains multiple {role} values across results and calibration; "
+                f"use {reference}.data_config.selection or path to select a consistent group"
+            )
+
+
 def ppi_arrays(
     results: Table, calibration: list[Table], target: dict, *, shared: bool
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Pair trusted labels with predictions and exclude them from unlabeled data."""
     metric = target["metric"]
     scores: dict[str, float] = {}
+    # External data may retain metadata, but must identify at most one benchmark
+    # and provider after selection; otherwise one CI would silently pool groups.
+    identities = {role: set() for role in ("benchmark_id", "provider_id") if role not in target}
     for row in results.rows:
         if not matching(results, row, target, shared=False):
             continue
+        validate_external_identity(results, row, identities, "results_data_ref")
         key = sample_id(results, row)
         if key in scores:
             raise ValueError(f"Duplicate evaluation sample_id {key!r}")
         scores[key] = numeric(prediction(results, row, metric), f"{metric} prediction")
+    require_selection_match(results, len(scores), "results_data_ref", target)
     labels: list[float] = []
     predicted: list[float] = []
     seen: set[str] = set()
-    for table in calibration:
+    for index, table in enumerate(calibration):
+        matched = 0
         for row in table.rows:
             if not matching(table, row, target, shared=shared):
                 continue
+            matched += 1
+            # Reuse result identities across every calibration file before joining IDs.
+            validate_external_identity(table, row, identities, f"calibration_data_ref[{index}]")
             key = sample_id(table, row)
             if key in seen:
                 raise ValueError(f"Duplicate calibration sample_id {key!r}")
@@ -290,6 +488,9 @@ def ppi_arrays(
                 )
             labels.append(label)
             predicted.append(estimate)
+        # Shared references may intentionally select a different benchmark in this pass.
+        if not shared:
+            require_selection_match(table, matched, f"calibration_data_ref[{index}]", target)
     # Calibration rows are labeled observations, never also unlabeled observations.
     unlabeled = [score for key, score in scores.items() if key not in seen]
     if len(labels) < 2 or len(unlabeled) < 2:

@@ -659,8 +659,18 @@ test-lm-eval:
 	cd adapters/lm-eval && \
 	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \
 	uv pip install --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/python -m ruff check --config 'src = ["."]' . && \
 	.venv/bin/python -m pytest tests/ -m "not local" -v
 images: image-lm-eval
 push-images: push-lm-eval
 clean-images: clean-lm-eval
 tests: test-lm-eval
+
+.PHONY: test-followbench
+test-followbench:
+	cd adapters/followbench && \
+	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/python -m pytest tests/ -v
+
+tests: test-followbench
