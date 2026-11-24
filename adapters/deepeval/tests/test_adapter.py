@@ -156,7 +156,7 @@ def test_deepeval_happy_path(
     monkeypatch.setattr("deepeval_adapter.adapter.resolve_data_dir", lambda _config: str(data_dir))
     monkeypatch.setattr(
         "deepeval_adapter.adapter.resolve_judge_model",
-        lambda _name, _url: SimpleNamespace(name="MockModel"),
+        lambda _name, _url, **kwargs: SimpleNamespace(name="MockModel"),
     )
     monkeypatch.setattr(
         "deepeval_adapter.adapter.create_metric",
@@ -194,8 +194,9 @@ def test_deepeval_happy_path(
 
 
 @pytest.mark.integration
-def test_oci_export_persists_artifacts(tmp_path, monkeypatch):
-    """When exports.oci is configured, PERSISTING_ARTIFACTS is emitted, results file is written, and create_oci_artifact is called."""
+@pytest.mark.parametrize("save_samples", [None, False, True])
+def test_oci_export_persists_artifacts(tmp_path, monkeypatch, save_samples):
+    """With exports.oci, PERSISTING_ARTIFACTS is emitted and only this run's files are uploaded."""
     meta_dir = tmp_path / "meta"
     meta_dir.mkdir()
     with open(Path("meta/job.json")) as f:
@@ -210,14 +211,21 @@ def test_oci_export_persists_artifacts(tmp_path, monkeypatch):
             }
         }
     }
+    if save_samples is not None:
+        job["parameters"]["save_sample_results"] = save_samples
     (meta_dir / "job.json").write_text(json.dumps(job))
 
     adapter = DeepEvalAdapter(job_spec_path=str(meta_dir / "job.json"))
     callbacks = create_autospec(JobCallbacks)
-    callbacks.create_oci_artifact.return_value = OCIArtifactResult(
-        digest="sha256:fake",
-        reference="fake:latest",
-    )
+    callbacks.mlflow = MagicMock()
+    callbacks.mlflow.save.return_value = "test-run"
+    uploaded = {}
+
+    def upload(spec):
+        uploaded.update({p.name: p.read_bytes() for p in spec.files_path.iterdir()})
+        return OCIArtifactResult(digest="sha256:fake", reference="fake:latest")
+
+    callbacks.create_oci_artifact.side_effect = upload
 
     data_dir = tmp_path / "test_data"
     data_dir.mkdir()
@@ -228,7 +236,7 @@ def test_oci_export_persists_artifacts(tmp_path, monkeypatch):
     monkeypatch.setattr("deepeval_adapter.adapter.resolve_data_dir", lambda _config: str(data_dir))
     monkeypatch.setattr(
         "deepeval_adapter.adapter.resolve_judge_model",
-        lambda _name, _url: SimpleNamespace(name="MockModel"),
+        lambda _name, _url, **kwargs: SimpleNamespace(name="MockModel"),
     )
     monkeypatch.setattr(
         "deepeval_adapter.adapter.create_metric",
@@ -238,18 +246,41 @@ def test_oci_export_persists_artifacts(tmp_path, monkeypatch):
 
     results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
 
-    # PERSISTING_ARTIFACTS phase was reported
     phases = [c.args[0].phase for c in callbacks.report_status.call_args_list]
     assert JobPhase.PERSISTING_ARTIFACTS in phases
 
-    # Results file was written to disk before create_oci_artifact was called
+    # The upload came from a staging directory that is gone once the call returns.
     call_args = callbacks.create_oci_artifact.call_args
     assert call_args is not None
-    spec = call_args.args[0]
-    assert spec.files_path.exists()
-    assert (spec.files_path / "results_summary.json").exists()
+    assert not call_args.args[0].files_path.exists()
+    assert "results_summary.json" in uploaded
 
-    # OCI artifact is attached to results
+    local_results = adapter.local_jobs_base_path / "results"
+    sample_path = local_results / "sample_results.jsonl"
+    assert sample_path.exists() == (save_samples is True)
+    assert (local_results / "manifest.json").exists() == (save_samples is True)
+    assert set(uploaded) == (
+        {"results_summary.json", "sample_results.jsonl", "manifest.json"}
+        if save_samples
+        else {"results_summary.json"}
+    )
+    if save_samples is True:
+        rows = [json.loads(line) for line in sample_path.read_text().splitlines()]
+        assert rows[0]["sample_id"] == "0"
+        assert all(set(row) == {"sample_id", "prediction", "metric"} for row in rows)
+        assert rows[0]["prediction"] == 0.85
+        manifest = json.loads((local_results / "manifest.json").read_text())
+        assert manifest == {
+            "primary_score": {"metric": "faithfulness_score"},
+            "estimand": "mean",
+        }
+
+    # OCI and MLflow receive identical bytes.
+    mlflow_files = {
+        a.path: a.content for a in callbacks.mlflow.save.call_args.kwargs["artifacts"]
+    }
+    assert mlflow_files == uploaded
+
     assert results.oci_artifact is not None
     assert results.oci_artifact.digest == "sha256:fake"
 
@@ -515,7 +546,7 @@ def test_new_single_turn_benchmarks_happy_path(
     )
     monkeypatch.setattr("deepeval_adapter.adapter.evaluate", lambda **kwargs: canned)
     monkeypatch.setattr(
-        "deepeval_adapter.adapter.resolve_judge_model", lambda name, url: SimpleNamespace(name="MockModel")
+        "deepeval_adapter.adapter.resolve_judge_model", lambda name, url, **kwargs: SimpleNamespace(name="MockModel")
     )
     monkeypatch.setattr(
         "deepeval_adapter.adapter.create_metric",
@@ -564,7 +595,7 @@ def test_geval_happy_path(tmp_path, monkeypatch):
     canned = _make_canned_eval_results(score=0.9, name="CustomEval")
     monkeypatch.setattr("deepeval_adapter.adapter.evaluate", lambda **kwargs: canned)
     monkeypatch.setattr(
-        "deepeval_adapter.adapter.resolve_judge_model", lambda name, url: SimpleNamespace(name="MockModel")
+        "deepeval_adapter.adapter.resolve_judge_model", lambda name, url, **kwargs: SimpleNamespace(name="MockModel")
     )
     monkeypatch.setattr(
         "deepeval_adapter.adapter.create_metric",
@@ -641,7 +672,7 @@ def test_json_correctness_happy_path(tmp_path, monkeypatch):
     judge_called = []
     monkeypatch.setattr(
         "deepeval_adapter.adapter.resolve_judge_model",
-        lambda n, u: judge_called.append(True) or MagicMock(),
+        lambda n, u, **kwargs: judge_called.append(True) or MagicMock(),
     )
 
     callbacks = create_autospec(JobCallbacks)
@@ -782,7 +813,7 @@ def test_conversation_relevancy_happy_path(tmp_path, monkeypatch):
     canned = _make_canned_eval_results(score=0.88, name="ConversationRelevancy")
     monkeypatch.setattr("deepeval_adapter.adapter.evaluate", lambda **kwargs: canned)
     monkeypatch.setattr(
-        "deepeval_adapter.adapter.resolve_judge_model", lambda n, u: SimpleNamespace(name="MockModel")
+        "deepeval_adapter.adapter.resolve_judge_model", lambda n, u, **kwargs: SimpleNamespace(name="MockModel")
     )
     monkeypatch.setattr(
         "deepeval_adapter.adapter.create_metric",
@@ -825,7 +856,7 @@ def test_evalcard_populated_for_safety_benchmark(tmp_path, monkeypatch):
     canned = _make_canned_eval_results(score=0.9, name="PIILeakage")
     monkeypatch.setattr("deepeval_adapter.adapter.evaluate", lambda **kwargs: canned)
     monkeypatch.setattr(
-        "deepeval_adapter.adapter.resolve_judge_model", lambda n, u: SimpleNamespace(name="MockModel")
+        "deepeval_adapter.adapter.resolve_judge_model", lambda n, u, **kwargs: SimpleNamespace(name="MockModel")
     )
     monkeypatch.setattr(
         "deepeval_adapter.adapter.create_metric",
@@ -873,7 +904,7 @@ def test_evalcard_populated_for_rag_benchmark(tmp_path, monkeypatch):
     canned = _make_canned_eval_results(score=0.95, name="Faithfulness")
     monkeypatch.setattr("deepeval_adapter.adapter.evaluate", lambda **kwargs: canned)
     monkeypatch.setattr(
-        "deepeval_adapter.adapter.resolve_judge_model", lambda n, u: SimpleNamespace(name="MockModel")
+        "deepeval_adapter.adapter.resolve_judge_model", lambda n, u, **kwargs: SimpleNamespace(name="MockModel")
     )
     monkeypatch.setattr(
         "deepeval_adapter.adapter.create_metric",
@@ -1169,3 +1200,212 @@ def test_extract_results_capability_entry_for_rag():
     _, entries = extract_results(raw, "faithfulness")
     assert any(isinstance(e, CapabilityEvalEntry) for e in entries)
     assert not any(isinstance(e, SafetyEvalEntry) for e in entries)
+
+
+# ---------------------------------------------------------------------------
+# Per-sample export, judge options and export failure policy
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sample_export_job(tmp_path, monkeypatch):
+    """Run the adapter with one deterministic native result and sample export on."""
+    meta = tmp_path / "meta"
+    meta.mkdir()
+    shutil.copy(Path("meta/job.json"), meta / "job.json")
+    adapter = DeepEvalAdapter(job_spec_path=str(meta / "job.json"))
+    adapter.job_spec.parameters["save_sample_results"] = True
+    adapter.job_spec.experiment_name = None
+    adapter.job_spec.exports = None
+    callbacks = create_autospec(JobCallbacks)
+    callbacks.mlflow = MagicMock()
+    native = _make_canned_eval_results()
+    native.test_results[0].input = "sensitive native input"
+    monkeypatch.setattr("deepeval_adapter.adapter.resolve_data_dir", lambda config: str(tmp_path))
+    monkeypatch.setattr(
+        "deepeval_adapter.adapter.load_dataset",
+        lambda *args: [
+            {
+                "input": "q",
+                "actual_output": '{"a": 1}',
+                "retrieval_context": ["ctx"],
+            }
+        ],
+    )
+    monkeypatch.setattr("deepeval_adapter.adapter.resolve_judge_model", lambda *args, **kwargs: MagicMock())
+    monkeypatch.setattr("deepeval_adapter.adapter.create_metric", lambda *args: MagicMock())
+    monkeypatch.setattr("deepeval_adapter.adapter.evaluate", lambda **kwargs: native)
+    return adapter, callbacks, native
+
+
+def _assert_failed(callbacks, message):
+    """Failures must expose a useful error through the events callback."""
+    from evalhub.adapter import JobStatus
+
+    failure = callbacks.report_status.call_args.args[0]
+    assert failure.status == JobStatus.FAILED
+    assert message in failure.error_message.message
+
+
+@pytest.mark.parametrize("value", [False, 0, -1, "1024"])
+def test_judge_rejects_invalid_token_limit(value):
+    from deepeval_adapter.judge import resolve_judge_model
+
+    with pytest.raises(ValueError, match="max_tokens must be a positive integer"):
+        resolve_judge_model("judge", "http://model/v1", max_tokens=value)
+
+
+@pytest.mark.parametrize("value", ["true", 1, None])
+def test_judge_rejects_non_boolean_structured_outputs(value):
+    from deepeval_adapter.judge import resolve_judge_model
+
+    with pytest.raises(ValueError, match="judge_structured_outputs must be a boolean"):
+        resolve_judge_model("judge", "http://model/v1", structured_outputs=value)
+
+
+def test_judge_options_reach_the_judge(sample_export_job, monkeypatch):
+    adapter, callbacks, _ = sample_export_job
+    seen = {}
+
+    def judge(name, url, **kwargs):
+        seen.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr("deepeval_adapter.adapter.resolve_judge_model", judge)
+    adapter.job_spec.parameters.update(
+        {"max_tokens": 512, "judge_structured_outputs": True}
+    )
+    adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    assert seen == {"max_tokens": 512, "structured_outputs": True}
+
+
+@pytest.mark.parametrize("score", [None, True, "0.5", float("nan"), float("inf"), -float("inf")])
+def test_sample_export_rejects_invalid_score(sample_export_job, score):
+    adapter, callbacks, native = sample_export_job
+    native.test_results[0].metrics_data[0].score = score
+    with pytest.raises(ValueError, match="Invalid per-sample score"):
+        adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    _assert_failed(callbacks, "Invalid per-sample score")
+    callbacks.create_oci_artifact.assert_not_called()
+    callbacks.mlflow.save.assert_not_called()
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_sample_export_requires_one_metric(sample_export_job, count):
+    adapter, callbacks, native = sample_export_job
+    native.test_results[0].metrics_data *= count
+    with pytest.raises(ValueError, match="exactly one metric"):
+        adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    _assert_failed(callbacks, "exactly one metric")
+
+
+@pytest.mark.parametrize("value", ["false", "true", 0, 1, None, [], {}])
+def test_sample_flag_requires_boolean(sample_export_job, value):
+    adapter, callbacks, _ = sample_export_job
+    adapter.job_spec.parameters["save_sample_results"] = value
+    with pytest.raises(ValueError, match="must be a boolean"):
+        adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    _assert_failed(callbacks, "must be a boolean")
+
+
+def test_sample_export_omits_raw_input(sample_export_job):
+    adapter, callbacks, _ = sample_export_job
+    adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    rows = (adapter.local_jobs_base_path / "results" / "sample_results.jsonl").read_text()
+    assert "sensitive native input" not in rows
+
+
+def test_disabled_samples_remove_stale_files(sample_export_job):
+    adapter, callbacks, _ = sample_export_job
+    results_dir = adapter.local_jobs_base_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    (results_dir / "sample_results.jsonl").write_text("stale")
+    (results_dir / "manifest.json").write_text("stale")
+    adapter.job_spec.parameters["save_sample_results"] = False
+    adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    assert not (results_dir / "sample_results.jsonl").exists()
+    assert not (results_dir / "manifest.json").exists()
+
+
+@pytest.mark.parametrize("destination", ["oci", "mlflow"])
+@pytest.mark.parametrize("failure", ["exception", "missing_reference"])
+@pytest.mark.parametrize("samples", [False, True])
+def test_export_failure_policy(sample_export_job, destination, failure, samples, caplog):
+    from evalhub.adapter.models.job import JobSpecExports
+
+    adapter, callbacks, _ = sample_export_job
+    adapter.job_spec.parameters["save_sample_results"] = samples
+    if destination == "oci":
+        adapter.job_spec.exports = JobSpecExports.model_validate(
+            {
+                "oci": {
+                    "coordinates": {
+                        "oci_host": "quay.io",
+                        "oci_repository": "test/results",
+                        "oci_tag": "test",
+                    }
+                }
+            }
+        )
+        upload = callbacks.create_oci_artifact
+        missing = "no artifact reference"
+    else:
+        adapter.job_spec.experiment_name = "unit-export"
+        upload = callbacks.mlflow.save
+        missing = "no run ID"
+    if failure == "exception":
+        upload.side_effect = RuntimeError("backend denied upload")
+    else:
+        upload.return_value = None
+    if samples:
+        message = "backend denied upload" if failure == "exception" else missing
+        with pytest.raises(RuntimeError, match=message):
+            adapter.run_benchmark_job(adapter.job_spec, callbacks)
+        _assert_failed(callbacks, message)
+    else:
+        results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+        assert results.overall_score == 0.85
+        if failure == "exception" or destination == "oci":
+            assert "job still completes" in caplog.text
+    upload.assert_called_once()
+
+
+def test_timeout_error_has_nonempty_api_message(sample_export_job, monkeypatch):
+    adapter, callbacks, _ = sample_export_job
+    monkeypatch.setattr("deepeval_adapter.adapter.evaluate", MagicMock(side_effect=TimeoutError()))
+    with pytest.raises(TimeoutError):
+        adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    _assert_failed(callbacks, "TimeoutError")
+
+
+@pytest.mark.parametrize(
+    "benchmark_id,file_content,dataset_format,expected_metrics", BENCHMARK_CASES
+)
+def test_provider_primary_matches_sample_manifest(
+    sample_export_job, monkeypatch, benchmark_id, file_content, dataset_format, expected_metrics
+):
+    """The manifest metric, the reported metric and provider.yaml name the same primary score."""
+    import yaml
+
+    adapter, callbacks, _ = sample_export_job
+    adapter.job_spec.benchmark_id = benchmark_id
+    monkeypatch.setattr("deepeval_adapter.adapter.build_test_cases", lambda *args: [MagicMock()])
+    provider = yaml.safe_load((Path("provider.yaml")).read_text())
+    benchmark = next(b for b in provider["benchmarks"] if b["id"] == benchmark_id)
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    files = adapter.local_jobs_base_path / "results"
+    manifest = json.loads((files / "manifest.json").read_text())
+    assert manifest["primary_score"]["metric"] == benchmark["primary_score"]["metric"]
+    assert benchmark["primary_score"]["metric"] in [r.metric_name for r in results.results]
+    rows = [json.loads(line) for line in (files / "sample_results.jsonl").read_text().splitlines()]
+    assert rows
+    assert all(set(row) == {"sample_id", "prediction", "metric"} for row in rows)
+
+
+def test_json_correctness_samples_come_from_direct_scores(sample_export_job):
+    adapter, callbacks, _ = sample_export_job
+    adapter.job_spec.benchmark_id = "json-correctness"
+    adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    files = adapter.local_jobs_base_path / "results"
+    rows = [json.loads(line) for line in (files / "sample_results.jsonl").read_text().splitlines()]
+    assert rows == [{"sample_id": "0", "prediction": 1.0, "metric": "json_correctness_score"}]

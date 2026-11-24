@@ -213,6 +213,37 @@ def test_provider_declares_primary_score_for_every_benchmark():
 
 
 @pytest.mark.integration
+def test_provider_declares_pass_criteria_for_every_benchmark():
+    """The server passes a benchmark at ``score >= threshold`` (higher is better).
+
+    LLM-judged benchmarks default to the adapter's ``threshold`` parameter
+    (0.5). ``json-correctness`` passes only when every output is valid, which
+    is what ``schema_valid`` reports.
+    """
+    import yaml
+
+    provider = yaml.safe_load((Path(__file__).parent.parent / "provider.yaml").read_text())
+    for entry in provider["benchmarks"]:
+        expected = 1.0 if entry["id"] == "json-correctness" else 0.5
+        assert entry["pass_criteria"]["threshold"] == expected, entry["id"]
+
+
+@pytest.mark.integration
+def test_hallucination_is_declared_higher_is_better():
+    """deepeval >= 4.2 scores hallucination as the fraction of agreeing verdicts.
+
+    The earlier ``lower_is_better: true`` / 0.3 declaration would pass the
+    worst outputs, so the direction and threshold are pinned here.
+    """
+    import yaml
+
+    provider = yaml.safe_load((Path(__file__).parent.parent / "provider.yaml").read_text())
+    entry = next(b for b in provider["benchmarks"] if b["id"] == "hallucination")
+    assert entry["primary_score"]["lower_is_better"] is False
+    assert entry["pass_criteria"]["threshold"] == 0.5
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "metric_name",
     ["BiasMetric", "ToxicityMetric", "MisuseMetric", "PIILeakageMetric"],
@@ -234,3 +265,15 @@ def test_deepeval_safety_scores_are_higher_is_better(metric_name, stub_judge):
     metric.error = None
     assert metric.score == 1.0
     assert metric.is_successful() is True
+
+
+@pytest.mark.integration
+def test_deepeval_hallucination_score_is_higher_is_better(stub_judge):
+    """Canary: every context agreed ("yes") scores 1.0 and a contradiction scores 0.0."""
+    from deepeval.metrics import HallucinationMetric
+
+    metric = HallucinationMetric(model=stub_judge, threshold=0.5)
+    metric.verdicts = [SimpleNamespace(verdict="yes"), SimpleNamespace(verdict="yes")]
+    assert metric._calculate_score() == 1.0
+    metric.verdicts = [SimpleNamespace(verdict="no"), SimpleNamespace(verdict="no")]
+    assert metric._calculate_score() == 0.0

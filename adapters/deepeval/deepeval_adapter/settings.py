@@ -48,12 +48,18 @@ class JobSettings:
     model_url: str
     threshold: float
     dataset_format: str
+    save_samples: bool = False
+    max_tokens: int | None = None
+    structured_outputs: bool = False
 
     @classmethod
     def from_job_spec(cls, config: JobSpec) -> JobSettings:
         spec = validate_job_spec(config)
         params = config.parameters
         model_url = config.model.url.strip().rstrip("/")
+        save_samples = params.get("save_sample_results", False)
+        if type(save_samples) is not bool:
+            raise ValueError("parameters.save_sample_results must be a boolean")
         return cls(
             spec=spec,
             params=params,
@@ -61,6 +67,9 @@ class JobSettings:
             model_url=model_url,
             threshold=float(params.get("threshold", DEFAULT_THRESHOLD)),
             dataset_format=params.get("dataset_format", DEFAULT_DATASET_FORMAT),
+            save_samples=save_samples,
+            max_tokens=params.get("max_tokens"),
+            structured_outputs=params.get("judge_structured_outputs", False),
         )
 
 

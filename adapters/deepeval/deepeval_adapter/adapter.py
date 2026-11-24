@@ -21,8 +21,9 @@ from evalhub.adapter import (
     JobStatusUpdate,
     MessageInfo,
 )
+from evalhub.adapter.mlflow import MlflowArtifact
 
-from . import reporting
+from . import reporting, samples
 from .benchmarks import BenchmarkSpec, create_metric, find_benchmark
 from .cases import build_test_cases
 from .data_loading import load_dataset, resolve_data_dir
@@ -69,7 +70,8 @@ class DeepEvalAdapter(FrameworkAdapter):
                 JobStatusUpdate(
                     status=JobStatus.FAILED,
                     error_message=MessageInfo(
-                        message=str(exc), message_code="evaluation_error"
+                        message=str(exc) or type(exc).__name__,
+                        message_code="evaluation_error",
                     ),
                 )
             )
@@ -91,6 +93,10 @@ class DeepEvalAdapter(FrameworkAdapter):
         settings = JobSettings.from_job_spec(config)
         spec = settings.spec
         apply_runtime_tuning(settings.params)
+        results_dir = self._results_dir()
+        if not settings.save_samples:
+            for name in samples.SAMPLE_FILES:
+                (results_dir / name).unlink(missing_ok=True)
 
         _status(callbacks, JobPhase.LOADING_DATA)
         data_dir = resolve_data_dir(config)
@@ -104,7 +110,9 @@ class DeepEvalAdapter(FrameworkAdapter):
         )
 
         _status(callbacks, JobPhase.RUNNING_EVALUATION, progress=0.0)
-        evaluation_results, card_entries = self._evaluate(settings, records, test_cases)
+        evaluation_results, card_entries, sample_scores = self._evaluate(
+            settings, records, test_cases
+        )
         _status(callbacks, JobPhase.RUNNING_EVALUATION, progress=1.0)
 
         _status(callbacks, JobPhase.POST_PROCESSING)
@@ -127,7 +135,18 @@ class DeepEvalAdapter(FrameworkAdapter):
             spec.id, overall_score, num_evaluated, evaluation_results
         )
 
-        oci_artifact = self._persist_oci(config, callbacks, summary, version)
+        sample_artifacts = (
+            samples.build_artifacts(sample_scores, spec.primary_metric)
+            if sample_scores is not None
+            else []
+        )
+        artifacts = [
+            MlflowArtifact(reporting.SUMMARY_FILE, summary, "application/json"),
+            *sample_artifacts,
+        ]
+        oci_artifact = self._persist_outputs(
+            config, callbacks, settings, results_dir, artifacts, version
+        )
         if oci_artifact:
             env_card.oci_artifact_ref = oci_artifact.reference
 
@@ -155,7 +174,9 @@ class DeepEvalAdapter(FrameworkAdapter):
             eval_card=eval_card,
             env_card=env_card,
         )
-        reporting.save_to_mlflow(callbacks, config, job_results, summary)
+        reporting.save_to_mlflow(
+            callbacks, config, job_results, artifacts, strict=settings.save_samples
+        )
 
         # Do NOT report COMPLETED here: report_results() sends results AND
         # COMPLETED in one atomic event, and an early COMPLETED makes the
@@ -176,12 +197,20 @@ class DeepEvalAdapter(FrameworkAdapter):
     @staticmethod
     def _evaluate(
         settings: JobSettings, records: list[dict[str, Any]], test_cases: list[Any]
-    ) -> tuple[list[Any], list[Any]]:
+    ) -> tuple[list[Any], list[Any], list[float] | None]:
+        """Return ``(results, card entries, per-sample scores or None)``."""
         params = settings.params
         if settings.spec.is_direct:
-            return run_json_correctness(records, params)
+            results, card_entries = run_json_correctness(records, params)
+            scores = samples.direct_scores(results) if settings.save_samples else None
+            return results, card_entries, scores
 
-        judge = resolve_judge_model(settings.judge_name, settings.model_url)
+        judge = resolve_judge_model(
+            settings.judge_name,
+            settings.model_url,
+            max_tokens=settings.max_tokens,
+            structured_outputs=settings.structured_outputs,
+        )
         metric = create_metric(settings.spec.id, judge, settings.threshold, params)
         raw_results = evaluate(
             test_cases=test_cases,
@@ -192,23 +221,54 @@ class DeepEvalAdapter(FrameworkAdapter):
                 max_concurrent=int(params.get("max_concurrent", 1)),
             ),
         )
-        return extract_results(raw_results, settings.spec.id)
+        # Validate the native scores before aggregation hides a failed metric.
+        scores = samples.native_scores(raw_results) if settings.save_samples else None
+        results, card_entries = extract_results(raw_results, settings.spec.id)
+        return results, card_entries, scores
 
-    def _persist_oci(
-        self, config: JobSpec, callbacks: JobCallbacks, summary: bytes, version: str
+    def _results_dir(self) -> Path:
+        if self.local_jobs_base_path is not None:
+            return self.local_jobs_base_path / "results"
+        return _DEFAULT_RESULTS_DIR
+
+    def _persist_outputs(
+        self,
+        config: JobSpec,
+        callbacks: JobCallbacks,
+        settings: JobSettings,
+        results_dir: Path,
+        artifacts: list[MlflowArtifact],
+        version: str,
     ) -> Any:
+        """Keep this run's files locally and publish them to OCI when configured.
+
+        An OCI failure is a warning unless per-sample export was requested, in
+        which case it fails the job so the samples are not silently dropped.
+        """
         oci_exports = config.exports.oci if config.exports else None
+        if oci_exports is None and not settings.save_samples:
+            return None
+        summary = artifacts[0].content
+        reporting.write_local_results(results_dir, summary, artifacts[1:])
         if oci_exports is None:
             return None
         _status(callbacks, JobPhase.PERSISTING_ARTIFACTS)
-        results_dir = (
-            self.local_jobs_base_path / "results"
-            if self.local_jobs_base_path is not None
-            else _DEFAULT_RESULTS_DIR
-        )
-        return reporting.persist_oci_artifact(
-            oci_exports, config, callbacks, summary, results_dir, version
-        )
+        try:
+            return reporting.persist_oci_artifact(
+                oci_exports,
+                config,
+                callbacks,
+                {a.path: a.content for a in artifacts},
+                version,
+            )
+        except Exception as exc:
+            if settings.save_samples:
+                raise
+            logger.warning(
+                "OCI summary export failed (job still completes): %s",
+                str(exc) or type(exc).__name__,
+            )
+            return None
 
     def generate_additional_info(self, results: JobResults) -> dict[str, Any] | None:
         """Provide prompting strategy and dataset metadata for EvalCard downstream."""

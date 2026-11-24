@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import logging
+import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +22,8 @@ from evalhub.adapter import (
     SafetyEvalEntry,
 )
 from evalhub.adapter.mlflow import MlflowArtifact
+
+from .samples import SAMPLE_FILES
 
 logger = logging.getLogger(__name__)
 
@@ -73,18 +76,33 @@ def build_summary(
     ).encode()
 
 
+SUMMARY_FILE = "results_summary.json"
+
+
+def write_local_results(
+    results_dir: Path, summary: bytes, artifacts: Sequence[MlflowArtifact]
+) -> None:
+    """Keep this run's files in ``results_dir``, dropping stale sample files."""
+    results_dir.mkdir(parents=True, exist_ok=True)
+    for name in SAMPLE_FILES:
+        (results_dir / name).unlink(missing_ok=True)
+    (results_dir / SUMMARY_FILE).write_bytes(summary)
+    for artifact in artifacts:
+        (results_dir / artifact.path).write_bytes(artifact.content)
+
+
 def persist_oci_artifact(
     oci_exports: Any,
     config: JobSpec,
     callbacks: JobCallbacks,
-    summary: bytes,
-    results_dir: Path,
+    files: Mapping[str, bytes],
     version: str,
 ) -> Any:
-    """Write the summary to ``results_dir`` and publish it as an OCI artifact."""
-    results_dir.mkdir(parents=True, exist_ok=True)
-    (results_dir / "results_summary.json").write_bytes(summary)
+    """Publish this run's files as an OCI artifact.
 
+    The files are staged in a temporary directory so unrelated or stale files
+    in the results directory are never uploaded.
+    """
     coords = oci_exports.coordinates.model_copy(deep=True)
     coords.annotations.update(
         {
@@ -96,9 +114,14 @@ def persist_oci_artifact(
             "io.github.eval-hub.deepeval.version": version,
         }
     )
-    artifact = callbacks.create_oci_artifact(
-        OCIArtifactSpec(files_path=results_dir, coordinates=coords)
-    )
+    with tempfile.TemporaryDirectory(prefix="deepeval-oci-") as staging:
+        for name, content in files.items():
+            (Path(staging) / name).write_bytes(content)
+        artifact = callbacks.create_oci_artifact(
+            OCIArtifactSpec(files_path=Path(staging), coordinates=coords)
+        )
+    if artifact is None:
+        raise RuntimeError("OCI export returned no artifact reference")
     logger.info("OCI artifact created: %s", artifact.reference)
     return artifact
 
@@ -113,26 +136,31 @@ def mlflow_experiment_name(config: JobSpec) -> str:
 
 
 def save_to_mlflow(
-    callbacks: JobCallbacks, config: JobSpec, job_results: JobResults, summary: bytes
+    callbacks: JobCallbacks,
+    config: JobSpec,
+    job_results: JobResults,
+    artifacts: Sequence[MlflowArtifact],
+    *,
+    strict: bool = False,
 ) -> None:
     """Save the run to MLflow when an experiment is configured.
 
-    A failure is logged, not raised: the evaluation itself already succeeded.
+    A failure is logged, not raised, because the evaluation itself already
+    succeeded. With ``strict`` (per-sample export was requested) a failure or a
+    missing run ID raises instead, so samples are never silently dropped.
     """
     experiment_name = mlflow_experiment_name(config)
     if not experiment_name:
         return
     try:
         spec = config.model_copy(update={"experiment_name": experiment_name})
-        run_id = callbacks.mlflow.save(
-            job_results,
-            spec,
-            artifacts=[
-                MlflowArtifact("results_summary.json", summary, "application/json")
-            ],
-        )
+        run_id = callbacks.mlflow.save(job_results, spec, artifacts=list(artifacts))
+        if strict and not run_id:
+            raise RuntimeError("MLflow per-sample export returned no run ID")
         if run_id:
             job_results.mlflow_run_id = run_id
             logger.info("MLflow run saved: %s (experiment=%s)", run_id, experiment_name)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
+        if strict:
+            raise
         logger.warning("MLflow save failed (job still completes): %s", exc)
