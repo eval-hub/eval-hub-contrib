@@ -101,3 +101,22 @@ missing or ambiguous skill (set `sub_path` or `skill_path`), or an unexpected up
 | `mlflow_experiment_name` | none | Fallback MLflow experiment name |
 
 The upstream content digest of the evaluated tree is recorded as `evaluation_metadata.skill_digest`.
+
+## Pass or fail on the platform
+
+The server takes the bar for the platform verdict from `pass_criteria`, and a score is passed when it is
+greater than or equal to the bar. The provider declares:
+
+| Benchmark | Primary score | Provider bar |
+|---|---|---|
+| `skill-quality` | `quality_score` | `0.7` (the default `min_score` of 70) |
+| `skill-security` | `gate_score` | `1.0` |
+| `skill-pii` | `gate_score` | `1.0` |
+
+An incomplete scan (`on_incomplete: report`) emits no `gate_score`, so it gets neither a pass nor a fail on
+the platform. It is reported as `scan_complete=false`.
+
+The `skill-quality` bar is fixed and does not follow `parameters.min_score`. With `min_score: 95`, a
+`quality_score` of 0.94 has `meets_min_score=false` but still meets the provider bar of 0.7. To make the platform
+verdict use the same bar, set a job-level `pass_criteria` threshold equal to `min_score / 100` (here `0.95`).
+`examples/gate-results.sh` reads the metrics, including `meets_min_score`, so it is not affected.

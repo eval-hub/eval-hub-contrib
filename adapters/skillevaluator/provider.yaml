@@ -43,6 +43,7 @@ agent:
     - "skill-quality: quality_score is HIGHER is better (1.0 = 100/100); meets_min_score compares against parameters.min_score"
     - "skill-security and skill-pii: gate_score 1.0 means the scan completed with no blocking findings, 0.0 means it completed and failed the gate"
     - "An incomplete scan emits only scan_complete=false: no gate_score and no severity counts. An absent score is not a failing score, and missing counts are not zero findings"
+    - "Platform pass/fail: skill-quality passes at quality_score >= 0.7 (the default min_score 70); skill-security and skill-pii pass at gate_score >= 1.0. The provider threshold is fixed and does not follow parameters.min_score: for a custom min_score set the same value as a job-level pass_criteria threshold (min_score 80 -> 0.8)"
 
 runtime:
   k8s:
@@ -78,6 +79,7 @@ benchmarks:
       - efficiency_score
       - issue_count
     primary_score: {metric: quality_score, lower_is_better: false}
+    pass_criteria: {threshold: 0.7}
     tags: [skillevaluator, agent-skills, quality, static]
     agent:
       result_interpretation: >-
@@ -114,6 +116,7 @@ benchmarks:
       - finding_count
       - high_or_critical_count
     primary_score: {metric: gate_score, lower_is_better: false}
+    pass_criteria: {threshold: 1.0}
     tags: [skillevaluator, skillspector, agent-skills, security, supply-chain, static]
     agent:
       result_interpretation: >-
@@ -142,6 +145,7 @@ benchmarks:
       - finding_count
       - high_or_critical_count
     primary_score: {metric: gate_score, lower_is_better: false}
+    pass_criteria: {threshold: 1.0}
     tags: [skillevaluator, agent-skills, pii, secrets, static]
     agent:
       result_interpretation: >-
