@@ -45,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Build the actual provider image
-        run: docker build -t inspect-task-runtime adapters/inspect
+        run: docker build -f adapters/inspect/Containerfile -t inspect-task-runtime adapters/inspect
       - name: Check task imports and prepared data as an arbitrary non-root UID
         run: |
           docker run --rm --network none --read-only \
