@@ -3,10 +3,10 @@ name: Test Inspect AI
 on:
   push:
     branches: [main]
-    paths: ['adapters/inspect/**']
+    paths: ['adapters/inspect/**', '.github/workflows/test-inspect.yml']
   pull_request:
     branches: [main]
-    paths: ['adapters/inspect/**']
+    paths: ['adapters/inspect/**', '.github/workflows/test-inspect.yml']
   workflow_dispatch:
 
 jobs:
@@ -39,3 +39,17 @@ jobs:
       - name: Run tests
         working-directory: adapters/inspect
         run: pytest tests/ -v
+
+  task-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the actual provider image
+        run: docker build -t inspect-task-runtime adapters/inspect
+      - name: Check task imports and prepared data as an arbitrary non-root UID
+        run: |
+          docker run --rm --network none --read-only \
+            --user 12345:0 --tmpfs /tmp:rw,mode=1777 \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            --mount type=bind,src="$PWD/adapters/inspect/scripts",dst=/checks,readonly \
+            --entrypoint python inspect-task-runtime /checks/check_task_runtime.py

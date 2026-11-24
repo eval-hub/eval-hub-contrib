@@ -5,7 +5,10 @@
 eval-hub-sdk[adapter]~=1.0.7
 inspect-ai==0.3.278
 openai==3.24.0
-inspect-evals[math,bfcl]==0.26.0
+# Install the optional dependencies of the advertised cyber and SWE-bench tasks.
+inspect-evals[math,bfcl,cybench,cybergym,theagentcompany,swe_bench,gdm_self_proliferation]==0.26.0
+# Inspect's scorers use SWEbenchInstance from harness.constants, removed in 5.x.
+swebench==4.1.0
 inspect-petri==3.1.1
 petri-bloom==0.2.6
 # Required by inspect_evals/makemesay for word tokenization and lemmatization.

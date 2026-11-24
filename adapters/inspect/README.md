@@ -344,13 +344,45 @@ make push-inspect REGISTRY=quay.io/your-org VERSION=v1.0.0
 
 Direct dependencies are pinned in `requirements.txt` (`inspect-ai`,
 `inspect-evals`, `inspect-petri`, `petri-bloom`, `openai`, `nltk`; `eval-hub-sdk[adapter]`
-is a compatible-release pin). The one dependency not published on PyPI
-(`evals`) is pinned to an upstream Git commit there.
+is a compatible-release pin).
 `constraints.txt` pins the full transitive tree, and the Containerfile installs
 with both, so an image rebuild reproduces the same dependency set.
 
 The `ifeval` task from `inspect-evals` is not available in this image: it needs
 `instruction_following_eval`, which is not on PyPI and is no longer installed.
+
+### Packaged cyber, SWE-bench, and self-proliferation tasks
+
+The image installs the `cybench`, `cybergym`, `theagentcompany`, `swe_bench`,
+and `gdm_self_proliferation` extras of the pinned Inspect Evals release. These
+include `inspect_cyber`, `swebench`, and the supporting document/data packages
+needed by TheAgentCompany. SWE-bench is pinned to 4.1.0 because 5.x removes
+scorer APIs used by Inspect Evals 0.26.0.
+
+The Inspect Evals 0.26.0 wheel omits GDM self-proliferation's
+`sp08/secrets.zip`, and its downloader uses tag `0.26.0` instead of `v0.26.0`.
+The image build fetches the archive from the release's immutable commit,
+verifies its SHA-256, and runs upstream data preparation. Task loading then
+uses the bundled data without downloading that archive or modifying installed
+task files. Update the source commit and checksum in
+`scripts/prepare_task_data.py` whenever the Inspect Evals pin changes.
+
+For an offline image build, pre-download the pinned archive to
+`task-data-airgap/sp08-secrets.zip` in the build context. The build uses this
+file with the same checksum verification instead of fetching it. The staging
+directory ignores downloaded assets in Git. Stage the NLTK data and use
+`NLTK_AIRGAP=true` as described in the Containerfile as well.
+
+These Python dependencies do not supply a Docker executable, daemon, or
+Kubernetes sandbox. Cyber and SWE-bench evaluations still need their configured
+sandbox, datasets, and services. GDM tasks retain their upstream approval and
+task-specific resource requirements. The image checks validate imports and
+prepared samples; they do not execute model actions.
+
+The `task-runtime` CI job builds the provider image and runs
+`scripts/check_task_runtime.py` with no network, a read-only root filesystem,
+and an arbitrary non-root UID. This exercises the real installed packages;
+the lightweight adapter tests mock framework imports.
 
 ### Updating dependencies
 
@@ -372,8 +404,7 @@ pip-audit -r /tmp/inspect-pins.txt --no-deps --disable-pip
 
 The repository's Trivy filesystem scan only sees versions that are pinned, which
 is why the pins matter: with open-ended `>=` ranges it cannot see what actually
-lands in the image. `evals` is not on PyPI and cannot be audited by name; its
-Git URL is pinned to a specific upstream commit in `requirements.txt`.
+lands in the image.
 
 This image pins `nltk` 3.10.4 to pick up the fix for GHSA-8mgp-746c-j5xp
 (CVE-2026-81726), reported against 3.10.3. It affects nltk's parser and perceptron

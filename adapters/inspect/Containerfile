@@ -10,6 +10,17 @@ WORKDIR /app
 COPY requirements.txt constraints.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt
 
+# The wheel omits a GDM archive and downloads it from an invalid release tag.
+# Verify the release-matched archive and finish extraction/metadata setup now,
+# so task loading needs neither GitHub access nor writes to installed packages.
+COPY scripts/prepare_task_data.py /tmp/prepare-inspect-task-data.py
+COPY task-data-airgap/ /tmp/inspect-task-data/
+RUN if [ -f /tmp/inspect-task-data/sp08-secrets.zip ]; then \
+        python /tmp/prepare-inspect-task-data.py --archive /tmp/inspect-task-data/sp08-secrets.zip; \
+    else \
+        python /tmp/prepare-inspect-task-data.py; \
+    fi
+
 # ── NLTK data — bundled at build time ────────────────────────────────────────
 #
 # inspect_evals/makemesay/game.py::ensure_nltk_resource() needs three NLTK
