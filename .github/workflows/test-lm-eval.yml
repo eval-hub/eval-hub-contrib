@@ -84,6 +84,10 @@ jobs:
         working-directory: adapters/lm-eval
         run: python scripts/generate_benchmarks.py --check
 
+      - name: Apply pinned Harness task fixes
+        working-directory: adapters/lm-eval
+        run: python scripts/apply_harness_fixes.py
+
       - name: Run registry, manifest and chat-template tests
         working-directory: adapters/lm-eval
         run: pytest tests/ -v -m lmeval

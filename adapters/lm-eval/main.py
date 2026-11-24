@@ -70,6 +70,7 @@ from _results import (
     find_results_file,
     headline_metric_name,
     parse_results_file,
+    partial_tinytruthfulqa_info,
 )
 from _tasks import (
     build_endpoint_url,
@@ -307,6 +308,7 @@ class LMEvalAdapter(FrameworkAdapter):
                 )
             )
             raw = self._parse_results(output_dir)
+            partial_info = partial_tinytruthfulqa_info(raw)
             # A single task's results are the benchmark's own score and are also
             # reported under bare metric names (what primary_score.metric
             # declares); a multi-task suite has no single primary task, and a
@@ -315,13 +317,25 @@ class LMEvalAdapter(FrameworkAdapter):
             evaluation_results = extract_evaluation_results(
                 raw, primary_task=primary_task
             )
+            if partial_info:
+                # Never turn an incomplete estimate into a zero or an official
+                # score. Preserve other tasks' metrics in a custom multi-task run.
+                evaluation_results = [
+                    result
+                    for result in evaluation_results
+                    if (result.metadata or {}).get("task") != "tinyTruthfulQA"
+                ]
             overall_score = compute_overall_score(evaluation_results)
             num_samples = self._total_samples(evaluation_results)
+            if partial_info:
+                num_samples = (num_samples or 0) + partial_info[
+                    "num_examples_evaluated"
+                ]
             lmeval_version = get_lmeval_version()
 
             logger.info(
-                "Post-processing complete | score=%.4f | metrics=%d | samples=%s",
-                overall_score or 0.0,
+                "Post-processing complete | score=%s | metrics=%d | samples=%s",
+                f"{overall_score:.4f}" if overall_score is not None else "unscored",
                 len(evaluation_results),
                 num_samples,
             )
@@ -385,7 +399,9 @@ class LMEvalAdapter(FrameworkAdapter):
                 modalities_output=["text"],
                 languages_count=int(params.get("languages_count", 1)),
                 languages=params.get("languages", ["en"]),
-                capability_evaluations=[cap_entry],
+                capability_evaluations=(
+                    [] if partial_info and not evaluation_results else [cap_entry]
+                ),
                 developer_footnotes=(
                     f"lm-evaluation-harness {lmeval_version} | "
                     f"api_style={api_style} | tasks={tasks} | "
@@ -403,6 +419,7 @@ class LMEvalAdapter(FrameworkAdapter):
                 num_examples_evaluated=num_samples or 0,
                 duration_seconds=time.time() - start_time,
                 completed_at=datetime.now(UTC),
+                additional_info=partial_info,
                 evaluation_metadata={
                     "framework": "lm-evaluation-harness",
                     "framework_version": lmeval_version,
@@ -425,9 +442,7 @@ class LMEvalAdapter(FrameworkAdapter):
             # Do NOT call report_status(COMPLETED) here — report_results() sends
             # results + COMPLETED atomically. Calling COMPLETED early causes a 409
             # that drops all metrics (same sidecar behaviour as inspect adapter).
-            experiment_name = (
-                getattr(config, "experiment_name", None) or ""
-            ).strip()
+            experiment_name = (getattr(config, "experiment_name", None) or "").strip()
             if experiment_name:
                 artifacts = [
                     MlflowFileArtifact(

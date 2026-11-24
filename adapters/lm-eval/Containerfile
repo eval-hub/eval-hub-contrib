@@ -8,6 +8,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Apply the reviewed task fixes to the exact pinned Harness used by its CLI.
+COPY scripts/apply_harness_fixes.py /tmp/apply_harness_fixes.py
+RUN python /tmp/apply_harness_fixes.py && rm /tmp/apply_harness_fixes.py
+
 # Copy adapter implementation
 COPY main.py _tasks.py _benchmarks.py _execution.py _results.py ./
 
