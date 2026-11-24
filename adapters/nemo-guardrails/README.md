@@ -59,6 +59,7 @@ Metrics produced: `masking_accuracy` (mean score across all individual value che
 | `server_host` | `localhost` | Host for the NeMo Guardrails server |
 | `startup_timeout` | `120` | Seconds to wait for server startup |
 | `workers` | `1` | Concurrent evaluation workers |
+| `save_sample_results` | `false` | Strict boolean: opt in to classification sample IDs and correctness scores; configured export failures fail the evaluation |
 | `verbose` | `false` | Print each prompt, ground-truth label, NeMo decision, response content, and per-value masking scores |
 | `sample_seed` | `67` | Seed for shuffling/subsampling datasets when a benchmark's `eval_limit` is set; a dataset entry can override it with its own `seed` field |
 | `chunk_strategy` | `chunk` | How to handle prompts longer than `chunk_size`. `chunk` splits into overlapping windows and scans the whole payload (blocked if any window trips); `limit` truncates to the first window and evaluates only that; `none` sends each prompt whole with no length bounding |
@@ -128,7 +129,7 @@ evalhub eval run \
 
 To see the NeMo Guardrails server logs, run:
 ```shell
-tail -f $NEMO_CONFIG/../server.log
+find "${TMPDIR:-/tmp}" -path "*/server.log" -name server.log -print
 ```
 
 ### 5. Check results
@@ -149,3 +150,26 @@ make test-nemo-guardrails
 # or
 pytest tests/ -v
 ```
+
+
+## Per-sample CI artifacts
+
+Set `parameters.save_sample_results: true` to persist classification observations;
+the default is `false`. The adapter writes `sample_results.jsonl` and a manifest
+with primary metric `accuracy`, and exports identical bytes to configured OCI
+and MLflow destinations. Each record contains only a unique run-local `sample_id`
+and numeric `prediction` (1 for a correct decision, 0 otherwise).
+The sample mean matches aggregate classification accuracy. Opted-in persistence
+requires error-free classification results; masking uses a different observation
+unit and is currently rejected when this export is requested.
+
+With no export configured, local mode retains files under its job results directory.
+In Kubernetes, files are temporary pod-local artifacts and are lost when the pod is
+removed; configure OCI or MLflow to retain them. With zero results, the adapter
+writes an empty JSONL file and its manifest; this is not usable input for CI
+computation, which requires observations. Upload failures propagate and
+prevent completion; the entry point reports the underlying error. The entry
+point reuses an already created MLflow run rather than writing a second run.
+NeMo's server log lives in its writable temporary server root, allowing configs
+staged under read-only `/test_data` mounts. That root is removed when the server
+stops, so inspect its log while the evaluation is running.
