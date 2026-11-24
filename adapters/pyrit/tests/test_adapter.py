@@ -31,8 +31,10 @@ from main import (
     _build_scan_argv,
     _compute_metrics,
     _dotenv_payload,
+    _format_pyrit_scan_failure,
     _normalize_openai_base_url,
     _parse_scenario_result_id,
+    _redact_secrets,
     _resolve_api_key,
     _resolve_scan_timeout,
     _strip_secret_params,
@@ -527,6 +529,52 @@ def test_run_benchmark_job_fails_when_results_fetch_fails(
         pyrit_adapter.run_benchmark_job(config, mock_callbacks)
 
 
+def test_redact_secrets_masks_keys_and_patterns():
+    """Redaction covers explicit secrets and common token shapes."""
+    text = (
+        "Bearer sk-live-ABCDEFG123456 "
+        "api_key=sk-secret-value "
+        "OPENAI_CHAT_KEY=sk-env-secret"
+    )
+    out = _redact_secrets(text, ["sk-env-secret"])
+    assert "sk-env-secret" not in out
+    assert "sk-live-ABCDEFG123456" not in out
+    assert "sk-secret-value" not in out
+    assert "***REDACTED***" in out
+
+
+def test_format_pyrit_scan_failure_includes_backend_log(tmp_path, monkeypatch):
+    """Failure message appends redacted backend log tail (William live #1)."""
+    log_path = tmp_path / "pyrit_backend.log"
+    log_path.write_text(
+        "ok\n"
+        "openai.AuthenticationError: Error code: 401 - invalid api key "
+        "sk-should-not-leak\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "main.BACKEND_LOG_CANDIDATES",
+        (log_path,),
+    )
+    completed = _FakeCompletedProcess(
+        1,
+        stdout="Error sending prompt with conversation ID xxx\n" * 50,
+        stderr="progress bar noise",
+    )
+    msg = _format_pyrit_scan_failure(
+        completed,
+        env={"OPENAI_CHAT_KEY": "sk-should-not-leak"},
+        work_dir=tmp_path,
+    )
+    assert "pyrit_scan failed (exit 1)" in msg
+    assert "pyrit_backend.log" in msg
+    assert "AuthenticationError" in msg
+    assert "sk-should-not-leak" not in msg
+    assert "***REDACTED***" in msg
+    # CLI stdout is truncated — not the full repeated blob.
+    assert msg.count("Error sending prompt") < 50
+
+
 @pytest.mark.integration
 def test_run_benchmark_job_exit_codes(pyrit_adapter, mock_callbacks, monkeypatch):
     """Non-zero pyrit_scan exit raises RuntimeError and reports FAILED."""
@@ -552,6 +600,7 @@ def test_run_benchmark_job_exit_codes(pyrit_adapter, mock_callbacks, monkeypatch
         if c.args[0].status == JobStatus.FAILED
     ]
     assert len(failed) == 1
+    assert "boom" in failed[0].args[0].error_message.message
 
 
 @pytest.mark.integration

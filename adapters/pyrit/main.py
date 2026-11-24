@@ -91,6 +91,16 @@ SECRET_PARAM_NAMES: frozenset[str] = frozenset(
 _RESULT_ID_RE = re.compile(
     r"Result ID:\s*([0-9a-fA-F-]{36}|\S+)", re.MULTILINE
 )
+_BEARER_RE = re.compile(r"(?i)(Bearer\s+)([A-Za-z0-9._\-+=/]+)")
+_SK_TOKEN_RE = re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}\b")
+_API_KEY_ASSIGN_RE = re.compile(
+    r'(?i)(api[_-]?key|authorization)(["\']?\s*[:=]\s*["\']?)([^"\'\s,;]+)'
+)
+CLI_OUTPUT_MAX_CHARS = 2_000
+BACKEND_LOG_TAIL_LINES = 20
+BACKEND_LOG_CANDIDATES = (
+    Path("/tmp/pyrit_backend.log"),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +386,100 @@ def _run_pyrit_scan(
     )
 
 
+def _truncate_cli_output(text: str | None, *, limit: int = CLI_OUTPUT_MAX_CHARS) -> str:
+    """Keep the most useful part of CLI output for error messages."""
+    raw = (text or "").strip()
+    if len(raw) <= limit:
+        return raw
+    return f"...[truncated {len(raw) - limit} chars]...\n{raw[-limit:]}"
+
+
+def _redact_secrets(text: str, secrets: list[str] | None = None) -> str:
+    """Best-effort redaction of API keys from user-controlled upstream output."""
+    redacted = text or ""
+    for secret in secrets or []:
+        value = (secret or "").strip()
+        if len(value) >= 4:
+            redacted = redacted.replace(value, "***REDACTED***")
+    redacted = _BEARER_RE.sub(r"\1***REDACTED***", redacted)
+    redacted = _SK_TOKEN_RE.sub("***REDACTED***", redacted)
+    redacted = _API_KEY_ASSIGN_RE.sub(r"\1\2***REDACTED***", redacted)
+    return redacted
+
+
+def _secrets_from_env(env: dict[str, str] | None) -> list[str]:
+    """Collect credential values present in the job-local env for redaction."""
+    if not env:
+        return []
+    keys = (
+        "OPENAI_CHAT_KEY",
+        "ADVERSARIAL_CHAT_KEY",
+        "OBJECTIVE_SCORER_CHAT_KEY",
+        "OPENAI_API_KEY",
+    )
+    return [env[k] for k in keys if env.get(k)]
+
+
+def _tail_backend_log(
+    *,
+    env: dict[str, str] | None = None,
+    work_dir: Path | None = None,
+    lines: int = BACKEND_LOG_TAIL_LINES,
+) -> str:
+    """Return the last N redacted lines of pyrit_backend.log, if present."""
+    candidates: list[Path] = list(BACKEND_LOG_CANDIDATES)
+    if work_dir is not None:
+        candidates.append(work_dir / "pyrit_backend.log")
+        candidates.append(work_dir / "tmp" / "pyrit_backend.log")
+    home = (env or {}).get("HOME", "").strip()
+    if home:
+        candidates.append(Path(home) / "pyrit_backend.log")
+    secrets = _secrets_from_env(env)
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            logger.warning("Could not read backend log %s: %s", path, exc)
+            continue
+        if not content.strip():
+            continue
+        tail = "\n".join(content.splitlines()[-lines:])
+        return _redact_secrets(tail, secrets)
+    return ""
+
+
+def _format_pyrit_scan_failure(
+    completed: subprocess.CompletedProcess[str],
+    *,
+    env: dict[str, str] | None = None,
+    work_dir: Path | None = None,
+) -> str:
+    """Build a compact, redacted failure message for a non-zero pyrit_scan exit."""
+    secrets = _secrets_from_env(env)
+    stdout = _redact_secrets(
+        _truncate_cli_output(completed.stdout), secrets
+    )
+    stderr = _redact_secrets(
+        _truncate_cli_output(completed.stderr), secrets
+    )
+    parts = [
+        f"pyrit_scan failed (exit {completed.returncode})",
+        f"stdout (truncated): {stdout or '(empty)'}",
+        f"stderr (truncated): {stderr or '(empty)'}",
+    ]
+    backend_tail = _tail_backend_log(env=env, work_dir=work_dir)
+    if backend_tail:
+        parts.append(
+            f"pyrit_backend.log (last {BACKEND_LOG_TAIL_LINES} lines, redacted):\n"
+            f"{backend_tail}"
+        )
+    else:
+        parts.append("pyrit_backend.log: (not found)")
+    return "\n".join(parts)
+
+
 def _stop_pyrit_server(conf_path: Path, env: dict[str, str], work_dir: Path) -> None:
     """Best-effort stop of the detached pyrit_backend started by --start-server."""
     argv = [
@@ -399,13 +503,20 @@ def _stop_pyrit_server(conf_path: Path, env: dict[str, str], work_dir: Path) -> 
             check=False,
         )
         if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
             logger.warning(
-                "pyrit_scan stop-server exited %s: %s",
+                "pyrit_scan stop-server exited %s: %s. "
+                "Leaving the backend to die with the container "
+                "(pod exit cleans up the loopback process).",
                 result.returncode,
-                (result.stderr or result.stdout or "").strip(),
+                detail,
             )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to stop pyrit server: %s", exc)
+        logger.warning(
+            "Failed to stop pyrit server (%s). "
+            "Leaving the backend to die with the container.",
+            exc,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -682,8 +793,9 @@ class PyritAdapter(FrameworkAdapter):
             )
             if completed.returncode != 0:
                 raise RuntimeError(
-                    f"pyrit_scan failed (exit {completed.returncode})\n"
-                    f"stdout: {completed.stdout}\nstderr: {completed.stderr}"
+                    _format_pyrit_scan_failure(
+                        completed, env=env, work_dir=work_dir
+                    )
                 )
 
             callbacks.report_status(

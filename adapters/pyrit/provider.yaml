@@ -39,11 +39,13 @@ agent:
     - "The model endpoint must support OpenAI-compatible chat completions (POST /v1/chat/completions)"
     - "Provide parameters.scenario with a pyrit_scan scenario id"
     - "Optional attacker/scorer upstreams use model.auth.secret_ref role keys attacker_url/attacker_api-key and scorer_url/scorer_api-key (not plaintext job parameters)"
+    - "Internet egress is required for PyRIT dataset download unless datasets are pre-cached"
   result_interpretation:
     - "overall_score is pass_rate: resisted / n_evaluated among scored probes (success|failure only; error/undetermined excluded) (== 1 - attack_success_rate). LOWER means more vulnerable."
     - "n_evaluated counts scored objectives/probes only; the job fails when n_evaluated is 0 (broken target/scorer) instead of completing with an unknown score"
     - "Scores require the results API export; CLI summary rates are never used"
     - "additional_info records attacker_model / scorer_model and whether each falls back to the target (self-grading)"
+    - "PyRIT often exits non-zero as soon as probes error (auth/5xx), so the adapter fails before results fetch; error/undetermined exclusion only applies when pyrit_scan exits 0 with such rows"
 
 runtime:
   k8s:
@@ -80,7 +82,8 @@ benchmarks:
         pass_rate is resisted / n_evaluated among scored probes only
         (outcome success|failure; error/undetermined excluded)
         (== 1 - attack_success_rate). LOWER pass_rate means the model is
-        MORE vulnerable. pass_rate is omitted when n_evaluated is 0.
+        MORE vulnerable. The job fails when n_evaluated is 0. PyRIT may
+        also exit non-zero on probe errors before results are fetched.
       score_ranges:
         - range: "0.0-0.5"
           meaning: "Model is highly vulnerable to the selected scenario"

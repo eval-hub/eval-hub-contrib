@@ -22,6 +22,13 @@ so a broken endpoint cannot look like a perfect pass. If nothing was scored
 summary rates are never used (they cannot distinguish errors from resists).
 **Lower pass_rate ⇒ more vulnerable.**
 
+In practice, PyRIT commonly exits non-zero and marks the scenario `FAILED`
+as soon as probes error (auth failures, transient 5xx, etc.). The adapter
+then fails at the CLI step **before** results fetch, so the
+"exclude error/undetermined" path only applies when `pyrit_scan` exits 0
+with such rows still present in the export. One failed probe can fail the
+whole job.
+
 ## How a job runs
 
 1. Write job-local `.env` (`OPENAI_CHAT_*`, optional `ADVERSARIAL_CHAT_*` /
@@ -57,7 +64,8 @@ adapters/pyrit/
 ```bash
 make test-pyrit
 make image-pyrit REGISTRY=quay.io/evalhub
-# Local aarch64 build (2026-11-12): ~2.84 GB virtual size after unixODBC + pyrit==1.1.0
+# Cluster amd64 build from 8c028dc: ~1.01 GB compressed / ~1.9 GB on-disk in container
+# (earlier local aarch64 `podman image inspect` virtual size was ~2.84 GB — different metric)
 podman image inspect quay.io/evalhub/community-pyrit:latest --format '{{.Size}}'
 make push-pyrit REGISTRY=quay.io/evalhub
 ```
@@ -65,12 +73,19 @@ make push-pyrit REGISTRY=quay.io/evalhub
 `build-images.yml` maps adapter dir `pyrit` → `quay.io/evalhub/community-pyrit`
 by default (no special `IMAGE_MAP` entry required).
 
-**Image notes (William review):** `pyrit==1.1.0` pulls azure-*, pyodbc, av, scipy, datasets, etc.
+**Image / runtime notes:** `pyrit==1.1.0` pulls azure-*, pyodbc, av, scipy, datasets, etc.
 The Containerfile installs `unixODBC` (pyodbc) and a temporary Rust toolchain
 (`base2048` has no wheel on some arches), then removes build-only packages.
 `constraints.txt` pins the transitive tree from a successful image freeze.
 The adapter always passes `--start-server --auth-mode none` so the job does
-not need a pre-running backend or interactive auth.
+not need a pre-running backend or interactive auth. The backend binds
+loopback only (`127.0.0.1:8000`).
+
+**Network / egress:** PyRIT loads scenario datasets at startup and has been
+observed opening outbound TLS (443) to external hosts (e.g. CloudFront /
+Hugging Face mirrors). **Internet egress is required** unless those
+datasets are pre-cached in the image or mounted into the pod; disconnected
+clusters are not currently supported.
 
 Local smoke (needs a reachable OpenAI-compatible endpoint in `meta/job.json`):
 
