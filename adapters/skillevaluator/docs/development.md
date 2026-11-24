@@ -45,16 +45,24 @@ CI also enforces lint (`ruff==0.17.4`) and docstring coverage of at least 80% (`
    and files named `*gitleaks*`), and it runs with network access, so it does not prove the job pod (which has no
    egress) can run offline.
    To check that, build the image and run each benchmark with the network disabled, a read-only root and a skill
-   mounted at `/test_data` (`security-scan` takes `--no-llm`; the exit code is 0 for a pass and 1 for a failed gate,
-   and any other code means the tool itself failed):
+   mounted at `/test_data`. Run it from the repository root and write the report to a host directory, because the
+   container is disposable. `security-scan` takes `--no-llm`. Exit code 1 means either a failed gate or an
+   incomplete scan, and any other non-zero code means the tool itself failed, so read `overall_status` from the
+   report rather than relying on the exit code:
 
    ```sh
+   out="$(mktemp -d)" && chmod 0777 "$out"
    docker run --rm --network=none --read-only --tmpfs /tmp -e HOME=/tmp -w /tmp \
-     -v "$PWD/tests/fixtures/skills/good-skill:/test_data/skill:ro" \
+     -v "$PWD/adapters/skillevaluator/tests/fixtures/skills/good-skill:/test_data/skill:ro" \
+     -v "$out:/out" \
      -e SKILLEVALUATOR_SKILLSPECTOR_PATH=/opt/skillspector/bin/skillspector \
      --entrypoint /opt/skillevaluator/bin/skillevaluator IMAGE \
-     security-scan --no-llm /test_data/skill -r json -o /tmp/out
+     security-scan --no-llm /test_data/skill -r json -o /out
+   jq -r .overall_status "$out"/*.json    # must print "passed"
    ```
+
+   Accept only `passed` for this clean fixture. `incomplete` means the scanner could not run offline, which is
+   exactly what this check exists to catch, and `failed` on a clean skill is also a regression.
 3. If the report shape changed, regenerate `tests/fixtures/reports/*.json` from real output (redact `message`,
    `line_content`, `suggestion` and `[CATEGORY-SEVERITY]` lines; normalise paths) and update `_results.py`.
 4. Re-run the container checks in `.github/workflows/test-skillevaluator.yml`.

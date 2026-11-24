@@ -89,10 +89,19 @@ Notes:
 
 - **Pull requests from forks cannot run this gate.** GitHub does not give repository secrets to `pull_request`
   workflows triggered from a fork, so `evalhub` has no `EVALHUB_TOKEN` and the step fails even when the skill is
-  fine. Decide how fork contributions are handled, for example by running the gate only for pull requests from
-  the same repository (`if: github.event.pull_request.head.repo.full_name == github.repository`) and having a
-  maintainer run it for a fork's changes from a trusted branch. Do not switch to `pull_request_target` just to
-  get the secret unless you have thought through what that workflow checks out and runs.
+  fine. Decide how fork contributions are handled, and keep these points in mind:
+  - **Never run code from the fork in the step that holds the token.** A fork PR can change the skill and also
+    `ci/gate-results.sh`, the workflow or the Makefile. The token is in the environment of the gate step, so a
+    changed script can disclose it. Run the gate with the script and workflow from your trusted branch. If a
+    maintainer re-runs a fork's change from a trusted branch, copy only the skill directory, or review every
+    executable change in the PR first.
+  - **A skipped job passes a required check.** If you skip the gate for forks with
+    `if: github.event.pull_request.head.repo.full_name == github.repository` and make that job a required
+    status check, GitHub counts the skipped job as successful and a fork PR can merge before any gate has run.
+    Keep fork PRs blocked until a trusted gate run passes, for example with a separate required check that fails
+    (or stays pending) for fork PRs and is only satisfied by the maintainer's run.
+  - Do not switch to `pull_request_target` just to get the secret unless you have thought through what that
+    workflow checks out and runs.
 - The flags apply the same source and parameters to every `-b` benchmark. `min_score` is only used by
   `skill-quality`, and `on_incomplete` by the two scans. For different settings per benchmark, use a job file
   ([`examples/skill-eval.yaml`](../examples/skill-eval.yaml)) instead of flags.
