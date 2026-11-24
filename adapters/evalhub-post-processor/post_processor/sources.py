@@ -57,11 +57,39 @@ class Sources:
         # Kubernetes Secret projection uses symlinks; only the trusted mount root is read here.
         return {p.name: p.read_text().strip() for p in directory.iterdir() if p.is_file()}
 
-    def download(self, ref: dict, destination: Path) -> Path:
-        """Materialize one validated reference into an isolated directory."""
+    def download(self, ref: dict, destination: Path, *, staged_name: str | None = None) -> Path:
+        """Return a runtime-staged input or materialize a source through its permitted downloader."""
         kind = source_type(ref)
         if kind == "eval_job":
             raise ValueError("eval_job must first be resolved into individual benchmark artifacts")
+        if kind in {"s3", "git", "hf", "pvc"}:
+            # Role names identify final paths; Kubernetes has already applied PVC subpaths.
+            staged = os.getenv("EVALHUB_POST_PROCESSOR_DATA_PATHS")
+            if staged is not None:
+                try:
+                    paths = json.loads(staged)
+                except (ValueError, TypeError) as exc:
+                    raise ValueError(
+                        "Invalid EVALHUB_POST_PROCESSOR_DATA_PATHS runtime mapping"
+                    ) from exc
+                if not isinstance(paths, dict) or not staged_name or staged_name not in paths:
+                    raise ValueError(f"Runtime did not stage {staged_name or 'unnamed source'}")
+                raw_path = paths[staged_name]
+                if not isinstance(raw_path, str) or not raw_path:
+                    raise ValueError(f"Invalid staged path for {staged_name}")
+                path = Path(raw_path)
+                # Treat invalid runtime mappings as errors rather than falling back to a network download.
+                if not path.is_absolute() or path.is_symlink() or not path.exists():
+                    raise ValueError(f"Staged data for {staged_name} is missing or invalid")
+                return path
+            if os.getenv("EVALHUB_MODE") == "k8s":
+                raise ValueError(
+                    "Kubernetes post-processing requires runtime-staged S3/Git/HF data "
+                    "and direct PVC mounts; upgrade eval-hub to provide "
+                    "EVALHUB_POST_PROCESSOR_DATA_PATHS"
+                )
+        # Local execution retains source materialization. In Kubernetes only
+        # MLflow/OCI reach the on-demand downloaders below, through the sidecar.
         destination.mkdir(parents=True, exist_ok=True)
         if kind == "oci":
             from .oci import download_oci

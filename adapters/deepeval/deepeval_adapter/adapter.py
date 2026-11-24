@@ -181,7 +181,7 @@ class DeepEvalAdapter(FrameworkAdapter):
         if settings.spec.is_direct:
             return run_json_correctness(records, params)
 
-        judge = resolve_judge_model(settings.judge_name, settings.judge_url)
+        judge = resolve_judge_model(settings.judge_name, settings.model_url)
         metric = create_metric(settings.spec.id, judge, settings.threshold, params)
         raw_results = evaluate(
             test_cases=test_cases,

@@ -48,8 +48,8 @@ agent:
     - inspect
   hints:
     - "The evaluated model endpoint must support OpenAI-compatible chat completions (POST /v1/chat/completions)"
-    - "Set parameters.eval_model_name and parameters.eval_model_url to use a dedicated judge model"
-    - "If eval_model_url is omitted, the same endpoint as the evaluated model is used as judge"
+    - "Set parameters.eval_model_name to use a dedicated judge model; its endpoint and key come from judge_url and judge_api-key in the model auth Secret"
+    - "If the Secret has no judge_* entries, the evaluated model's endpoint and key are used for the judge"
     - "For geval and conversational-geval benchmarks, parameters.criteria (required) defines the evaluation rule"
     - "For dag benchmark, parameters.dag_criteria_json (required) is a JSON-encoded DAGMetric criteria graph"
     - "For json-correctness, no judge model is needed — set parameters.json_schema (optional) for schema validation"
@@ -618,13 +618,6 @@ parameters:
     description: >
       Judge model name for LLM-as-judge evaluation.
       Defaults to the evaluated model's name when not set.
-
-  - name: eval_model_url
-    type: string
-    default: null
-    description: >
-      Base URL of the OpenAI-compatible judge endpoint (e.g. "http://judge-svc:8000/v1").
-      Defaults to the evaluated model's URL when not set.
 
   # ── Benchmark-specific ─────────────────────────────────────────────────────
   - name: criteria

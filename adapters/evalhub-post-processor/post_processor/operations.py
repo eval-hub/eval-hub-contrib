@@ -233,8 +233,13 @@ def confidence_interval(context: Context, raw: dict) -> dict:
     job = source_job(context, reference["eval_job"]["id"]) if "eval_job" in reference else None
     calibration = []
     for index, ref in enumerate(config["calibration_data_ref"]):
+        # Match the role names used by the service and init when staging each dataset.
         source_ref = {key: value for key, value in ref.items() if key != "data_config"}
-        directory = context.sources.download(source_ref, context.directory / f"calibration-{index}")
+        directory = context.sources.download(
+            source_ref,
+            context.directory / f"calibration-{index}",
+            staged_name=f"calibration-{index}",
+        )
         calibration.append(
             read_table(
                 directory,
@@ -245,7 +250,10 @@ def confidence_interval(context: Context, raw: dict) -> dict:
         )
     alpha = config["significance_level"]
     if job is None:
-        directory = context.sources.download(reference, context.directory / "results")
+        # External inputs use the results role; eval_job artifacts still resolve through the sidecar.
+        directory = context.sources.download(
+            reference, context.directory / "results", staged_name="results"
+        )
         data = read_table(directory, result_config(config, {}), dataset="results_data_ref")
         metric = text_value(data.primary_score, "external result manifest primary_score.metric")
         context.phase(JobPhase.RUNNING_EVALUATION)
@@ -291,7 +299,13 @@ def confidence_interval(context: Context, raw: dict) -> dict:
                 f"benchmark {benchmark['id']!r}, provider {benchmark['provider_id']!r}, "
                 f"benchmark_index {benchmark['benchmark_index']})"
             )
-            data = read_table(downloaded, result_config(config, target), dataset=dataset)
+            # The source job supplies authoritative framework identity for native reports.
+            data = read_table(
+                downloaded,
+                result_config(config, target),
+                dataset=dataset,
+                provider_id=target["provider_id"],
+            )
             bounds = interval(data, calibration, target, shared=len(benchmarks) > 1, alpha=alpha)
             return {
                 "id": benchmark["id"],

@@ -10,6 +10,7 @@ PYTHON_VERSION ?= 3.12
 # Image names
 IMAGE_ATIF = $(REGISTRY)/community-atif:$(VERSION)
 IMAGE_DATABENCH = $(REGISTRY)/community-databench:$(VERSION)
+IMAGE_LMEVAL = $(REGISTRY)/community-lm-eval:$(VERSION)
 IMAGE_FOLLOWBENCH = $(REGISTRY)/community-followbench:$(VERSION)
 IMAGE_LIGHTEVAL = $(REGISTRY)/community-lighteval:$(VERSION)
 IMAGE_GUIDELLM = $(REGISTRY)/community-guidellm:$(VERSION)
@@ -29,6 +30,7 @@ TOOLBENCH_SERVER_VERSION ?= 0.3.0
 IMAGE_TOOLBENCH_SERVER = $(TOOLBENCH_SERVER_REGISTRY)/community-toolbench-server:$(TOOLBENCH_SERVER_VERSION)
 IMAGE_PROMPTFOO = $(REGISTRY)/community-promptfoo:$(VERSION)
 IMAGE_WILDGUARD = $(REGISTRY)/community-wildguard:$(VERSION)
+IMAGE_SKILLEVALUATOR = $(REGISTRY)/community-skillevaluator:$(VERSION)
 
 # Default target
 .PHONY: help
@@ -49,6 +51,7 @@ help:
 	@echo "  make image-toolbench-server - Build ToolBench tool server ($(TOOLBENCH_SERVER_VERSION); FETCH_FULL_CACHE=1 -> $(TOOLBENCH_SERVER_VERSION)-full)"
 	@echo "  make image-swebench     - Build SWE-bench adapter image"
 	@echo "  make image-ruler        - Build RULER adapter image"
+	@echo "  make image-skillevaluator - Build SkillEvaluator adapter image"
 	@echo "  make image-evalhub-post-processor - Build post-processing runtime"
 	@echo "  make images             - Build all adapter images"
 	@echo ""
@@ -63,6 +66,7 @@ help:
 	@echo "  make push-toolbench-server - Push ToolBench tool server image"
 	@echo "  make push-swebench      - Push SWE-bench adapter image"
 	@echo "  make push-ruler         - Push RULER adapter image"
+	@echo "  make push-skillevaluator - Push SkillEvaluator adapter image"
 	@echo "  make push-evalhub-post-processor - Push post-processing runtime"
 	@echo "  make push-images        - Push all adapter images"
 	@echo ""
@@ -77,6 +81,7 @@ help:
 	@echo "  make clean-toolbench-server - Remove ToolBench tool server image"
 	@echo "  make clean-swebench     - Remove SWE-bench adapter image"
 	@echo "  make clean-ruler        - Remove RULER adapter image"
+	@echo "  make clean-skillevaluator - Remove SkillEvaluator adapter image"
 	@echo "  make clean-images       - Remove all adapter images"
 	@echo ""
 	@echo "Test:"
@@ -90,6 +95,8 @@ help:
 	@echo "  make test-ragas        - Run RAGAS adapter tests"
 	@echo "  make test-tooleval     - Run ToolEval adapter tests"
 	@echo "  make test-ruler        - Run RULER adapter tests"
+	@echo "  make test-skillevaluator - Run SkillEvaluator adapter tests (offline)"
+	@echo "  make test-skillevaluator-live - Run SkillEvaluator contract tests against the real pinned CLIs"
 	@echo "  make test-evalhub-post-processor - Run post-processing tests"
 	@echo "  make tests             - Run all adapter tests"
 	@echo ""
@@ -496,11 +503,17 @@ images: image-evalhub-post-processor
 push-images: push-evalhub-post-processor
 clean-images: clean-evalhub-post-processor
 tests: test-evalhub-post-processor
+# Optional override for product builds, e.g.
+#   make image-promptfoo BASE_IMAGE=registry.redhat.io/rhel9/rhel-minimal:latest
+BASE_IMAGE ?=
+
 .PHONY: image-promptfoo
 image-promptfoo:
 	@echo "Building promptfoo adapter image..."
 	cd adapters/promptfoo && \
-	$(BUILD_TOOL) build -t $(IMAGE_PROMPTFOO) -f Containerfile .
+	$(BUILD_TOOL) build \
+		$(if $(BASE_IMAGE),--build-arg BASE_IMAGE=$(BASE_IMAGE),) \
+		-t $(IMAGE_PROMPTFOO) -f Containerfile .
 	@echo "✅ Built: $(IMAGE_PROMPTFOO)"
 
 .PHONY: push-promptfoo
@@ -566,6 +579,64 @@ images: image-wildguard
 push-images: push-wildguard
 clean-images: clean-wildguard
 tests: test-wildguard
+
+.PHONY: image-skillevaluator
+image-skillevaluator:
+	@echo "Building SkillEvaluator adapter image..."
+	cd adapters/skillevaluator && \
+	$(BUILD_TOOL) build -t $(IMAGE_SKILLEVALUATOR) -f Containerfile .
+	@echo "✅ Built: $(IMAGE_SKILLEVALUATOR)"
+
+.PHONY: push-skillevaluator
+push-skillevaluator:
+	@echo "Pushing SkillEvaluator adapter image..."
+	$(BUILD_TOOL) push $(IMAGE_SKILLEVALUATOR)
+	@echo "✅ Pushed: $(IMAGE_SKILLEVALUATOR)"
+
+.PHONY: clean-skillevaluator
+clean-skillevaluator:
+	@echo "Removing SkillEvaluator adapter image..."
+	$(BUILD_TOOL) rmi $(IMAGE_SKILLEVALUATOR) 2>/dev/null || true
+	@echo "✅ Removed: $(IMAGE_SKILLEVALUATOR)"
+
+.PHONY: build-and-push-skillevaluator
+build-and-push-skillevaluator: image-skillevaluator
+	$(MAKE) push-skillevaluator
+	@echo "✅ SkillEvaluator adapter built and pushed"
+
+# Offline by design (matches CI): the skillevaluator CLI is replaced by a stub that emits golden
+# reports. Tests that need the real CLIs carry the live_cli marker; see test-skillevaluator-live.
+.PHONY: test-skillevaluator
+test-skillevaluator:
+	@echo "Running SkillEvaluator adapter tests..."
+	cd adapters/skillevaluator && \
+	{ test -d .venv || uv venv --python $(PYTHON_VERSION) .venv; } && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	PATH="$$(pwd)/.venv/bin:$$PATH" .venv/bin/pytest tests/ -v -m "not live_cli"
+	@echo "✅ SkillEvaluator tests passed"
+
+# Contract test against the real pinned CLIs (SkillSpector is not on PyPI and SkillEvaluator is not
+# published for every release, so each is installed from its pinned commit into its own venv).
+# Needs git and network access.
+.PHONY: test-skillevaluator-live
+test-skillevaluator-live:
+	@echo "Running SkillEvaluator live-CLI contract tests..."
+	cd adapters/skillevaluator && \
+	{ test -d .venv || uv venv --python $(PYTHON_VERSION) .venv; } && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	{ test -d .venv-skillevaluator || uv venv --python $(PYTHON_VERSION) .venv-skillevaluator; } && \
+	uv pip install --quiet --python .venv-skillevaluator/bin/python -r requirements-skillevaluator.txt && \
+	{ test -d .venv-skillspector || uv venv --python $(PYTHON_VERSION) .venv-skillspector; } && \
+	uv pip install --quiet --python .venv-skillspector/bin/python -r requirements-skillspector.txt && \
+	SKILLEVALUATOR_BIN="$$(pwd)/.venv-skillevaluator/bin/skillevaluator" \
+	SKILLEVALUATOR_SKILLSPECTOR_PATH="$$(pwd)/.venv-skillspector/bin/skillspector" \
+	.venv/bin/pytest tests/ -v -m live_cli
+	@echo "✅ SkillEvaluator live-CLI tests passed"
+
+images: image-skillevaluator
+push-images: push-skillevaluator
+clean-images: clean-skillevaluator
+tests: test-skillevaluator
 
 .PHONY: image-tooleval
 image-tooleval:
@@ -639,3 +710,31 @@ images: image-databench
 push-images: push-databench
 clean-images: clean-databench
 tests: test-databench
+
+# LM Evaluation Harness adapter
+.PHONY: image-lm-eval push-lm-eval clean-lm-eval test-lm-eval
+image-lm-eval:
+	$(BUILD_TOOL) build -t $(IMAGE_LMEVAL) -f adapters/lm-eval/Containerfile adapters/lm-eval
+push-lm-eval:
+	$(BUILD_TOOL) push $(IMAGE_LMEVAL)
+clean-lm-eval:
+	$(BUILD_TOOL) rmi $(IMAGE_LMEVAL) 2>/dev/null || true
+test-lm-eval:
+	cd adapters/lm-eval && \
+	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \
+	uv pip install --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/python -m ruff check --config 'src = ["."]' . && \
+	.venv/bin/python -m pytest tests/ -m "not local" -v
+images: image-lm-eval
+push-images: push-lm-eval
+clean-images: clean-lm-eval
+tests: test-lm-eval
+
+.PHONY: test-followbench
+test-followbench:
+	cd adapters/followbench && \
+	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \
+	uv pip install --quiet --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/python -m pytest tests/ -v
+
+tests: test-followbench

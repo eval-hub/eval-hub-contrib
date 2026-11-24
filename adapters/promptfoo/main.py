@@ -76,7 +76,7 @@ from evalhub.adapter import (
     OCIArtifactSpec,
     configure_telemetry,
 )
-from evalhub.adapter.auth import resolve_model_credentials
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 from evalhub.adapter.mlflow import MlflowArtifact
 from evalhub.adapter.models.cards import (
     CapabilityEvalEntry,
@@ -201,6 +201,7 @@ def _build_eval_config(
         # our injected `providers:` and could point part of the run at the
         # user's original, non-EvalHub-controlled endpoint/credentials.
         parsed.pop("targets", None)
+        parsed = _without_connection_options(parsed)
         parsed["providers"] = [provider]
         # EvalHub's timeout/concurrency controls win, but preserve any other
         # evaluateOptions keys (e.g. repeat, delay) the passed-through config set.
@@ -214,6 +215,7 @@ def _build_eval_config(
             "promptfoo-eval requires either parameters.config_yaml, or both "
             "parameters.prompts and parameters.tests"
         )
+    tests = _without_connection_options(tests)
 
     return {
         "description": f"eval-hub job {config.id}",
@@ -224,6 +226,37 @@ def _build_eval_config(
     }
 
 
+def _without_connection_options(value: Any) -> Any:
+    """Copy passthrough settings without model credentials or endpoint overrides."""
+    # Promptfoo consumes passthrough YAML, grader options and strategy settings.
+    # Ignoring top-level fields alone would still let nested credentials/URLs
+    # override the Secret-derived connection. Copy settings recursively without
+    # those overrides, retaining generation settings and test data so legacy jobs
+    # continue. Secret resolution happens separately.
+    if isinstance(value, dict):
+        result = {}
+        for key, child in value.items():
+            # Test variables and prompt content are data, not model options.
+            if key in {"vars", "metadata", "prompts", "messages"}:
+                result[key] = child
+                continue
+            if key in {
+                "apiKey", "apiBaseUrl", "apiHost", "baseUrl",
+                "api_key", "api-key", "api_base", "base_url", "url",
+            } or (
+                isinstance(key, str) and key.endswith((
+                    "_API_KEY", "_BASE_URL", "_API_BASE", "_API_HOST",
+                    "_api_key", "_api-key", "_url",
+                ))
+            ):
+                continue
+            result[key] = _without_connection_options(child)
+        return result
+    if isinstance(value, list):
+        return [_without_connection_options(child) for child in value]
+    return value
+
+
 def _build_redteam_config(
     config: JobSpec, provider: dict[str, Any], evaluate_options: dict[str, Any]
 ) -> dict[str, Any]:
@@ -232,7 +265,7 @@ def _build_redteam_config(
 
     purpose = params.get("purpose", "An AI assistant")
     plugin_ids = params.get("plugins") or list(_OWASP_DEFAULT_PLUGINS)
-    strategies = params.get("strategies", [])
+    strategies = _without_connection_options(params.get("strategies", []))
     num_tests = int(params.get("num_tests_per_plugin", 5))
 
     plugins = [{"id": pid, "numTests": num_tests} for pid in plugin_ids]
@@ -266,6 +299,11 @@ def _promptfoo_env(
     models that are not configured through the target provider YAML block.
     """
     env = dict(os.environ)
+    # Auxiliary provider settings must be supplied from the model Secret by
+    # the caller. Do not let promptfoo silently choose a runtime credential.
+    for name in list(env):
+        if name.endswith(("_API_KEY", "_BASE_URL", "_API_BASE", "_API_HOST")):
+            env.pop(name)
     # See module docstring: required for non-interactive red-team generation.
     env["PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION"] = "1"
     env.setdefault("PROMPTFOO_DISABLE_TELEMETRY", "1")
@@ -274,6 +312,18 @@ def _promptfoo_env(
     if base_url:
         env["OPENAI_BASE_URL"] = base_url
     return env
+
+
+def _role_connection(config: JobSpec, role: str) -> tuple[str, str]:
+    key = read_model_auth_key(f"{role}_api-key")
+    url = read_model_auth_key(f"{role}_url")
+    if url and not key:
+        raise ValueError(f"{role}_url in model.auth.secret_ref requires {role}_api-key")
+    base_url = (url or config.model.url).strip().rstrip("/")
+    return (
+        base_url if base_url.endswith("/v1") else f"{base_url}/v1",
+        key or read_model_auth_key("api-key") or "not-required",
+    )
 
 
 def _run_promptfoo_cli(
@@ -558,42 +608,14 @@ class PromptfooAdapter(FrameworkAdapter):
                 )
             )
 
-            generation_provider = (
-                (config.parameters or {}).get("generation_provider")
-                if is_redteam
-                else None
-            )
-            explicit_gen_url = (
-                (config.parameters or {}).get("generation_provider_url")
-                if generation_provider
-                else None
-            )
-            if generation_provider and not explicit_gen_url:
-                fallback = config.model.url.strip().rstrip("/")
-                gen_provider_url: str | None = (
-                    fallback if fallback.endswith("/v1") else f"{fallback}/v1"
-                )
-            else:
-                gen_provider_url = explicit_gen_url
-
-            gen_provider_api_key: str | None = None
-            if generation_provider:
-                gen_provider_api_key = (
-                    (config.parameters or {}).get("generation_provider_api_key")
-                    or os.getenv("GENERATION_PROVIDER_API_KEY", "").strip()
-                )
-                if not gen_provider_api_key:
-                    if explicit_gen_url:
-                        gen_provider_api_key = "not-required"
-                        logger.warning(
-                            "No generation_provider_api_key for explicit "
-                            "generation_provider_url %s — the target model's "
-                            "managed credential is not forwarded to avoid "
-                            "leaking secrets to third-party endpoints.",
-                            explicit_gen_url,
-                        )
-                    else:
-                        gen_provider_api_key = api_key
+            parameters = config.parameters or {}
+            generation_provider = parameters.get("generation_provider") or provider["id"]
+            gen_provider_url, gen_provider_api_key = _role_connection(config, "generation_provider")
+            judge_url, judge_api_key = _role_connection(config, "judge")
+            judge_model = parameters.get("judge_model") or generation_provider
+            for model in (generation_provider, judge_model):
+                if not isinstance(model, str) or not model.startswith("openai:"):
+                    raise ValueError("Secret-based promptfoo model roles require an openai: provider ID")
             if is_redteam:
                 # promptfoo redteam test-case generation is always a separate
                 # step from `eval` here (never `redteam run`, which does not
@@ -643,25 +665,13 @@ class PromptfooAdapter(FrameworkAdapter):
                 "-j",
                 str(max_concurrency),
             ]
-            # CRITICAL, verified against a live OpenShift cluster (2026-09-21):
-            # red-team GRADING uses its own separate default model
-            # ("gpt-5.5-2026-04-23"), entirely independent of --provider above
-            # (which only controls attack generation). Left unset, every
-            # graded test silently reports pass=false/graderError=true
-            # against a 404 from whatever OPENAI_BASE_URL happens to resolve
-            # to — that's a broken grading pipeline, not a genuine safety
-            # finding, and it fails silently (exit 0, CLI reports these as
-            # ordinary "failed" tests). Reuse generation_provider as the
-            # grader too: an operator who configured an internal model for
-            # attack generation (the air-gapped/regulated case this parameter
-            # exists for) wants that same model doing the grading, not an
-            # unreachable hosted default.
-            if is_redteam and generation_provider:
-                eval_args += ["--grader", generation_provider]
+            # Grading has its own Secret connection, independent of generation.
+            if is_redteam or parameters.get("judge_model") or read_model_auth_key("judge_api-key"):
+                eval_args += ["--grader", judge_model]
             result = _run_promptfoo_cli(
                 eval_args, cwd=work_dir,
-                api_key=gen_provider_api_key,
-                base_url=gen_provider_url,
+                api_key=judge_api_key,
+                base_url=judge_url,
             )
             if result.returncode not in (0, 100):
                 raise RuntimeError(

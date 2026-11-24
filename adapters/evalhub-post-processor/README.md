@@ -126,8 +126,33 @@ The adapter reads `calibration_data_ref[].data_config` and `results_data_ref.dat
 | `format` | `auto` (default), `json`, `jsonl`, `csv`, or `parquet`; `.ndjson` files are also recognized |
 | `path` | Relative file or directory within the downloaded artifact to read |
 | `columns` | Maps canonical roles to source column names; dotted paths can access nested JSON fields |
-| `selection` | Constant benchmark/metric identity for a file that has no identity columns |
+| `selection` | Benchmark/provider/metric identity: filters external rows when identity columns exist, supplies missing identity, or overrides native identity for an `eval_job` target |
 | `value_mappings` | Explicit string-category-to-number maps for `prediction` or `label`; every present category must be declared |
+
+For external results, the selected rows must identify at most one benchmark and
+provider. All selected calibration rows, across every calibration file/reference,
+must be consistent with those result identities and with each other. Conflicting
+metadata raises a `Results data contains multiple ...` or `Calibration data
+contains multiple ...` error before calibration labels are joined by sample ID.
+Narrow the appropriate reference using `data_config.selection` or `data_config.path`.
+External selectors must use the values stored in the file, rather than service
+benchmark names. For example, for rows containing `benchmark_id: niah-single-noise`,
+use `selection: {"benchmark_id": "niah-single-noise"}` even if the evaluation service
+uses a different benchmark name. Null or empty-string selector values are treated
+as omitted; they do not erase native metadata or disable consistency checks.
+A nonempty selection matching no rows raises a direct error naming the results
+or indexed calibration reference. Identity-conflict errors also identify the
+calibration reference index. When selectors match but the target metric rejects
+the rows, the error names the metric mismatch rather than blaming selection.
+Files without identity metadata remain supported.
+
+For `eval_job` references, the source job supplies the target identity. Explicit
+selection retains its existing override behavior for framework-native row names;
+the resulting identity must still match the source job's benchmark, provider,
+and selected metric. Without an override, conflicting row identities are filtered.
+Zero-match diagnostics distinguish a conflicting eval-job override from native
+identity fields excluded by the target. Shared calibration references that select
+another benchmark are still skipped for the current benchmark.
 
 The standalone Eval Hub API exposes result mappings alongside the result source:
 
@@ -160,6 +185,69 @@ require a sample identifier. Without a `columns.sample_id` mapping, the reader u
 mapping takes precedence and disables that fallback. Identifiers must be nonempty
 strings or integers. Predictions can also be stored at the metric's own key,
 `metrics[metric]`, or `scores[metric]`. A score object `{"value": 0.8}` is accepted.
+
+### Native GuideLLM reports
+
+For `eval_job` references, the source benchmark's `provider_id` plus native report
+markers identify GuideLLM; provider identity alone does not turn an unrelated
+aggregate summary into a request report. External references (S3, PVC, Git,
+Hugging Face, MLflow, or OCI) identify native reports through a nonempty
+`metadata.guidellm_version` together with a `benchmarks` field. Version metadata
+alone is treated as a summary, allowing usable sibling sample files to be read.
+
+The reader selects `benchmarks[0].requests.successful`, including for default
+sweep and multi-rate/concurrency reports. This deliberately matches the GuideLLM
+adapter's `_parse_results`, which reports metrics from `benchmarks[0]`. Later
+strategies are not pooled or substituted if the first has no usable requests.
+No API field or JSONPath configuration is required. The selected section must
+contain a nonempty array of successful request objects. When measurement timestamps
+are present, the reader first selects requests overlapping that window using the
+same inclusive boundaries as GuideLLM. Warmup/cooldown-only requests are excluded;
+requests crossing either boundary remain included. The selected count must equal
+that strategy's positive integer `metrics.request_totals.successful`; missing or
+invalid totals and count mismatches fail with an explicit error. GuideLLM versions
+can persist only a random request sample while aggregate metrics cover the full
+run. Such sampled reports cannot support an interval for the full successful
+request set. Provide a complete per-request export instead. The reader checks the
+actual total rather than `args.sample_requests`, which does not establish how many
+records were persisted. Duplicate selected sample IDs still fail normal validation.
+
+JSON arrays, `samples`/`records` wrappers, single records with a usable sample ID,
+and JSONL inputs bypass GuideLLM extraction. Unidentified aggregate summaries
+alongside usable sample files are skipped regardless of file order. If no usable
+samples remain, the job fails with a source-specific error naming every skipped
+summary. Positively identified
+but malformed native reports still fail rather than silently discard data.
+
+Recognized native reports with missing or incorrect sample-ID mappings fail with
+a file-specific error suggesting `columns.sample_id: request_id`, even when sibling
+files contain usable records. They are never silently skipped as summaries.
+
+Use the existing column mappings to select the desired request-level measurement:
+
+```json
+{
+  "columns": {
+    "sample_id": "request_id",
+    "prediction": "time_to_first_token_ms"
+  }
+}
+```
+
+External inputs still require a primary metric declaration in the result document
+or a companion manifest. Extracted records undergo the usual sample ID, numeric
+score, and calibration validation. A selected measurement must be finite and
+numeric for every request. In particular, `time_to_first_token_ms` can be null
+for non-streaming requests; these values are rejected, not filled or dropped.
+Select a metric/measurement that is available for the evaluation being processed.
+
+GuideLLM `request_id` values are local to a report. Label-only calibration joined
+to results must use IDs from the selected first strategy of that same report;
+IDs from another run cannot be matched automatically. Independent calibration
+observations can instead provide their own paired prediction and label using
+the existing calibration configuration, without joining by evaluation ID.
+Calibration parsing is unchanged. Files are fully downloaded before parsing;
+this is not streaming JSON processing.
 
 For a job with multiple benchmarks, calibration must carry both `benchmark_id`
 and `provider_id` in each row or its file's `selection`. This pair matches
@@ -227,14 +315,13 @@ credentials. HTTP redirects fail instead of bypassing the sidecar.
 | `eval_job` | `id` | Sidecar GET `/api/v1/evaluations/jobs/{id}`; parent and every benchmark must be completed |
 | `mlflow` | `run_id`, `artifact_path` (empty for all) | Sidecar MLflow run metadata, paginated artifact listing, and artifact download APIs |
 | `oci` | `coordinates` (`oci_host`, `oci_repository`, `oci_tag`) or a `digest` alongside host/repository; `artifact_path` | Sidecar `/v2/{repository}/manifests/...` and `/blobs/...`; digest/size verification and safe tar extraction |
-| `s3` | `bucket`, `key`, optional `secret_ref` | Download an object or prefix with projected credentials or the normal AWS credential chain |
-| `pvc` | `claim_name`, optional `sub_path` | Copy from a declared read-only mount |
-| `git` | HTTP(S) `url`, `ref`, optional `sub_path`, `secret_ref` | Fetch the revision and copy data; no repository code execution |
-| `hf` | `repo_id`, optional `revision`, `sub_path`, `secret_ref` | Download a Hugging Face dataset snapshot |
+| `s3` | `bucket`, `key`, optional `secret_ref` | Kubernetes: existing eval-runtime-init stages data; adapter reads the staged path |
+| `pvc` | `claim_name`, optional `sub_path` | Kubernetes: direct read-only mount; Kubernetes applies sub_path |
+| `git` | HTTP(S) `url`, `ref`, optional `sub_path`, `secret_ref` | Kubernetes: existing eval-runtime-init clones/checks out and stages data |
+| `hf` | `repo_id`, optional `revision`, `sub_path`, `secret_ref` | Kubernetes: existing eval-runtime-init downloads and stages the selected revision |
 
 Calibration supports the API's `s3`, `pvc`, `git`, and `hf` references. Each
-reference must contain exactly one source. Data is materialized in temporary
-directories and removed when job execution finishes or fails.
+reference must contain exactly one source. In Kubernetes, S3/Git/HF data is staged before the adapter starts; PVC data is mounted directly. MLflow/OCI downloads stay on demand through the sidecar. Local mode retains its existing download/copy fallback.
 
 For source jobs, `results.benchmarks[]` is authoritative for both collections
 and explicit submissions. MLflow uses `experiment` plus each `mlflow_run_id`;
@@ -261,29 +348,37 @@ runtime must arrange these before launching the post-processing pod:
    per pod, so source coordinates must match. Merely placing OCI coordinates in
    `parameters.operations` does not enable that proxy. A mismatch fails before
    any OCI request. Registry redirects must be resolved/served by the sidecar.
-2. Mount referenced PVCs read-only and set
-   `EVALHUB_POST_PROCESSOR_PVC_MOUNTS` to a JSON object, for example
-   `{"calibration-data":"/mnt/calibration"}`. A claim name is never interpreted
-   as a host filesystem path.
-3. Project named S3/git/Hugging Face Secrets under
-   `${EVALHUB_POST_PROCESSOR_SECRET_ROOT:-/var/run/secrets/post-processor}/<secret_ref>/`.
-   S3 uses `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`,
-   `AWS_S3_ENDPOINT`, and optionally `AWS_SESSION_TOKEN`. Git uses `username`
-   and `password`; Hugging Face uses `token`. OCI's `k8s.connection` is for the
-   runtime/sidecar to resolve; this adapter never reads that registry Secret.
-4. Preserve `operations` and the data-format configurations in the benchmark
-   parameters, including `results_data_ref.data_config` and each calibration
-   reference's `data_config`. The Eval Hub standalone API carries these into
-   the generated execution job.
-5. Restrict egress from post-processing pods with a NetworkPolicy or egress
-   proxy when using Git sources. `git.url` accepts HTTP(S) hosts, including
-   in-cluster hosts; the network policy must allow only approved repository
-   endpoints and the required sidecar traffic.
+2. Reuse the existing `/app/eval-runtime-init` executable and configured eval
+   init image. Its single `init` container consumes `/meta/data-sources.json`
+   through `EVALHUB_DATA_STAGING_PLAN`, stages each S3/Git/HF reference separately,
+   and finishes before the adapter starts. Source credentials are mounted only
+   in init, not in the computation container.
+3. Mount each PVC reference read-only with Kubernetes applying its `sub_path`.
+   References may share a claim while selecting different subpaths.
+4. Set `EVALHUB_POST_PROCESSOR_DATA_PATHS` on the adapter to a JSON mapping:
 
-The Eval Hub runtime mounts calibration PVCs for its internal post-processing
-job using the dedicated PVC mapping above. Other source types need their own
-credential/download setup; accepting a data reference does not provision that
-setup automatically.
+   ```json
+   {
+     "results": "/mnt/evalhub/post-processing/staged/results",
+     "calibration-0": "/mnt/evalhub/post-processing/pvc/calibration-0",
+     "calibration-1": "/mnt/evalhub/post-processing/staged/calibration-1"
+   }
+   ```
+
+   Names are `results` and `calibration-N`, where N is the zero-based index in
+   `calibration_data_ref`. Staged data is read-only in the adapter. PVC paths
+   already select the requested subpath; the adapter neither reapplies it nor
+   copies the mounted data. HF caches and per-source revision metadata stay
+   outside consumed dataset directories.
+5. Preserve operation parameters and `data_config` mappings unchanged. The
+   adapter continues resolving `eval_job` artifacts and downloading MLflow/OCI
+   data on demand through the sidecar. No MLflow/OCI init downloaders are added.
+
+Deploy this adapter together with the eval-hub staging implementation. Missing
+or malformed Kubernetes staged-path mappings fail explicitly instead of silently
+falling back to direct S3/Git/HF downloads. The public API reference shapes are
+unchanged. Local mode retains the legacy PVC/Secret mapping and source downloaders,
+so it continues working without Kubernetes init containers.
 
 ## Events
 

@@ -52,20 +52,19 @@ def test_settings_defaults_and_judge_fallback():
     assert settings.threshold == 0.5
     assert settings.dataset_format == "csv"
     assert settings.judge_name == "target-model"
-    assert settings.judge_url == "https://judge.example/v1"  # stripped
+    assert settings.model_url == "https://judge.example/v1"  # stripped
 
 
 def test_settings_prefer_explicit_judge_and_threshold():
     settings = JobSettings.from_job_spec(
         _job(
             eval_model_name="judge-model",
-            eval_model_url="https://other.example/v1",
             threshold="0.8",
             dataset_format="jsonl",
         )
     )
     assert settings.judge_name == "judge-model"
-    assert settings.judge_url == "https://other.example/v1"
+    assert settings.model_url == "https://judge.example/v1"
     assert settings.threshold == 0.8
     assert settings.dataset_format == "jsonl"
 

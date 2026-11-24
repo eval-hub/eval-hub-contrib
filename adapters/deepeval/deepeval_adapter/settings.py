@@ -45,7 +45,7 @@ class JobSettings:
     spec: BenchmarkSpec
     params: Mapping[str, Any]
     judge_name: str
-    judge_url: str
+    model_url: str
     threshold: float
     dataset_format: str
 
@@ -58,7 +58,7 @@ class JobSettings:
             spec=spec,
             params=params,
             judge_name=params.get("eval_model_name") or config.model.name,
-            judge_url=params.get("eval_model_url") or model_url,
+            model_url=model_url,
             threshold=float(params.get("threshold", DEFAULT_THRESHOLD)),
             dataset_format=params.get("dataset_format", DEFAULT_DATASET_FORMAT),
         )

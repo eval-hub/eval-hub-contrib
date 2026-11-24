@@ -14,7 +14,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy adapter implementation
-COPY main.py .
+COPY main.py mteb_runner.py ./
 
 # Create writable cache directories with proper permissions
 # HuggingFace models and datasets cache to /tmp for non-root access

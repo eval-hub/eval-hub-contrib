@@ -161,6 +161,12 @@ PYEOF
 COPY *.py .
 
 # ── Permissions ───────────────────────────────────────────────────────────────
+# GAIA uses this absolute path for sample setup and attachments.
+# Group 0 keeps it writable under OpenShift's arbitrary runtime UID.
+RUN mkdir -p /shared_files && \
+    chown 1001:0 /shared_files && \
+    chmod 0770 /shared_files
+
 RUN mkdir -p /tmp/.inspect_cache && \
     chmod -R 777 /tmp && \
     chown -R 1001:0 /app && \

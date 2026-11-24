@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import openai
-
 from evalhub.adapter import (
     DefaultCallbacks,
     ErrorInfo,
@@ -41,7 +40,6 @@ from rules import (
     rule_evaluation_format,
 )
 
-
 logger = logging.getLogger(__name__)
 
 _BENCHMARK_ID = "followbench"
@@ -63,30 +61,6 @@ def _resolve_model_api_key(config: JobSpec) -> str:
             logger.debug("Could not resolve model credentials: %s", exc)
 
     return os.getenv("OPENAI_API_KEY", "DUMMY")
-
-
-def _resolve_judge_api_key(
-    config: JobSpec,
-    parameters: dict[str, Any],
-    judge_url: str,
-    model_url: str,
-) -> str:
-    """Resolve the external-judge credential."""
-    configured_key = parameters.get("judge_api_key")
-
-    if configured_key:
-        return str(configured_key)
-
-    judge_key = os.getenv("FOLLOWBENCH_JUDGE_API_KEY") or os.getenv(
-        "OPENAI_API_KEY"
-    )
-    if judge_key:
-        return judge_key
-
-    if judge_url == model_url:
-        return _resolve_model_api_key(config)
-
-    return "DUMMY"
 
 
 def _call_chat_model(
@@ -180,7 +154,7 @@ def _build_judge_prompt(
             "",
             "Evaluation requirements:",
             f"1. Identify the {level} added constraint(s).",
-            f"2. Determine whether the response satisfies each added constraint.",
+            "2. Determine whether the response satisfies each added constraint.",
             (
                 f"3. Return only a Python-style list with {level} values. "
                 "Each value must be YES, NO, PARTIAL, MAYBE, UNKNOWN, or N/A."
@@ -218,28 +192,19 @@ def _build_judge_client(
 ) -> tuple[Any, str]:
     model_url = str(config.model.url or "").strip().rstrip("/")
     if "judge_model" in parameters:
-        if parameters.get("judge_url") or parameters.get("judge_api_key"):
-            raise ValueError(
-                "judge_model cannot be combined with the legacy judge_url or judge_api_key job parameters; "
-                "use judge_url and judge_api-key in model.auth.secret_ref"
-            )
         judge_model = parameters["judge_model"]
         if not isinstance(judge_model, str) or not judge_model.strip():
             raise ValueError("parameters.judge_model must be a non-empty model name")
         judge_model = judge_model.strip()
-        # The projected URL only works with the projected judge credential:
-        # api-key:ref always selects the target upstream in the sidecar.
-        projected_key = read_model_auth_key("judge_api-key")
-        projected_url = read_model_auth_key("judge_url")
-        if projected_url and not projected_key:
-            raise ValueError("judge_url in model.auth.secret_ref requires judge_api-key")
-        judge_url = projected_url or model_url
-        api_key = projected_key or _resolve_model_api_key(config)
     else:
-        # Preserve standalone jobs using legacy explicit connection overrides.
-        judge_url = str(parameters.get("judge_url") or model_url).strip().rstrip("/")
-        judge_model = str(parameters.get("judge_model") or config.model.name).strip()
-        api_key = _resolve_judge_api_key(config, parameters, judge_url, model_url)
+        judge_model = config.model.name
+
+    projected_key = read_model_auth_key("judge_api-key")
+    projected_url = read_model_auth_key("judge_url")
+    if projected_url and not projected_key:
+        raise ValueError("judge_url in model.auth.secret_ref requires judge_api-key")
+    judge_url = projected_url or model_url
+    api_key = projected_key or read_model_auth_key("api-key") or "DUMMY"
 
     judge_url = str(judge_url or "").strip().rstrip("/")
 
@@ -406,6 +371,10 @@ class FollowBenchAdapter(FrameworkAdapter):
                     f"Unsupported benchmark_id: {config.benchmark_id}"
                 )
 
+            from sample_results import persist_sample_results, sample_results_enabled
+
+            save_samples = sample_results_enabled(config)
+
             max_tokens = int(parameters.get("max_tokens", 2048))
             temperature = float(parameters.get("temperature", 0.0))
             request_timeout = int(parameters.get("request_timeout", 120))
@@ -467,6 +436,7 @@ class FollowBenchAdapter(FrameworkAdapter):
             )
 
             scored_results: list[ScoredConstraint] = []
+            sample_records: list[dict[str, Any]] = []
             evaluated_records = [
                 (group, example)
                 for group in groups
@@ -497,6 +467,20 @@ class FollowBenchAdapter(FrameworkAdapter):
                         temperature=temperature,
                     )
                 )
+
+                # Each evaluated constraint level is one observation for CI computation.
+                if save_samples:
+                    score = scored_results[-1]
+                    sample_records.append(
+                        {
+                            "sample_id": f"{score.group_id}:{score.level}",
+                            "example_id": score.example_id,
+                            "category": example.category,
+                            "level": score.level,
+                            "hsr": float(score.hard_satisfied),
+                            "ssr": score.soft_satisfied,
+                        }
+                    )
 
                 if index == total or index % 10 == 0:
                     progress = 0.25 + (0.55 * index / total)
@@ -570,7 +554,7 @@ class FollowBenchAdapter(FrameworkAdapter):
                     "dataset_revision": _FOLLOWBENCH_REVISION,
                     "repository": _FOLLOWBENCH_REPOSITORY,
                     "judge_model": judge_model,
-                    "judge_url": parameters.get("judge_url"),
+                    "judge_url": read_model_auth_key("judge_url") or config.model.url,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
                 },
@@ -586,6 +570,10 @@ class FollowBenchAdapter(FrameworkAdapter):
                         message_code="persisting_artifacts",
                     ),
                 )
+            )
+
+            persist_sample_results(
+                config, callbacks, results, sample_records if save_samples else None, "hsr"
             )
 
             return results
