@@ -354,6 +354,16 @@ The `ifeval` task from `inspect-evals` is not available in this image: it needs
 
 ### Updating dependencies
 
+The Containerfile carries a version-checked GDM self-proliferation downloader
+workaround for Inspect Evals 0.26.0: release-tag URLs use `v0.26.0` instead of
+the nonexistent `0.26.0` ref. The patch checks the expected source before
+editing it and leaves development-commit and fallback URLs unchanged. Review
+or remove it when upgrading Inspect Evals.
+
+GDM data is downloaded and prepared on first task load. The evaluation
+container needs GitHub access and write permission to the installed GDM data
+directory; this workaround does not bundle data into the image.
+
 Bump the pins in `requirements.txt`, then regenerate the lock and audit it. Run
 from `adapters/inspect/`:
 

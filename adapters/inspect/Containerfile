@@ -10,6 +10,23 @@ WORKDIR /app
 COPY requirements.txt constraints.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt
 
+# Inspect Evals 0.26.0 constructs an unprefixed release tag for GDM downloads,
+# but its GitHub release is v0.26.0. Remove/review this workaround on upgrade.
+RUN python - <<'PYEOF'
+from importlib.metadata import distribution
+
+dist = distribution('inspect-evals')
+if dist.version != '0.26.0':
+    raise RuntimeError('Review the GDM download URL patch for this Inspect Evals version')
+path = dist.locate_file('inspect_evals/gdm_self_proliferation/data_setup.py')
+source = path.read_text(encoding='utf-8')
+old = 'f"https://raw.githubusercontent.com/{GITHUB_REPO}/{version_tag}/{relative_path}"'
+new = 'f"https://raw.githubusercontent.com/{GITHUB_REPO}/v{version_tag}/{relative_path}"'
+if source.count(old) != 1:
+    raise RuntimeError('Unexpected GDM downloader source; review the URL patch')
+path.write_text(source.replace(old, new), encoding='utf-8')
+PYEOF
+
 # ── NLTK data — bundled at build time ────────────────────────────────────────
 #
 # inspect_evals/makemesay/game.py::ensure_nltk_resource() needs three NLTK
