@@ -213,7 +213,7 @@ def partial_tinytruthfulqa_info(raw: dict[str, Any]) -> dict[str, Any] | None:
         return None
     count = raw.get("n-samples", {}).get("tinyTruthfulQA", {}).get("effective")
     if not isinstance(count, int) or isinstance(count, bool):
-        raise RuntimeError("tinyTruthfulQA is missing a valid completed sample count")
+        raise TypeError("tinyTruthfulQA is missing a valid completed sample count")
     if count < 1:
         raise RuntimeError("tinyTruthfulQA produced no completed sample outcomes")
     if count == 100:

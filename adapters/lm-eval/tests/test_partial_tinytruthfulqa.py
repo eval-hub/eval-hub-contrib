@@ -66,7 +66,7 @@ def test_actual_outcomes_determine_partial_aggregation(
 def test_missing_completed_count_is_not_replaced_by_original_size(
     adapter, mock_callbacks, monkeypatch
 ):
-    with pytest.raises(RuntimeError, match="missing a valid completed sample count"):
+    with pytest.raises(TypeError, match="missing a valid completed sample count"):
         run_tiny(adapter, mock_callbacks, monkeypatch, None, None)
 
 
