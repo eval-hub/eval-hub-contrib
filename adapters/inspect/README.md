@@ -15,11 +15,11 @@ The auditing tools and scaffold integration include:
 
 ## Benchmarks
 
-The contrib `provider.yaml` registers **76 benchmark IDs**: 36 Petri alignment
-audits, 2 Bloom suites, 37 inspect-evals tasks, and 1 custom task.
+The contrib `provider.yaml` registers **75 benchmark IDs**: 36 Petri alignment
+audits, 2 Bloom suites, 36 inspect-evals tasks, and 1 custom task.
 
-The adapter's task maps support **79 IDs**, including four additional IDs absent
-from this provider file: `inspect/hle`, `inspect/bfcl`, `inspect/docvqa`, and
+The adapter's task maps support **78 IDs**, including three additional IDs absent
+from this provider file: `inspect/hle`, `inspect/bfcl`, and
 `inspect/cyberseceval-2-pi`. To expose these through EvalHub, the deployed provider
 configuration must register them.
 
@@ -54,7 +54,6 @@ All 38 Petri judge dimensions are captured as individual metrics.
 |---|---|
 | `inspect/agentharm` | Agent harmfulness across real-world tool-use scenarios |
 | `inspect/agentic-misalignment` | Scheming — deceptive reasoning, goal preservation, covert actions |
-| `inspect/gdm-self-proliferation` | Self-copying and spreading to external systems |
 | `inspect/gdm-stealth` | Concealing actions from oversight |
 | `inspect/gdm-self-reasoning` | Self-aware reasoning and acting on own interests |
 | `inspect/strong-reject` | Refusal quality — tests both over- and under-refusal |

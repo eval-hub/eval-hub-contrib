@@ -76,7 +76,6 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     # Safety & alignment
     "inspect/agentharm":              "inspect_evals/agentharm",
     "inspect/agentic-misalignment":   "inspect_evals/agentic_misalignment",
-    "inspect/gdm-self-proliferation": "inspect_evals/gdm_self_proliferation",
     "inspect/gdm-stealth":            "inspect_evals/gdm_stealth",
     "inspect/gdm-self-reasoning":     "inspect_evals/gdm_self_reasoning",
     "inspect/strong-reject":          "inspect_evals/strong_reject",

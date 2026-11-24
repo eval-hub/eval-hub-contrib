@@ -15,7 +15,7 @@ This repository contains adapters that integrate various evaluation frameworks w
 | [GuideLLM](https://github.com/vllm-project/guidellm) | `quay.io/evalhub/community-guidellm:latest` | ✓ | Performance benchmarking for LLM inference servers |
 | [MTEB](https://github.com/embeddings-benchmark/mteb) | `quay.io/evalhub/community-mteb:latest` | ✓ | Massive Text Embedding Benchmark for embedding models |
 | [IBM CLEAR](https://github.com/IBM/CLEAR) | `quay.io/evalhub/community-ibm-clear:latest` | ✓ | Agentic trace analysis (LLM-as-judge error reporting) |
-| [Inspect AI](https://inspect.aisi.org.uk/) | `quay.io/evalhub/community-inspect:latest` | ✓ | UK AISI framework — 75 benchmarks total: 36 Petri alignment audits, 2 Bloom suites, and 37 inspect-evals benchmarks |
+| [Inspect AI](https://inspect.aisi.org.uk/) | `quay.io/evalhub/community-inspect:latest` | ✓ | UK AISI framework — 74 curated benchmarks plus a custom-task entry: 36 Petri alignment audits, 2 Bloom suites, and 36 inspect-evals benchmarks |
 | [RAGAS](https://github.com/explodinggradients/ragas) | `quay.io/evalhub/community-ragas:latest` | ✓ | RAG pipeline quality evaluation (faithfulness, relevancy, context precision/recall, and more) |
 | [SWE-bench](https://github.com/SWE-bench/SWE-bench) | `quay.io/evalhub/community-swebench:latest` | ✓ | Software engineering benchmark for code patch evaluation |
 | [DeepEval](https://github.com/confident-ai/deepeval) | `quay.io/evalhub/community-deepeval:latest` | ✓ | LLM-as-judge evaluation: faithfulness, relevancy, hallucination, correctness, summarization, and multi-turn conversation metrics |
@@ -57,11 +57,11 @@ MLflow `Yes` means both metrics and artifacts; `Yes (metrics only)` indicates pa
 
 The Inspect AI adapter exposes alignment auditing and safety evaluation through the [Petri](https://meridianlabs-ai.github.io/inspect_petri/) and [Bloom](https://meridianlabs-ai.github.io/inspect_petri/extensions/petri-bloom.html) tools from Meridian Labs, as well as curated benchmarks from the [inspect-evals](https://github.com/UKGovernmentBEIS/inspect_evals) community library.
 
-**75 benchmarks** across three categories:
+**74 curated benchmarks** across three categories, plus a custom-task entry:
 
 - **36 Petri alignment audits** — covers all 40 built-in seed tag categories including sycophancy, deception, alignment faking, jailbreak, harmful cooperation, self-preservation, power seeking, oversight subversion, and more.
 - **2 Bloom behavioral suites** — automated scenario generation from high-level behavior descriptions.
-- **37 inspect-evals** — safety (AgentHarm, WMDP, StrongREJECT, MASK), scheming (agentic misalignment, GDM self-proliferation, GDM stealth), cybersecurity (Cybench, CyberSecEval), coding (HumanEval, SWE-bench), math (GSM8K, MATH, AIME), knowledge (MMLU, GPQA), and agent capabilities (GAIA, TheAgentCompany).
+- **36 inspect-evals** — safety (AgentHarm, WMDP, StrongREJECT, MASK), scheming (agentic misalignment, GDM stealth), cybersecurity (Cybench, CyberSecEval), coding (HumanEval, SWE-bench), math (GSM8K, MATH, AIME), knowledge (MMLU, GPQA), and agent capabilities (GAIA, TheAgentCompany).
 
 **Model configuration** — no provider prefixes required in job specs. The adapter detects the correct API from environment variables:
 
