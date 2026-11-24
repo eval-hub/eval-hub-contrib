@@ -631,7 +631,10 @@ benchmarks:
       metric: json_correctness_score
       lower_is_better: false
     pass_criteria:
-      threshold: 1.0
+      # 0.95 lets a run pass with up to 5% invalid outputs. Set 1.0 (in a
+      # collection's pass_criteria or your own provider registration) if only
+      # valid JSON should pass.
+      threshold: 0.95
     agent:
       evaluates:
         - json-format
@@ -644,6 +647,8 @@ benchmarks:
       result_interpretation: >-
         json_correctness_score: 1.0 = valid JSON and schema-conformant; 0.0 = invalid.
         schema_valid = 1 when score = 1.0. No LLM judge — fast and free.
+        The server marks the benchmark as passed at a mean score of 0.95 or
+        higher; use a pass threshold of 1.0 if every output must be valid.
       score_ranges:
         - range: "0.0-0.0"
           meaning: "Output is not valid JSON or violates the schema"

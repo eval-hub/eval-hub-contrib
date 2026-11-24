@@ -152,6 +152,10 @@ make push-deepeval REGISTRY=quay.io/your-org VERSION=v1.0.0
 | `max_concurrent` | int | No | `1` | Maximum test cases evaluated concurrently. Lower values reduce burst load on the judge endpoint. |
 | `throttle_value` | float | No | `0` | Seconds to wait between test case evaluations. Use with `max_concurrent` to pace a rate-limited endpoint. |
 
+### Pass criteria
+
+Every benchmark declares `pass_criteria` in `provider.yaml`, and the server marks it passed when the primary score is at or above the threshold (all scores are higher-is-better). The LLM-judged benchmarks use `0.5`. `json-correctness` uses `0.95`, so a run passes with up to 5% invalid outputs. If only valid JSON should pass, set the threshold to `1.0` in the benchmark's `pass_criteria`, either in a collection or in your own provider registration.
+
 ## Layout
 
 | Path | Purpose |

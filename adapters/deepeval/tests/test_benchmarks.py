@@ -217,14 +217,15 @@ def test_provider_declares_pass_criteria_for_every_benchmark():
     """The server passes a benchmark at ``score >= threshold`` (higher is better).
 
     LLM-judged benchmarks default to the adapter's ``threshold`` parameter
-    (0.5). ``json-correctness`` passes only when every output is valid, which
-    is what ``schema_valid`` reports.
+    (0.5). ``json-correctness`` is a pure format check, so it passes at 0.95
+    (up to 5% invalid outputs); users who need every output valid raise it to
+    1.0, which is what ``schema_valid`` reports.
     """
     import yaml
 
     provider = yaml.safe_load((Path(__file__).parent.parent / "provider.yaml").read_text())
     for entry in provider["benchmarks"]:
-        expected = 1.0 if entry["id"] == "json-correctness" else 0.5
+        expected = 0.95 if entry["id"] == "json-correctness" else 0.5
         assert entry["pass_criteria"]["threshold"] == expected, entry["id"]
 
 
