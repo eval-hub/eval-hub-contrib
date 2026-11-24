@@ -1,0 +1,98 @@
+{
+  "benchmark_policy": {
+    "tier2_required": true,
+    "tier3_required": true
+  },
+  "contributors": [],
+  "evaluated_source": null,
+  "generated_at": "2026-10-20T20:33:07.333210+00:00",
+  "incomplete_scans": [],
+  "overall_passed": true,
+  "overall_status": "passed",
+  "publication": {
+    "eligible": false,
+    "reasons": [
+      "Tier 1 did not run every required check: code-integrity, license, lint, quality, schema, security, unicode, version.",
+      "Required recognized built-in Tier 2 evidence is missing.",
+      "Tier 3 lacks publication-complete execution evidence."
+    ],
+    "status": "incomplete",
+    "tier3": {
+      "evidence_complete": false,
+      "execution_status": "not_run",
+      "reason": "Tier 3 lacks publication-complete execution evidence.",
+      "status": "not_run",
+      "verdict": "not_run"
+    }
+  },
+  "publication_status": "incomplete",
+  "results": [
+    {
+      "description": "Detect PII and local identifiers",
+      "findings": [],
+      "incomplete_scans": [],
+      "legacy": {
+        "errors": [],
+        "messages": [
+          "[OK] pii_scan_start: Scanning 1 files for PII",
+          "[OK] pii_detection: No PII detected in 1 files (emails, SSNs, phone numbers, paths)"
+        ],
+        "warnings": []
+      },
+      "passed": true,
+      "publication_evidence": {
+        "check_id": "pii",
+        "producer": "skillevaluator.tier1",
+        "schema_version": 1,
+        "tier": 1
+      },
+      "publication_target": {
+        "skill_digest": "sha256:65c0a26a0b227a3352f3a48473e41d565c55aec71c2d5a2dc86cc8a85ec42cd1",
+        "skill_digest_algorithm": "skill-evaluator-source-tree/2",
+        "skill_name": "good-skill"
+      },
+      "skip_reason": null,
+      "skipped": false,
+      "status": "passed",
+      "success_details": [
+        {
+          "check": "pii_scan_start",
+          "message": "Scanning 1 files for PII",
+          "metadata": {
+            "file_count": 1
+          }
+        },
+        {
+          "check": "pii_detection",
+          "message": "No PII detected in 1 files (emails, SSNs, phone numbers, paths)",
+          "metadata": {
+            "files_scanned": 1
+          }
+        }
+      ],
+      "summary": {
+        "checks_performed": 2,
+        "critical_count": 0,
+        "errors": 0,
+        "files_scanned": 1,
+        "high_count": 0,
+        "low_count": 0,
+        "medium_count": 0,
+        "warnings": 0
+      },
+      "validator": "PII Scan"
+    }
+  ],
+  "severity_counts": {
+    "critical": 0,
+    "high": 0,
+    "low": 0,
+    "medium": 0
+  },
+  "skills": [],
+  "total_advisory_skipped": 0,
+  "total_errors": 0,
+  "total_skipped": 0,
+  "total_validators": 1,
+  "total_warnings": 0
+}
