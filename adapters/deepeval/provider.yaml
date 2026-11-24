@@ -12,7 +12,7 @@ type: builtin
 runtime:
   k8s:
     image: quay.io/evalhub/community-deepeval:latest
-    image_pull_policy: Always
+    image_pull_policy: always
     entrypoint:
       - python
       - main.py
@@ -37,6 +37,11 @@ benchmarks:
       - deepeval
       - rag
       - faithfulness
+    primary_score:
+      metric: faithfulness_score
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
 
   - id: relevancy
     name: Answer Relevancy
@@ -50,6 +55,11 @@ benchmarks:
       - deepeval
       - rag
       - relevancy
+    primary_score:
+      metric: relevancy_score
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
 
   - id: hallucination
     name: Hallucination
@@ -64,6 +74,11 @@ benchmarks:
       - deepeval
       - safety
       - hallucination
+    primary_score:
+      metric: hallucination_score
+      lower_is_better: true
+    pass_criteria:
+      threshold: 0.3
 
   - id: correctness
     name: Correctness
@@ -77,6 +92,11 @@ benchmarks:
       - deepeval
       - accuracy
       - correctness
+    primary_score:
+      metric: correctness_score
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
 
   - id: summarization
     name: Summarization
@@ -90,6 +110,11 @@ benchmarks:
       - deepeval
       - nlp
       - summarization
+    primary_score:
+      metric: summarization_score
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
 
   - id: conversation-completeness
     name: Conversation Completeness
@@ -103,6 +128,11 @@ benchmarks:
       - deepeval
       - multi-turn
       - completeness
+    primary_score:
+      metric: conversation_completeness_score
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
 
   - id: role-adherence
     name: Role Adherence
@@ -116,6 +146,11 @@ benchmarks:
       - deepeval
       - multi-turn
       - role-adherence
+    primary_score:
+      metric: role_adherence_score
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
 
   - id: knowledge-retention
     name: Knowledge Retention
@@ -129,8 +164,25 @@ benchmarks:
       - deepeval
       - multi-turn
       - knowledge-retention
+    primary_score:
+      metric: knowledge_retention_score
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
 
 parameters:
+  - name: judge_structured_outputs
+    type: boolean
+    default: false
+    description: Enable native JSON-schema enforcement for compatible judge endpoints.
+  - name: max_tokens
+    type: integer
+    default: null
+    description: Optional positive output-token limit for each judge completion; omitted by default to preserve DeepEval behavior.
+  - name: save_sample_results
+    type: boolean
+    default: false
+    description: Opt in to canonical per-sample CI artifacts; persistence failures fail the evaluation.
   - name: eval_model_name
     type: string
     default: null

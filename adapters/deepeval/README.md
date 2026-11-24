@@ -138,6 +138,9 @@ make push-deepeval REGISTRY=quay.io/your-org VERSION=v1.0.0
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
+| `save_sample_results` | boolean | No | `false` | Strict boolean: opt in to per-sample CI artifacts; configured persistence failures fail the evaluation. |
+| `max_tokens` | integer | No | unset | Optional positive output-token limit for each judge completion; omitted by default to preserve DeepEval behavior. |
+| `judge_structured_outputs` | boolean | No | `false` | Enable native JSON-schema output for compatible judge endpoints. |
 | `eval_model_name` | string | No | model.name | Judge model name (e.g. `microsoft-phi-4`, `gpt-4o`). Defaults to the evaluated model. |
 | `threshold` | float | No | `0.5` | Minimum pass threshold for metric scores |
 | `dataset_format` | string | No | `csv` | Input dataset format: `csv`, `jsonl`, or `json`. Use `jsonl` for multi-turn benchmarks. |
@@ -188,3 +191,28 @@ Select the judge model with `eval_model_name`. Its connection uses
 `judge_api-key`/`judge_url`. Legacy `eval_model_url`, `judge_url`,
 `judge_base_url`, and `judge_api_key` parameters are ignored. Only the Secret
 values configure the auxiliary connection.
+
+
+## Per-sample CI artifacts
+
+Set `parameters.save_sample_results: true` to export per-test observations; the
+default is `false`. `sample_results.jsonl` contains a run-local `sample_id`, numeric `prediction`, and metric name. Raw inputs and
+conversation turns are omitted. The manifest declares the
+benchmark's aggregate metric and mean estimand. Each observation is taken from
+its own native result, so test execution order does not detach scores from their native result.
+Invalid/nonfinite scores or an unexpected number of metrics fail the export.
+Configured OCI and MLflow exports contain identical sample and manifest bytes;
+with no remote export, local mode retains files in its job results directory.
+In Kubernetes, `/app/results` is ephemeral pod storage and disappears with the
+pod; configure OCI or MLflow to retain artifacts. Opted-in
+persistence errors fail the evaluation instead of silently discarding samples.
+When samples are disabled, diagnostic-only OCI/MLflow upload failures are logged
+as warnings and evaluation still succeeds.
+
+Set `parameters.max_tokens` to a positive integer to bound judge output tokens.
+When omitted or null, the adapter passes no token-limit override to DeepEval. For self-hosted OpenAI-compatible endpoints that support JSON
+schema, set `parameters.judge_structured_outputs: true` to use DeepEval's native
+schema-constrained generation. Its default is false. The adapter preserves the
+real model name and credentials, and lets DeepEval provide `response_format`
+once when the model uses its structured or JSON-mode path. Dataset fields or CI
+column mappings cannot repair malformed judge responses during evaluation.
