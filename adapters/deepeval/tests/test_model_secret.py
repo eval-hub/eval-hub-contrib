@@ -6,8 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-import evalhub.adapter.auth as auth
-from evalhub.adapter import JobSpec
+from evalhub.adapter import JobSpec, auth
 
 
 @pytest.fixture(params=["k8s", "local"])
@@ -30,7 +29,9 @@ def config():
     return spec
 
 
-import main
+import deepeval_adapter.adapter as adapter_module
+from deepeval_adapter.judge import resolve_judge_model
+from main import DeepEvalAdapter
 
 
 @pytest.mark.parametrize(
@@ -42,7 +43,7 @@ def test_gpt_model_uses_judge_secret(model_secret, monkeypatch, role_url):
     (model_secret / "judge_api-key").write_text("judge_api-key:ref")
     if role_url:
         (model_secret / "judge_url").write_text(role_url)
-    judge = main._resolve_judge_model("gpt-4o-mini", config().model.url)
+    judge = resolve_judge_model("gpt-4o-mini", config().model.url)
     client = judge.load_model()
     assert str(client.base_url).rstrip("/") == (role_url or config().model.url)
     assert client.auth_headers["Authorization"] == "Bearer judge_api-key:ref"
@@ -52,7 +53,7 @@ def test_gpt_model_uses_judge_secret(model_secret, monkeypatch, role_url):
 def test_judge_url_without_key_fails(model_secret):
     (model_secret / "judge_url").write_text("http://localhost:8080/judge/v1")
     with pytest.raises(ValueError, match="requires judge_api-key"):
-        main._resolve_judge_model("gpt-4o-mini", config().model.url)
+        resolve_judge_model("gpt-4o-mini", config().model.url)
 
 
 @pytest.mark.parametrize("role_entries", ["pair", "key_only", "none"])
@@ -90,9 +91,9 @@ def test_job_ignores_legacy_connections(
     (data_dir / "data.csv").write_text(
         "input,actual_output,retrieval_context\nq,a,ctx\n"
     )
-    monkeypatch.setattr(main, "_resolve_data_dir", lambda _config: str(data_dir))
+    monkeypatch.setattr(adapter_module, "resolve_data_dir", lambda _config: str(data_dir))
 
-    def create_metric(_benchmark_id, judge, _threshold):
+    def create_metric(_benchmark_id, judge, _threshold, _params=None):
         # Use the real GPTModel/OpenAI client to verify neither legacy value
         # reaches the judge, while avoiding inference calls in this unit test.
         client = judge.load_model()
@@ -104,7 +105,7 @@ def test_job_ignores_legacy_connections(
         return SimpleNamespace(name="Faithfulness")
 
     metric_factory = MagicMock(side_effect=create_metric)
-    monkeypatch.setattr(main, "_create_metric", metric_factory)
+    monkeypatch.setattr(adapter_module, "create_metric", metric_factory)
     metric_data = SimpleNamespace(
         name="Faithfulness", score=1.0, success=True, reason="Supported"
     )
@@ -113,9 +114,9 @@ def test_job_ignores_legacy_connections(
             test_results=[SimpleNamespace(metrics_data=[metric_data])]
         )
     )
-    monkeypatch.setattr(main, "evaluate", evaluation)
+    monkeypatch.setattr(adapter_module, "evaluate", evaluation)
 
-    adapter = main.DeepEvalAdapter(job_spec_path="meta/job.json")
+    adapter = DeepEvalAdapter(job_spec_path="meta/job.json")
     result = adapter.run_benchmark_job(spec, MagicMock())
 
     metric_factory.assert_called_once()
@@ -125,14 +126,14 @@ def test_job_ignores_legacy_connections(
 
 
 def test_custom_model_schema_capability_is_opt_in(model_secret):
-    judge = main._resolve_judge_model("meta-llama/Llama-3.2-1B-Instruct", config().model.url, structured_outputs=True)
+    judge = resolve_judge_model("meta-llama/Llama-3.2-1B-Instruct", config().model.url, structured_outputs=True)
     assert judge.supports_structured_outputs() is True
     assert "response_format" not in judge.generation_kwargs
     assert "max_tokens" not in judge.generation_kwargs
 
 
 def test_known_openai_model_does_not_duplicate_response_format(model_secret):
-    judge = main._resolve_judge_model("gpt-4o-mini", config().model.url)
+    judge = resolve_judge_model("gpt-4o-mini", config().model.url)
     assert "response_format" not in judge.generation_kwargs
 
 
@@ -140,7 +141,7 @@ def test_known_openai_model_does_not_duplicate_response_format(model_secret):
 @pytest.mark.parametrize("options", [{}, {"max_tokens": None}, {"max_tokens": 4096}])
 def test_judge_token_limit_is_only_overridden_when_set(model_secret, structured_outputs, options):
     """Use the real judge model to verify default omission and explicit forwarding."""
-    judge = main._resolve_judge_model(
+    judge = resolve_judge_model(
         "meta-llama/Llama-3.2-1B-Instruct", config().model.url,
         structured_outputs=structured_outputs, **options,
     )

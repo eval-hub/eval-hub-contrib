@@ -152,11 +152,16 @@ make push-deepeval REGISTRY=quay.io/your-org VERSION=v1.0.0
 | `max_concurrent` | int | No | `1` | Maximum test cases evaluated concurrently. Lower values reduce burst load on the judge endpoint. |
 | `throttle_value` | float | No | `0` | Seconds to wait between test case evaluations. Use with `max_concurrent` to pace a rate-limited endpoint. |
 
+### Pass criteria
+
+Every benchmark declares `pass_criteria` in `provider.yaml`, and the server marks it passed when the primary score is at or above the threshold (all scores are higher-is-better). The LLM-judged benchmarks use `0.5`. `json-correctness` uses `0.95`, so a run passes with up to 5% invalid outputs. If only valid JSON should pass, set the threshold to `1.0` in the benchmark's `pass_criteria`, either in a collection or in your own provider registration.
+
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| `main.py` | Adapter implementation and CLI entrypoint |
+| `main.py` | CLI entrypoint |
+| `deepeval_adapter/` | Adapter package: `benchmarks.py` (benchmark registry), `adapter.py`, `judge.py`, `samples.py`, `reporting.py` |
 | `Containerfile` | OCI image (UBI Python, `EVALHUB_MODE=k8s`) |
 | `requirements.txt` | Python dependencies |
 | `requirements-test.txt` | Test dependencies |
@@ -201,6 +206,7 @@ conversation turns are omitted. The manifest declares the
 benchmark's aggregate metric and mean estimand. Each observation is taken from
 its own native result, so test execution order does not detach scores from their native result.
 Invalid/nonfinite scores or an unexpected number of metrics fail the export.
+`json-correctness` has no judge, so its samples are the per-record validity scores (0 or 1).
 Configured OCI and MLflow exports contain identical sample and manifest bytes;
 with no remote export, local mode retains files in its job results directory.
 In Kubernetes, `/app/results` is ephemeral pod storage and disappears with the
