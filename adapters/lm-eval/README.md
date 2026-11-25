@@ -41,3 +41,10 @@ the corresponding behavior. No runtime package files are rewritten.
 These preserve fixes previously made in the ODH Harness adapter/task library
 when using this standalone adapter. Job-level remote-code and unsafe-code
 settings are outside this change.
+
+## Unsupported SCROLLS Qasper benchmark
+
+`scrolls_qasper` is not offered by this adapter. The pinned lm-eval 0.4.13 task
+imports `transformers.data.metrics`, which is unavailable in Transformers
+5.22.2. Requests using `scrolls_qasper` or `lm-eval/scrolls_qasper` fail before
+model execution with this dependency-compatibility reason.

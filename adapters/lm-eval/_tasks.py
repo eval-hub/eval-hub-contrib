@@ -70,6 +70,27 @@ UNSUPPORTED_BENCHMARKS: dict[str, str] = {
         "youtubesubtitles",
     )
 }
+UNSUPPORTED_BENCHMARKS.update(
+    dict.fromkeys(
+        (
+            "aclue_ancient_chinese_culture",
+            "cmmlu_college_mathematics",
+            "cmmlu_high_school_mathematics",
+            "cmmlu_professional_medicine",
+            "cmmlu_traditional_chinese_medicine",
+            "ethics_cm",
+            "qasper_freeform",
+        ),
+        "it requires an external dataset loading script, which datasets 5.2.0 "
+        "does not support; trust_remote_code cannot enable dataset scripts. "
+        "Use a data-only Parquet, JSON, or CSV dataset through lm-eval/custom",
+    )
+)
+UNSUPPORTED_BENCHMARKS["scrolls_qasper"] = (
+    "the pinned lm-eval 0.4.13 task imports transformers.data.metrics, which "
+    "Transformers 5.22.2 does not provide; this benchmark cannot run with the "
+    "adapter's pinned dependencies. Choose a supported benchmark"
+)
 
 
 def task_for(benchmark_id: str) -> str | None:
