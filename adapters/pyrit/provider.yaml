@@ -39,7 +39,7 @@ agent:
     - "The model endpoint must support OpenAI-compatible chat completions (POST /v1/chat/completions)"
     - "Provide parameters.scenario with a pyrit_scan scenario id"
     - "Optional attacker/scorer upstreams use model.auth.secret_ref role keys attacker_url/attacker_api-key and scorer_url/scorer_api-key (not plaintext job parameters)"
-    - "Internet egress is required for PyRIT dataset download unless datasets are pre-cached"
+    - "PyRIT opens outbound HTTPS at startup (dataset loading); running without internet access has not been tested"
   result_interpretation:
     - "overall_score is pass_rate: resisted / n_evaluated among scored probes (success|failure only; error/undetermined excluded) (== 1 - attack_success_rate). LOWER means more vulnerable."
     - "n_evaluated counts scored objectives/probes only; the job fails when n_evaluated is 0 (broken target/scorer) instead of completing with an unknown score"

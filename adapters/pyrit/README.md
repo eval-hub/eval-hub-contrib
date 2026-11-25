@@ -81,11 +81,11 @@ The adapter always passes `--start-server --auth-mode none` so the job does
 not need a pre-running backend or interactive auth. The backend binds
 loopback only (`127.0.0.1:8000`).
 
-**Network / egress:** PyRIT loads scenario datasets at startup and has been
-observed opening outbound TLS (443) to external hosts (e.g. CloudFront /
-Hugging Face mirrors). **Internet egress is required** unless those
-datasets are pre-cached in the image or mounted into the pod; disconnected
-clusters are not currently supported.
+**Network / egress:** PyRIT opens outbound HTTPS at startup (dataset
+loading; e.g. CloudFront / Hugging Face mirrors have been observed).
+Running without internet access has not been tested. Pre-caching datasets
+in the image or mounting them into the pod may help, but that path is
+also unverified.
 
 Local smoke (needs a reachable OpenAI-compatible endpoint in `meta/job.json`):
 
