@@ -553,7 +553,7 @@ benchmarks:
   # cmmlu_traditional_chinese_medicine, ethics_cm, qasper_freeform. These require
   # external dataset loading scripts, which datasets 5.2.0 does not support.
   # scrolls_qasper is also omitted: its task imports transformers.data.metrics,
-  # which is unavailable in the pinned Transformers 5.22.2. See issue #330.
+  # which is unavailable in the pinned Transformers 5.22.2.
   # -------------------------------------------------------------------------
 
   - id: arc_easy

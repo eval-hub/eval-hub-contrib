@@ -47,5 +47,4 @@ settings are outside this change.
 `scrolls_qasper` is not offered by this adapter. The pinned lm-eval 0.4.13 task
 imports `transformers.data.metrics`, which is unavailable in Transformers
 5.22.2. Requests using `scrolls_qasper` or `lm-eval/scrolls_qasper` fail before
-model execution with this dependency-compatibility reason. See
-[issue #330](https://github.com/eval-hub/eval-hub-contrib/issues/330).
+model execution with this dependency-compatibility reason.
