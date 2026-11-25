@@ -109,6 +109,18 @@ REPLACEMENTS = {
         (_TINY_FUNCTION, _PARTIAL_TINY_FUNCTION),
         ("tb.evaluate(", "_tinybenchmarks().evaluate("),
     ),
+    # Keep an unscored child out of the score, weights and stderr inputs together.
+    "api/group.py": (
+        (
+            "                    if metric_key in task_result:\n",
+            (
+                "                    if (\n"
+                "                        metric_key in task_result\n"
+                "                        and task_result[metric_key] is not None\n"
+                "                    ):\n"
+            ),
+        ),
+    ),
 }
 
 # SHA256 of the exact 0.4.13 source and the resulting patched source. This
@@ -122,6 +134,10 @@ CHECKSUMS = {
     "tasks/tinyBenchmarks/agg_functions.py": (
         "584214a413a32b3352f26fcb9f65c84cfe798453cbe42009993c7a4c2631315f",
         "fe966d99531e6988be2c3ac8313c78797abb8d6598a8ca6bc4785d35fa2a5bde",
+    ),
+    "api/group.py": (
+        "e7cc6b6f1c8d34edc45d928d29b4940d60190da63e76192feaddbcf962718f52",
+        "e29d49ac992951d18e8f17a9d486edaf8e24a1de1529ac7ac872fa84ca64b006",
     ),
 }
 

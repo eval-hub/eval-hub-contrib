@@ -27,8 +27,12 @@ the corresponding behavior. No runtime package files are rewritten.
   Exactly 100 outcomes retain the original estimator. This does not establish
   that arbitrary reordered samples are valid anchors; the standard task and
   its predefined ordering must still be used. Other tiny tasks keep their
-  aggregation behavior. Full tiny-benchmark scoring still needs its existing
-  optional `tinyBenchmarks` dependency; a partial execution check does not.
+  aggregation behavior. Group means omit an unscored child's value, weight
+  and stderr together; a group with no scored children remains unscored. The
+  group mean covers the scored children only, while execution sample metadata
+  still counts all completed samples. Full tiny-benchmark scoring still needs
+  its existing optional `tinyBenchmarks` dependency; a partial execution check
+  does not.
 - **CAREQA (RHOAIENG-85393, ODH Harness PR #251):** importing the task for
   `careqa_open_perplexity` does not initialize generation metrics. Generated
   answers still load BLEU, ROUGE, BERTScore and BLEURT on first use and report

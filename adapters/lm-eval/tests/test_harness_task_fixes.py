@@ -8,10 +8,11 @@ import sys
 from importlib.metadata import distribution
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
-from scripts.apply_harness_fixes import apply_fixes
+from scripts.apply_harness_fixes import REPLACEMENTS, apply_fixes
 
 
 def test_unreviewed_version_is_rejected(tmp_path):
@@ -43,10 +44,11 @@ def task_module(relative):
 
 @pytest.mark.lmeval
 def test_task_patch_is_idempotent(tmp_path, lmeval):
-    for name in ["careqa/utils_open.py", "tinyBenchmarks/agg_functions.py"]:
-        path = tmp_path / "tasks" / name
+    for name in REPLACEMENTS:
+        path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(task_file(name).read_bytes())
+        source = Path(distribution("lm_eval").locate_file("lm_eval/" + name))
+        path.write_bytes(source.read_bytes())
     apply_fixes(tmp_path, "0.4.13")
     before = {p: p.read_bytes() for p in tmp_path.rglob("*.py")}
     apply_fixes(tmp_path, "0.4.13")
@@ -152,10 +154,8 @@ def test_real_tinytruthfulqa_yaml_uses_partial_guard(monkeypatch, lmeval):
     assert aggregation([1.0]) is None
 
 
-@pytest.mark.lmeval
-@pytest.mark.parametrize("count", [1, 100])
-def test_actual_cli_writes_tinytruthfulqa_results(tmp_path, lmeval, count):
-    """Run the real CLI with local records, dummy inference and blocked sockets."""
+def run_cli_fixture(tmp_path, count, weight_by_size=None, with_control=True):
+    """Run real task/group aggregation with local data and blocked sockets."""
     import yaml
 
     dataset = tmp_path / "records.jsonl"
@@ -176,12 +176,44 @@ def test_actual_cli_writes_tinytruthfulqa_results(tmp_path, lmeval, count):
         "doc_to_choice": "choices",
         "doc_to_target": "gold",
     }
+    config["metric_list"] = [
+        {
+            "metric": "acc",
+            "aggregation": "TINY_AGGREGATOR",
+            "higher_is_better": True,
+        }
+    ]
     task.write_text(
-        yaml.safe_dump(config)
-        + "metric_list:\n  - metric: acc\n"
-        + "    aggregation: !function lm_eval.tasks.tinyBenchmarks.agg_functions.agg_gpirt_truthfulqa\n"
-        + "    higher_is_better: true\n"
+        yaml.safe_dump(config).replace(
+            "TINY_AGGREGATOR",
+            "!function lm_eval.tasks.tinyBenchmarks.agg_functions.agg_gpirt_truthfulqa",
+        )
     )
+    cli_tasks = str(task)
+    extra_args = []
+    if weight_by_size is not None:
+        control = {
+            **config,
+            "task": "local_control",
+            "metric_list": [{"metric": "acc"}],
+        }
+        (tmp_path / "control.yaml").write_text(yaml.safe_dump(control))
+        (tmp_path / "suite.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "group": "tiny_suite",
+                    "task": [
+                        "tinyTruthfulQA",
+                        *(["local_control"] if with_control else []),
+                    ],
+                    "aggregate_metric_list": [
+                        {"metric": "acc", "weight_by_size": weight_by_size}
+                    ],
+                }
+            )
+        )
+        cli_tasks = "tiny_suite"
+        extra_args = ["--include_path", str(tmp_path)]
     (tmp_path / "sitecustomize.py").write_text(
         "import socket\n"
         "def blocked(*args, **kwargs):\n"
@@ -212,7 +244,8 @@ def test_actual_cli_writes_tinytruthfulqa_results(tmp_path, lmeval, count):
             "--model",
             "dummy",
             "--tasks",
-            str(task),
+            cli_tasks,
+            *extra_args,
             "--limit",
             str(count),
             "--num_fewshot",
@@ -230,8 +263,122 @@ def test_actual_cli_writes_tinytruthfulqa_results(tmp_path, lmeval, count):
     assert result.returncode == 0, result.stdout + result.stderr
     from _results import find_results_file, parse_results_file
 
-    raw = parse_results_file(find_results_file(output))
+    return parse_results_file(find_results_file(output))
+
+
+@pytest.mark.lmeval
+@pytest.mark.parametrize("count", [1, 100])
+def test_actual_cli_writes_tinytruthfulqa_results(tmp_path, lmeval, count):
+    raw = run_cli_fixture(tmp_path, count)
     assert raw["n-samples"]["tinyTruthfulQA"]["effective"] == count
     assert raw["results"]["tinyTruthfulQA"]["acc,none"] == (
         None if count == 1 else 0.75
     )
+
+
+def aggregate_group(rows, weight_by_size):
+    from lm_eval.api.group import Group
+    from lm_eval.api.task import Task
+    from lm_eval.config.group import AggMetricConfig
+
+    group = Group(
+        "suite",
+        aggregate_metric_list=[AggMetricConfig("acc", weight_by_size=weight_by_size)],
+    )
+    for name in rows:
+        group.add(MagicMock(spec=Task, task_name=name))
+    return group.aggregate(rows)
+
+
+@pytest.mark.lmeval
+@pytest.mark.parametrize("weight_by_size", [True, False])
+@pytest.mark.parametrize("unscored_stderr", [None, "N/A", 100.0])
+def test_group_skips_unscored_values_weights_and_stderrs(
+    lmeval, weight_by_size, unscored_stderr
+):
+    scored = {
+        "first": {"acc,none": 0.25, "acc_stderr,none": 0.1, "sample_len": 2},
+        "second": {"acc,none": 0.75, "acc_stderr,none": 0.2, "sample_len": 8},
+    }
+    expected = aggregate_group(scored, weight_by_size)
+    actual = aggregate_group(
+        {
+            "tinyTruthfulQA": {
+                "acc,none": None,
+                "acc_stderr,none": unscored_stderr,
+                "sample_len": 99,
+            },
+            **scored,
+        },
+        weight_by_size,
+    )
+    assert actual["acc,none"] == pytest.approx(0.65 if weight_by_size else 0.5)
+    assert actual["acc_stderr,none"] == pytest.approx(expected["acc_stderr,none"])
+    assert actual["sample_count"]["acc,none"] == 10
+    # Execution metadata counts all samples; metric weights exclude unscored ones.
+    assert actual["sample_len"] == 109
+
+
+@pytest.mark.lmeval
+@pytest.mark.parametrize("weight_by_size", [True, False])
+def test_group_without_scored_children_stays_unscored(lmeval, weight_by_size):
+    from _results import compute_overall_score, extract_evaluation_results
+
+    result = aggregate_group(
+        {"tinyTruthfulQA": {"acc,none": None, "sample_len": 1}}, weight_by_size
+    )
+    assert result.get("acc,none") is None
+    assert "acc_stderr,none" not in result
+    assert "sample_count" not in result
+    assert (
+        compute_overall_score(
+            extract_evaluation_results({"results": {"suite": result}})
+        )
+        is None
+    )
+
+
+@pytest.mark.lmeval
+@pytest.mark.parametrize("weight_by_size", [True, False])
+def test_group_keeps_scored_values_including_zero(lmeval, weight_by_size):
+    result = aggregate_group(
+        {
+            "zero": {"acc,none": 0.0, "sample_len": 2},
+            "other": {"acc,none": 0.75, "sample_len": 8},
+        },
+        weight_by_size,
+    )
+    assert result["acc,none"] == pytest.approx(0.6 if weight_by_size else 0.375)
+    assert result["sample_count"]["acc,none"] == 10
+
+
+@pytest.mark.lmeval
+@pytest.mark.parametrize("count", [1, 100])
+@pytest.mark.parametrize("weight_by_size", [True, False])
+def test_actual_cli_group_preserves_other_task_results(
+    tmp_path, lmeval, count, weight_by_size
+):
+    raw = run_cli_fixture(tmp_path, count, weight_by_size)
+    assert raw["n-samples"]["tinyTruthfulQA"]["effective"] == count
+    control = raw["results"]["local_control"]["acc,none"]
+    assert isinstance(control, (int, float))
+    expected = control if count == 1 else (control + 0.75) / 2
+    group = raw["groups"]["tiny_suite"]
+    assert group["acc,none"] == pytest.approx(expected)
+    assert group["sample_count"]["acc,none"] == (count if count == 1 else 2 * count)
+    assert raw["results"]["tinyTruthfulQA"]["acc,none"] == (
+        None if count == 1 else 0.75
+    )
+
+
+@pytest.mark.lmeval
+@pytest.mark.parametrize("weight_by_size", [True, False])
+def test_actual_cli_group_without_scores_is_unscored(tmp_path, lmeval, weight_by_size):
+    from _results import compute_overall_score, extract_evaluation_results
+
+    raw = run_cli_fixture(tmp_path, 1, weight_by_size, with_control=False)
+    group = raw["groups"]["tiny_suite"]
+    assert group.get("acc,none") is None
+    assert "acc_stderr,none" not in group
+    assert compute_overall_score(extract_evaluation_results(raw)) is None
+    assert raw["n-samples"]["tinyTruthfulQA"]["effective"] == 1
