@@ -207,6 +207,32 @@ def _task_num_samples(raw: dict[str, Any], task_name: str) -> int | None:
     return None
 
 
+def partial_tinytruthfulqa_info(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Report an incomplete anchor run without claiming an official IRT score."""
+    if "tinyTruthfulQA" not in raw.get("results", {}):
+        return None
+    count = raw.get("n-samples", {}).get("tinyTruthfulQA", {}).get("effective")
+    if not isinstance(count, int) or isinstance(count, bool):
+        raise TypeError("tinyTruthfulQA is missing a valid completed sample count")
+    if count < 1:
+        raise RuntimeError("tinyTruthfulQA produced no completed sample outcomes")
+    if count == 100:
+        return None
+    return {
+        "num_examples_evaluated": count,
+        "aggregation": {
+            "task": "tinyTruthfulQA",
+            "status": "skipped",
+            "required_examples": 100,
+            "reason": (
+                "The standard tinyTruthfulQA gpirt estimate requires exactly "
+                "100 predefined anchor outcomes in order. Sample execution "
+                "completed; no official score was calculated."
+            ),
+        },
+    }
+
+
 _PRIORITY_METRICS = ("acc", "exact_match", "pass@1", "accuracy")
 
 

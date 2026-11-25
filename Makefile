@@ -723,6 +723,7 @@ test-lm-eval:
 	cd adapters/lm-eval && \
 	(test -d .venv || uv venv --python $(PYTHON_VERSION) .venv) && \
 	uv pip install --python .venv/bin/python -r requirements.txt -r requirements-test.txt && \
+	.venv/bin/python scripts/apply_harness_fixes.py && \
 	.venv/bin/python -m ruff check --config 'src = ["."]' . && \
 	.venv/bin/python -m pytest tests/ -m "not local" -v
 images: image-lm-eval
