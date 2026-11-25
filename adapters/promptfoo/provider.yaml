@@ -57,7 +57,7 @@ agent:
   hints:
     - "The model endpoint must support OpenAI-compatible chat completions (POST /v1/chat/completions)"
     - "promptfoo-redteam REQUIRES generation_provider (used for attack generation AND grading); promptfoo-hosted inference is disabled; credentials/endpoints come from model.auth.secret_ref"
-    - "Remote-only plugins/strategies (🌐 in promptfoo docs: rag-poisoning, ssrf, medical:*, jailbreak:meta, …) are rejected — they depend on api.promptfoo.app"
+    - "Remote-only plugins/strategies and collections/aliases (🌐 / harmful / owasp:llm:*, …) are rejected — list concrete local-capable plugin IDs; every plugin must produce ≥1 test after generate"
     - "Use promptfoo-eval's config_yaml parameter to pass through an existing promptfoo project's config verbatim instead of generating one from prompts/tests"
   result_interpretation:
     - "overall_score is the pass rate: successes / (successes + failures + errors)"

@@ -41,15 +41,21 @@ This adapter always forces:
 - `PROMPTFOO_DISABLE_REMOTE_GENERATION=1` (superset — all hosted inference fallbacks)
 - `PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=1`
 - `PROMPTFOO_DISABLE_TELEMETRY=1`, `PROMPTFOO_DISABLE_UPDATE=1`,
-  `PROMPTFOO_DISABLE_SHARING=1`, `PROMPTFOO_SELF_HOSTED=1`
+  `PROMPTFOO_DISABLE_SHARING=1`
 
 And for `promptfoo-redteam`:
 
-- **`generation_provider` is required** (used for attack generation and grading)
+- **`generation_provider` is required** (policy: attacker/grader stay operator-controlled;
+  credentials/endpoints come from `model.auth.secret_ref`)
 - **Remote-only plugins/strategies are rejected** up front
-- **Zero evaluated tests fail the job** (no vacuous pass rate)
+- **Collections / framework aliases** (`harmful`, `owasp:llm:01`, …) are rejected — list
+  concrete plugin IDs so expansion cannot sneak in remote-only plugins
+- **After `redteam generate`, every requested plugin must produce ≥1 test** — partial
+  drops fail the job (no vacuous / partial pass rate)
 
-These flags are not a network firewall; pair with egress controls in production.
+These flags disable promptfoo-hosted inference; they are not a network firewall. Some
+local plugins still download datasets (e.g. Hugging Face), so air-gapped runs need those
+assets staged or egress allowed. Pair with cluster egress controls in production.
 
 ## Verified operational constraints (promptfoo 0.123.1, checked 2026-09-21)
 

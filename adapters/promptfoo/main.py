@@ -40,8 +40,9 @@ By default promptfoo can send red-team generation and grading to
 explicit ``generation_provider`` for ``promptfoo-redteam`` so attack
 generation and grading use an operator-controlled model — never
 promptfoo-hosted inference. Remote-only plugins/strategies (no local
-generator in the MIT repo) are rejected up front; a red-team run that
-produces zero evaluated tests is treated as failure.
+generator in the MIT repo) and collections/framework aliases that expand
+to them are rejected up front. After ``redteam generate``, every requested
+plugin must produce at least one test — partial drops are treated as failure.
 """
 
 from __future__ import annotations
@@ -158,7 +159,38 @@ _REMOTE_ONLY_PLUGIN_PREFIXES = (
     "coding-agent:",
     "bias:",
     "agentic:",
-    "teen-safety:",
+)
+
+# promptfoo expands these after our literal-id check. They pull in remote-only
+# plugins under the hood (e.g. owasp:llm:01 → ascii-smuggling), so require
+# concrete plugin IDs instead of trusting post-expansion coverage.
+_PLUGIN_COLLECTIONS = frozenset(
+    {
+        "default",
+        "foundation",
+        "harmful",
+        "pii",
+        "bias",
+        "medical",
+        "pharmacy",
+        "insurance",
+        "financial",
+        "ecommerce",
+        "telecom",
+        "teen-safety",
+        "realestate",
+        "guardrails-eval",
+        "coding-agent:core",
+        "coding-agent:all",
+    }
+)
+_FRAMEWORK_ALIAS_PREFIXES = (
+    "owasp:",
+    "nist:",
+    "mitre:",
+    "eu:",
+    "iso:",
+    "dod:",
 )
 
 # Unaligned harmful plugins use promptfoo's hosted /task/harmful endpoint.
@@ -235,6 +267,26 @@ def _is_remote_only_plugin(plugin_id: str) -> bool:
     return any(plugin_id.startswith(prefix) for prefix in _REMOTE_ONLY_PLUGIN_PREFIXES)
 
 
+def _plugin_id(plugin: Any) -> str:
+    """Extract a concrete plugin id from a string or ``{"id": ...}`` object."""
+    if isinstance(plugin, str):
+        pid = plugin.strip()
+        if not pid:
+            raise ValueError("promptfoo-redteam plugin id must be a non-empty string")
+        return pid
+    if isinstance(plugin, dict):
+        pid = plugin.get("id")
+        if not isinstance(pid, str) or not pid.strip():
+            raise ValueError(
+                "promptfoo-redteam plugin objects require a non-empty string 'id'"
+            )
+        return pid.strip()
+    raise ValueError(
+        "promptfoo-redteam plugins must be strings or objects with an 'id' field; "
+        f"got {type(plugin).__name__}"
+    )
+
+
 def _strategy_id(strategy: Any) -> str | None:
     """Extract a strategy id from a string or ``{"id": ...}`` object."""
     if isinstance(strategy, str):
@@ -245,8 +297,26 @@ def _strategy_id(strategy: Any) -> str | None:
     return None
 
 
-def _validate_redteam_selection(plugin_ids: list[str], strategies: list[Any]) -> None:
-    """Reject remote-only plugins/strategies that depend on api.promptfoo.app."""
+def _is_collection_or_framework_alias(plugin_id: str) -> bool:
+    """Return True for selectors promptfoo expands after our literal-id check."""
+    if plugin_id in _PLUGIN_COLLECTIONS or plugin_id == "gdpr":
+        return True
+    return any(plugin_id.startswith(prefix) for prefix in _FRAMEWORK_ALIAS_PREFIXES)
+
+
+def _validate_redteam_selection(plugins: list[Any], strategies: list[Any]) -> list[str]:
+    """Reject remote-only / expandable selectors; return normalized plugin ids."""
+    plugin_ids = [_plugin_id(plugin) for plugin in plugins]
+
+    expandable = sorted({pid for pid in plugin_ids if _is_collection_or_framework_alias(pid)})
+    if expandable:
+        raise ValueError(
+            "promptfoo-redteam requires concrete plugin IDs; collections and "
+            f"framework aliases are rejected because promptfoo expands them to "
+            f"remote-only plugins under the hood: {expandable}. List "
+            "local-capable plugin IDs explicitly (see provider.yaml)."
+        )
+
     remote_plugins = sorted({pid for pid in plugin_ids if _is_remote_only_plugin(pid)})
     if remote_plugins:
         raise ValueError(
@@ -269,6 +339,49 @@ def _validate_redteam_selection(plugin_ids: list[str], strategies: list[Any]) ->
             f"generation or are not in the local allowlist: {remote_strategies}. "
             f"Allowed strategies: {sorted(_LOCAL_STRATEGY_IDS)}."
         )
+    return plugin_ids
+
+
+def _generated_plugin_counts(pf_config: dict[str, Any]) -> dict[str, int]:
+    """Count generated tests per pluginId from a post-``redteam generate`` config."""
+    counts: dict[str, int] = {}
+    for test in pf_config.get("tests") or []:
+        if not isinstance(test, dict):
+            continue
+        meta = test.get("metadata") or {}
+        if not isinstance(meta, dict):
+            continue
+        plugin_id = meta.get("pluginId")
+        if isinstance(plugin_id, str) and plugin_id:
+            counts[plugin_id] = counts.get(plugin_id, 0) + 1
+    return counts
+
+
+def _assert_redteam_plugin_coverage(
+    requested_plugin_ids: list[str], config_path: Path
+) -> dict[str, int]:
+    """Fail if any requested plugin produced zero tests after ``redteam generate``.
+
+    Collections/aliases are rejected up front; this catches remote-only plugins
+    that slip through, dataset download failures, and future plugin ids that
+    return empty under ``PROMPTFOO_DISABLE_REMOTE_GENERATION``.
+    """
+    written = yaml.safe_load(config_path.read_text()) or {}
+    if not isinstance(written, dict):
+        raise RuntimeError(
+            f"promptfoo redteam generate wrote invalid config at {config_path}"
+        )
+    generated = _generated_plugin_counts(written)
+    missing = [pid for pid in requested_plugin_ids if generated.get(pid, 0) == 0]
+    if missing:
+        raise RuntimeError(
+            "promptfoo redteam generate produced zero tests for plugins: "
+            f"{missing}. Generated counts: {dict(sorted(generated.items()))}. "
+            "With hosted inference disabled this usually means the plugin has "
+            "no local generator, a dataset download failed, or generation "
+            "returned empty. Refusing partial / vacuous coverage."
+        )
+    return generated
 
 
 # ---------------------------------------------------------------------------
@@ -419,10 +532,10 @@ def _build_redteam_config(
     params = config.parameters or {}
 
     purpose = params.get("purpose", "An AI assistant")
-    plugin_ids = list(params.get("plugins") or _OWASP_DEFAULT_PLUGINS)
+    raw_plugins = list(params.get("plugins") or _OWASP_DEFAULT_PLUGINS)
     strategies = _without_connection_options(list(params.get("strategies") or []))
     num_tests = int(params.get("num_tests_per_plugin", 5))
-    _validate_redteam_selection(plugin_ids, strategies)
+    plugin_ids = _validate_redteam_selection(raw_plugins, strategies)
 
     plugins = [{"id": pid, "numTests": num_tests} for pid in plugin_ids]
 
@@ -470,7 +583,6 @@ def _promptfoo_env(
     env["PROMPTFOO_DISABLE_TELEMETRY"] = "1"
     env["PROMPTFOO_DISABLE_UPDATE"] = "1"
     env["PROMPTFOO_DISABLE_SHARING"] = "1"
-    env["PROMPTFOO_SELF_HOSTED"] = "1"
     if api_key:
         env["OPENAI_API_KEY"] = api_key
     if base_url:
@@ -822,6 +934,11 @@ class PromptfooAdapter(FrameworkAdapter):
                         f"promptfoo redteam generate failed (exit {gen_result.returncode})\n"
                         f"stdout: {gen_result.stdout}\nstderr: {gen_result.stderr}"
                     )
+                requested_plugins = [
+                    p["id"] for p in (pf_config.get("redteam") or {}).get("plugins") or []
+                    if isinstance(p, dict) and isinstance(p.get("id"), str)
+                ]
+                _assert_redteam_plugin_coverage(requested_plugins, config_path)
 
             # Always finish with a plain `eval` writing eval.json directly via
             # -o — verified byte-identical to `export eval <id> -o eval.json`
@@ -874,19 +991,26 @@ class PromptfooAdapter(FrameworkAdapter):
             eval_json_raw = eval_json_path.read_bytes()
             eval_json = json.loads(eval_json_raw)
             evaluation_results, pass_rate, n_evaluated = _compute_metrics(eval_json)
-            if is_redteam and n_evaluated == 0:
-                raise RuntimeError(
-                    "promptfoo-redteam completed but evaluated zero tests. "
-                    "This usually means the selected plugins/strategies are "
-                    "remote-only (no local generator) or generation produced "
-                    "no cases. Refusing to report a vacuous pass rate."
-                )
 
             eval_id = eval_json.get("evalId", "unknown")
             additional_info: dict[str, Any] = {"promptfoo_eval_id": eval_id}
             if is_redteam:
                 breakdown = _compute_plugin_breakdown(eval_json)
                 additional_info.update(breakdown)
+                # Belt-and-suspenders: generation coverage is checked after
+                # `redteam generate`; also refuse eval rows that silently drop
+                # a requested plugin (aggregate pass rate would hide it).
+                requested_plugins = [
+                    p["id"] for p in (pf_config.get("redteam") or {}).get("plugins") or []
+                    if isinstance(p, dict) and isinstance(p.get("id"), str)
+                ]
+                evaluated_plugins = set((breakdown.get("pass_rate_by_plugin") or {}).keys())
+                missing_eval = [pid for pid in requested_plugins if pid not in evaluated_plugins]
+                if missing_eval:
+                    raise RuntimeError(
+                        "promptfoo-redteam eval is missing results for plugins: "
+                        f"{missing_eval}. Refusing partial / vacuous coverage."
+                    )
 
             if len(eval_json_raw) <= PROMPTFOO_EVAL_JSON_MAX_BYTES:
                 additional_info["promptfoo_eval_json"] = eval_json
