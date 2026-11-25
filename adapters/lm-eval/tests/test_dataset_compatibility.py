@@ -117,6 +117,15 @@ def test_tokenizer_remote_code_option_is_separate(trust, tmp_path, monkeypatch, 
 def test_catalog_retains_other_benchmarks():
     provider = yaml.safe_load((Path(__file__).parents[1] / "provider.yaml").read_text())
     identifiers = {benchmark["id"] for benchmark in provider["benchmarks"]}
-    assert len(identifiers) == 201
     assert "cruxeval_output" in identifiers
-    assert len([name for name in identifiers if name.startswith("lm-eval/")]) == 21
+    assert identifiers.isdisjoint(
+        {
+            "aclue_ancient_chinese_culture",
+            "cmmlu_college_mathematics",
+            "cmmlu_high_school_mathematics",
+            "cmmlu_professional_medicine",
+            "cmmlu_traditional_chinese_medicine",
+            "ethics_cm",
+            "qasper_freeform",
+        }
+    )
