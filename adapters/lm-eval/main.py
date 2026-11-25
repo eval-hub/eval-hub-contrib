@@ -60,6 +60,7 @@ from _execution import (
     build_env,
     build_model_args,
     get_lmeval_version,
+    prepare_offline_hf_datasets_cache,
     redact_params,
     run_lmeval,
 )
@@ -218,6 +219,15 @@ class LMEvalAdapter(FrameworkAdapter):
             creds = resolve_model_credentials()
             api_key = params.get("api_key") or (creds.api_key if creds else "") or ""
 
+            hf_offline = bool(params.get("hf_offline", False))
+            hf_datasets_cache = params.get("hf_datasets_cache")
+            if hf_offline:
+                cache_root = work_dir if work_dir is not None else output_dir.parent
+                hf_datasets_cache = prepare_offline_hf_datasets_cache(
+                    hf_datasets_cache, cache_root / "hf-datasets-cache"
+                )
+                logger.info("Prepared staged Hugging Face datasets cache for offline use")
+
             endpoint_url = build_endpoint_url(model_url, api_style)
             # lm_eval's chat model only accepts structured messages, and it builds
             # them only under --apply_chat_template, so a chat endpoint needs the
@@ -257,12 +267,13 @@ class LMEvalAdapter(FrameworkAdapter):
 
             env = build_env(
                 api_key=api_key,
-                hf_datasets_cache=params.get("hf_datasets_cache"),
+                hf_datasets_cache=hf_datasets_cache,
                 dataset_source=params.get("dataset_source", "hub"),
                 s3_endpoint=params.get("s3_endpoint"),
                 aws_access_key_id=params.get("aws_access_key_id"),
                 aws_secret_access_key=params.get("aws_secret_access_key"),
                 allow_code_execution=allow_code_execution,
+                hf_offline=bool(params.get("hf_offline", False)),
             )
 
             cmd = build_cmd(
@@ -425,6 +436,7 @@ class LMEvalAdapter(FrameworkAdapter):
                     "framework_version": lmeval_version,
                     "tasks": tasks,
                     "api_style": api_style,
+                    "hf_offline": hf_offline,
                     "endpoint_url": endpoint_url,
                     "num_fewshot": params.get("num_fewshot"),
                     "num_fewshot_effective": effective_shots,

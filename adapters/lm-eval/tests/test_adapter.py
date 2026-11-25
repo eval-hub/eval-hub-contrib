@@ -607,7 +607,11 @@ def test_compute_overall_score_empty_returns_none():
 
 import yaml
 
-from _execution import build_cmd, build_env
+from _execution import (
+    build_cmd,
+    build_env,
+    prepare_offline_hf_datasets_cache,
+)
 from _tasks import (
     UNSUPPORTED_BENCHMARKS,
     is_code_execution,
@@ -625,8 +629,8 @@ _OFFERED_LMEVALJOB_IDS = [i for i in _LMEVALJOB_IDS if i not in UNSUPPORTED_BENC
 
 
 def test_lmevaljob_snapshot_has_expected_size():
-    assert len(_LMEVALJOB_IDS) == 193
-    assert len(set(_LMEVALJOB_IDS)) == 193
+    assert len(_LMEVALJOB_IDS) == 194
+    assert len(set(_LMEVALJOB_IDS)) == 194
 
 
 def test_provider_yaml_exposes_every_lmevaljob_benchmark():
@@ -740,6 +744,43 @@ def test_build_env_code_eval_opt_in():
         "aws_secret_access_key": None,
     }
     assert build_env(**kw, allow_code_execution=True)["HF_ALLOW_CODE_EVAL"] == "1"
+
+
+def test_build_env_hf_offline_opt_in():
+    kw = {
+        "api_key": "k",
+        "hf_datasets_cache": "/test_data/hf-cache",
+        "dataset_source": "hub",
+        "s3_endpoint": None,
+        "aws_access_key_id": None,
+        "aws_secret_access_key": None,
+    }
+    env = build_env(**kw, hf_offline=True)
+    assert env["HF_HUB_OFFLINE"] == "1"
+    assert env["HF_DATASETS_OFFLINE"] == "1"
+    assert env["TRANSFORMERS_OFFLINE"] == "1"
+    assert env["HF_DATASETS_CACHE"] == "/test_data/hf-cache"
+
+
+def test_prepare_offline_hf_datasets_cache_copies_staged_files(tmp_path):
+    source = tmp_path / "staged-cache"
+    source.mkdir()
+    (source / "dataset.arrow").write_bytes(b"cached dataset")
+    destination = tmp_path / "writable" / "hf-cache"
+
+    result = prepare_offline_hf_datasets_cache(str(source), destination)
+
+    assert result == str(destination)
+    assert (destination / "dataset.arrow").read_bytes() == b"cached dataset"
+    assert not (source / "_temporary.lock").exists()
+
+
+def test_prepare_offline_hf_datasets_cache_requires_a_staged_cache(tmp_path):
+    with pytest.raises(ValueError, match="requires hf_datasets_cache"):
+        prepare_offline_hf_datasets_cache(None, tmp_path / "writable")
+
+    with pytest.raises(ValueError, match="staged Hugging Face datasets cache"):
+        prepare_offline_hf_datasets_cache(str(tmp_path / "missing"), tmp_path / "writable")
 
 
 @pytest.mark.integration

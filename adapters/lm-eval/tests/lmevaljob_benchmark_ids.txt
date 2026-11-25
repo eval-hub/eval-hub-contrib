@@ -155,6 +155,7 @@ leaderboard_math_hard
 bbq
 crows_pairs_english
 ethics_cm
+ethics_justice
 toxigen
 truthfulqa_mc1
 bigbench_hhh_alignment_multiple_choice
