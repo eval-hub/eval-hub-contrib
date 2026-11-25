@@ -24,15 +24,23 @@ from evalhub.adapter.models.job import (
     OCIArtifactResult,
 )
 from evalhub.models.api import OCICoordinates
+import yaml
 from main import (
     PromptfooAdapter,
+    _OWASP_DEFAULT_PLUGINS,
+    _assert_redteam_plugin_coverage,
     _build_eval_config,
     _build_evaluate_options,
     _build_redteam_config,
     _build_target_provider,
     _compute_metrics,
     _compute_plugin_breakdown,
+    _generated_plugin_counts,
+    _is_remote_only_plugin,
+    _plugin_id,
+    _promptfoo_env,
     _resolve_api_key,
+    _validate_redteam_selection,
 )
 
 # ---------------------------------------------------------------------------
@@ -64,6 +72,36 @@ def _eval_json(
         },
         "config": {},
     }
+
+
+def _simulate_redteam_generate_w(args: list[str], *, only: list[str] | None = None) -> list[str]:
+    """Mimic ``promptfoo redteam generate -w`` by writing tests into the config."""
+    config_path = Path(args[args.index("-c") + 1])
+    cfg = yaml.safe_load(config_path.read_text()) or {}
+    plugin_ids = [
+        p["id"]
+        for p in (cfg.get("redteam") or {}).get("plugins") or []
+        if isinstance(p, dict) and isinstance(p.get("id"), str)
+    ]
+    write_ids = only if only is not None else plugin_ids
+    cfg["tests"] = [
+        {
+            "vars": {"prompt": f"generated-{pid}"},
+            "metadata": {"pluginId": pid, "severity": "medium"},
+        }
+        for pid in write_ids
+    ]
+    config_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+    return plugin_ids
+
+
+def _eval_json_for_plugins(plugin_ids: list[str]) -> dict:
+    """Eval fixture with one passing row per plugin (satisfies coverage checks)."""
+    rows = [
+        {"success": True, "score": 1, "metadata": {"pluginId": pid, "severity": "medium"}}
+        for pid in plugin_ids
+    ]
+    return _eval_json(len(plugin_ids), 0, 0, plugin_rows=rows)
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +238,7 @@ def test_build_eval_config_passthrough_preserves_other_evaluate_options():
 
 
 def test_build_redteam_config_defaults():
-    """Default redteam config uses OWASP plugin set, purpose='An AI assistant', numTests=5."""
+    """Default redteam config uses local OWASP plugin set, purpose='An AI assistant', numTests=5."""
     config = MagicMock()
     config.id = "job-1"
     config.parameters = {}
@@ -211,8 +249,11 @@ def test_build_redteam_config_defaults():
     assert pf_config["targets"] == [provider]
     assert pf_config["redteam"]["purpose"] == "An AI assistant"
     assert pf_config["redteam"]["numTests"] == 5
-    assert len(pf_config["redteam"]["plugins"]) > 0
+    assert [p["id"] for p in pf_config["redteam"]["plugins"]] == list(
+        _OWASP_DEFAULT_PLUGINS
+    )
     assert all(p["numTests"] == 5 for p in pf_config["redteam"]["plugins"])
+    assert not any(_is_remote_only_plugin(p["id"]) for p in pf_config["redteam"]["plugins"])
     assert pf_config["evaluateOptions"] == {"maxConcurrency": 4, "timeoutMs": 120_000}
 
 
@@ -228,6 +269,91 @@ def test_build_redteam_config_custom_plugins():
     pf_config = _build_redteam_config(config, {"id": "p"}, {})
     assert pf_config["redteam"]["plugins"] == [{"id": "sql-injection", "numTests": 2}]
     assert pf_config["redteam"]["purpose"] == "a bank assistant"
+
+
+def test_build_redteam_config_rejects_remote_only_plugins():
+    """Remote-only plugins that depend on api.promptfoo.app are rejected."""
+    config = MagicMock()
+    config.id = "job-1"
+    config.parameters = {"plugins": ["sql-injection", "rag-poisoning", "ssrf"]}
+    with pytest.raises(ValueError, match="remote-only plugins"):
+        _build_redteam_config(config, {"id": "p"}, {})
+
+
+def test_validate_redteam_selection_rejects_remote_strategies():
+    """Hosted strategies such as jailbreak:meta are rejected."""
+    with pytest.raises(ValueError, match="strategies"):
+        _validate_redteam_selection(["sql-injection"], ["jailbreak:meta"])
+
+
+def test_validate_redteam_selection_rejects_collections_and_aliases():
+    """Collections/framework aliases expand after our check — reject them."""
+    with pytest.raises(ValueError, match="concrete plugin IDs"):
+        _validate_redteam_selection(["owasp:llm:01", "harmful"], [])
+
+
+def test_validate_redteam_selection_normalizes_plugin_dicts():
+    """Plugin objects with an id are accepted; bare dicts error cleanly."""
+    assert _validate_redteam_selection(
+        [{"id": "sql-injection"}, "shell-injection"], []
+    ) == ["sql-injection", "shell-injection"]
+    with pytest.raises(ValueError, match="non-empty string 'id'"):
+        _validate_redteam_selection([{"config": {}}], [])
+    with pytest.raises(ValueError, match="strings or objects"):
+        _validate_redteam_selection([42], [])  # type: ignore[list-item]
+
+
+def test_teen_safety_plugins_are_not_remote_only():
+    """teen-safety:* has local generators in promptfoo; do not over-reject."""
+    assert not _is_remote_only_plugin("teen-safety:dangerous-content")
+    assert _is_remote_only_plugin("coding-agent:repo-prompt-injection")
+
+
+def test_promptfoo_version_matches_containerfile():
+    """Keep main.py PROMPTFOO_VERSION aligned with the image pin."""
+    import main as main_mod
+    import re
+
+    containerfile = (Path(__file__).resolve().parents[1] / "Containerfile").read_text()
+    match = re.search(r"^ARG PROMPTFOO_VERSION=(\S+)", containerfile, re.MULTILINE)
+    assert match, "Containerfile missing ARG PROMPTFOO_VERSION"
+    assert match.group(1) == main_mod.PROMPTFOO_VERSION
+
+
+def test_assert_redteam_plugin_coverage_detects_partial_drop(tmp_path):
+    """Partial generation (some plugins empty) must fail, not report pass rate."""
+    cfg = {
+        "redteam": {
+            "plugins": [
+                {"id": "sql-injection", "numTests": 1},
+                {"id": "shell-injection", "numTests": 1},
+            ]
+        },
+        "tests": [
+            {"vars": {}, "metadata": {"pluginId": "sql-injection"}},
+        ],
+    }
+    path = tmp_path / "promptfooconfig.yaml"
+    path.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(RuntimeError, match="shell-injection"):
+        _assert_redteam_plugin_coverage(
+            ["sql-injection", "shell-injection"], path
+        )
+    assert _generated_plugin_counts(cfg) == {"sql-injection": 1}
+    assert _plugin_id({"id": "sql-injection"}) == "sql-injection"
+
+
+def test_promptfoo_env_forces_cloud_disable_flags(monkeypatch):
+    """Adapter forces the offline/hosted-inference kill-switch set."""
+    monkeypatch.setenv("PROMPTFOO_DISABLE_REMOTE_GENERATION", "0")
+    monkeypatch.setenv("PROMPTFOO_DISABLE_TELEMETRY", "0")
+    env = _promptfoo_env()
+    assert env["PROMPTFOO_DISABLE_REMOTE_GENERATION"] == "1"
+    assert env["PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION"] == "1"
+    assert env["PROMPTFOO_DISABLE_TELEMETRY"] == "1"
+    assert env["PROMPTFOO_DISABLE_UPDATE"] == "1"
+    assert env["PROMPTFOO_DISABLE_SHARING"] == "1"
+    assert "PROMPTFOO_SELF_HOSTED" not in env
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +500,11 @@ def test_promptfoo_redteam_happy_path(monkeypatch):
 
     config = copy.deepcopy(adapter.job_spec)
     config.benchmark_id = "promptfoo-redteam"
-    config.parameters = {"plugins": ["sql-injection"], "num_tests_per_plugin": 1}
+    config.parameters = {
+        "plugins": ["sql-injection"],
+        "num_tests_per_plugin": 1,
+        "generation_provider": "openai:chat:internal-model",
+    }
 
     rows = [
         {
@@ -393,6 +523,7 @@ def test_promptfoo_redteam_happy_path(monkeypatch):
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
         """Stub for _run_promptfoo_cli."""
         if args[0] == "redteam" and args[1] == "generate":
+            _simulate_redteam_generate_w(args)
             return _FakeCompletedProcess(0, "")
         if args[0] == "eval":
             out_path = Path(args[args.index("-o") + 1])
@@ -416,6 +547,63 @@ def test_promptfoo_redteam_happy_path(monkeypatch):
 
 
 @pytest.mark.integration
+def test_promptfoo_redteam_requires_generation_provider(monkeypatch):
+    """Red-team jobs must set generation_provider; hosted inference is disabled."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam"
+    config.parameters = {"plugins": ["sql-injection"], "num_tests_per_plugin": 1}
+
+    import main as main_mod
+
+    monkeypatch.setattr(
+        main_mod,
+        "_run_promptfoo_cli",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("CLI must not run")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="generation_provider"):
+        adapter.run_benchmark_job(config, callbacks)
+
+    failed_statuses = [
+        c
+        for c in callbacks.report_status.call_args_list
+        if c.args[0].status == JobStatus.FAILED
+    ]
+    assert len(failed_statuses) == 1
+
+
+@pytest.mark.integration
+def test_promptfoo_redteam_fails_on_partial_plugin_coverage(monkeypatch):
+    """If generate drops any requested plugin, the job fails before eval."""
+    adapter = PromptfooAdapter(job_spec_path="meta/job.json")
+    callbacks = create_autospec(JobCallbacks)
+    config = copy.deepcopy(adapter.job_spec)
+    config.benchmark_id = "promptfoo-redteam"
+    config.parameters = {
+        "plugins": ["sql-injection", "shell-injection"],
+        "num_tests_per_plugin": 1,
+        "generation_provider": "openai:chat:internal-model",
+    }
+
+    import main as main_mod
+
+    def fake_run_cli(args, cwd, timeout=3600, **kwargs):
+        if args[0] == "redteam" and args[1] == "generate":
+            # Simulate remote-only / download failure leaving one plugin empty.
+            _simulate_redteam_generate_w(args, only=["sql-injection"])
+            return _FakeCompletedProcess(0, "")
+        raise AssertionError(f"eval must not run after coverage failure: {args}")
+
+    monkeypatch.setattr(main_mod, "_run_promptfoo_cli", fake_run_cli)
+    with pytest.raises(RuntimeError, match="shell-injection"):
+        adapter.run_benchmark_job(config, callbacks)
+
+
+@pytest.mark.integration
 def test_promptfoo_redteam_passes_grader_when_generation_provider_set(monkeypatch):
     """Regression test for a live-cluster finding (2026-09-21): promptfoo's
     redteam GRADING step uses its own hardcoded default model, entirely
@@ -434,7 +622,7 @@ def test_promptfoo_redteam_passes_grader_when_generation_provider_set(monkeypatc
         "generation_provider": "openai:chat:internal-model",
     }
 
-    eval_json = _eval_json(1, 0, 0)
+    eval_json = _eval_json_for_plugins(["sql-injection"])
     seen_eval_args = []
 
     import main as main_mod
@@ -444,6 +632,7 @@ def test_promptfoo_redteam_passes_grader_when_generation_provider_set(monkeypatc
         if args[0] == "redteam" and args[1] == "generate":
             assert "--provider" in args
             assert args[args.index("--provider") + 1] == "openai:chat:internal-model"
+            _simulate_redteam_generate_w(args)
             return _FakeCompletedProcess(0, "")
         if args[0] == "eval":
             seen_eval_args.extend(args)
@@ -477,7 +666,7 @@ def test_promptfoo_redteam_propagates_generation_provider_url(monkeypatch):
 
     }
 
-    eval_json = _eval_json(1, 0, 0)
+    eval_json = _eval_json_for_plugins(["sql-injection"])
     captured_kwargs = []
 
     import main as main_mod
@@ -488,6 +677,7 @@ def test_promptfoo_redteam_propagates_generation_provider_url(monkeypatch):
         """Stub for _run_promptfoo_cli."""
         captured_kwargs.append(kwargs)
         if args[0] == "redteam" and args[1] == "generate":
+            _simulate_redteam_generate_w(args)
             return _FakeCompletedProcess(0, "")
         if args[0] == "eval":
             out_path = Path(args[args.index("-o") + 1])
@@ -521,7 +711,7 @@ def test_promptfoo_redteam_generation_provider_url_defaults_to_model_url(monkeyp
         "generation_provider": "openai:chat:some-model",
     }
 
-    eval_json = _eval_json(1, 0, 0)
+    eval_json = _eval_json_for_plugins(["sql-injection"])
     captured_kwargs = []
 
     import main as main_mod
@@ -530,6 +720,7 @@ def test_promptfoo_redteam_generation_provider_url_defaults_to_model_url(monkeyp
         """Stub for _run_promptfoo_cli."""
         captured_kwargs.append(kwargs)
         if args[0] == "redteam" and args[1] == "generate":
+            _simulate_redteam_generate_w(args)
             return _FakeCompletedProcess(0, "")
         if args[0] == "eval":
             out_path = Path(args[args.index("-o") + 1])
@@ -553,7 +744,7 @@ def test_promptfoo_eval_does_not_pass_grader_flag(monkeypatch):
     config = copy.deepcopy(adapter.job_spec)
     config.benchmark_id = "promptfoo-eval"
 
-    eval_json = _eval_json(1, 0, 0)
+    eval_json = _eval_json_for_plugins(["sql-injection"])
     seen_eval_args = []
 
     import main as main_mod
@@ -638,7 +829,7 @@ def test_promptfoo_max_concurrency_passed_to_cli(monkeypatch):
     config.benchmark_id = "promptfoo-eval"
     config.parameters = {**config.parameters, "max_concurrency": 8}
 
-    eval_json = _eval_json(1, 0, 0)
+    eval_json = _eval_json_for_plugins(["sql-injection"])
     seen_eval_args: list[str] = []
 
     import main as main_mod
@@ -670,7 +861,7 @@ def test_promptfoo_persisting_artifacts_phase_reported_without_oci(monkeypatch):
     config.benchmark_id = "promptfoo-eval"
     assert config.exports is None
 
-    eval_json = _eval_json(1, 0, 0)
+    eval_json = _eval_json_for_plugins(["sql-injection"])
 
     import main as main_mod
 
@@ -708,7 +899,7 @@ def test_promptfoo_oci_export_excludes_config_with_credentials(monkeypatch, tmp_
         )
     )
 
-    eval_json = _eval_json(1, 0, 0)
+    eval_json = _eval_json_for_plugins(["sql-injection"])
 
     import main as main_mod
 
@@ -753,7 +944,7 @@ def test_promptfoo_eval_json_preserved_in_metadata_beyond_size_gate(monkeypatch)
     config = copy.deepcopy(adapter.job_spec)
     config.benchmark_id = "promptfoo-eval"
 
-    eval_json = _eval_json(1, 0, 0)
+    eval_json = _eval_json_for_plugins(["sql-injection"])
 
     import main as main_mod
 
@@ -813,6 +1004,7 @@ def test_promptfoo_redteam_exit_code_100_is_not_fatal(monkeypatch):
     def fake_run_cli(args, cwd, timeout=3600, **kwargs):
         """Stub for _run_promptfoo_cli."""
         if args[0] == "redteam" and args[1] == "generate":
+            _simulate_redteam_generate_w(args)
             return _FakeCompletedProcess(0, "")
         if args[0] == "eval":
             out_path = Path(args[args.index("-o") + 1])
@@ -866,7 +1058,7 @@ def test_promptfoo_redteam_propagates_generation_provider_api_key(monkeypatch):
 
     }
 
-    eval_json = _eval_json(1, 0, 0)
+    eval_json = _eval_json_for_plugins(["sql-injection"])
     captured_kwargs = []
 
     import main as main_mod
@@ -877,6 +1069,7 @@ def test_promptfoo_redteam_propagates_generation_provider_api_key(monkeypatch):
         """Stub for _run_promptfoo_cli."""
         captured_kwargs.append(kwargs)
         if args[0] == "redteam" and args[1] == "generate":
+            _simulate_redteam_generate_w(args)
             return _FakeCompletedProcess(0, "")
         if args[0] == "eval":
             out_path = Path(args[args.index("-o") + 1])
@@ -909,7 +1102,7 @@ def test_promptfoo_redteam_generation_ignores_env_key(monkeypatch):
         "generation_provider": "openai:chat:external-model",
     }
 
-    eval_json = _eval_json(1, 0, 0)
+    eval_json = _eval_json_for_plugins(["sql-injection"])
     captured_kwargs = []
 
     import main as main_mod
@@ -920,6 +1113,7 @@ def test_promptfoo_redteam_generation_ignores_env_key(monkeypatch):
         """Stub for _run_promptfoo_cli."""
         captured_kwargs.append(kwargs)
         if args[0] == "redteam" and args[1] == "generate":
+            _simulate_redteam_generate_w(args)
             return _FakeCompletedProcess(0, "")
         if args[0] == "eval":
             out_path = Path(args[args.index("-o") + 1])
@@ -948,7 +1142,7 @@ def test_promptfoo_redteam_generation_ignores_target_env_key(monkeypatch):
         "generation_provider": "openai:chat:internal-model",
     }
 
-    eval_json = _eval_json(1, 0, 0)
+    eval_json = _eval_json_for_plugins(["sql-injection"])
     captured_kwargs = []
 
     import main as main_mod
@@ -960,6 +1154,7 @@ def test_promptfoo_redteam_generation_ignores_target_env_key(monkeypatch):
         """Stub for _run_promptfoo_cli."""
         captured_kwargs.append(kwargs)
         if args[0] == "redteam" and args[1] == "generate":
+            _simulate_redteam_generate_w(args)
             return _FakeCompletedProcess(0, "")
         if args[0] == "eval":
             out_path = Path(args[args.index("-o") + 1])
@@ -997,18 +1192,24 @@ def test_promptfoo_redteam_ignores_inline_connections(monkeypatch, role_entries)
     calls = []
 
     def run(args, cwd, **kwargs):
-        import yaml
-
         calls.append(kwargs)
         generated = yaml.safe_load((cwd / "promptfooconfig.yaml").read_text())
         assert "legacy" not in json.dumps(generated)
+        if args[0] == "redteam" and args[1] == "generate":
+            plugin_ids = _simulate_redteam_generate_w(args)
+            run.plugin_ids = plugin_ids  # type: ignore[attr-defined]
+            return _FakeCompletedProcess(0, "")
         if args[0] == "eval":
-            Path(args[args.index("-o") + 1]).write_text(json.dumps(_eval_json(1, 0, 0)))
-        return _FakeCompletedProcess(0, "")
+            plugin_ids = getattr(run, "plugin_ids", list(_OWASP_DEFAULT_PLUGINS))
+            Path(args[args.index("-o") + 1]).write_text(
+                json.dumps(_eval_json_for_plugins(plugin_ids))
+            )
+            return _FakeCompletedProcess(0, "")
+        raise AssertionError(f"unexpected promptfoo invocation: {args}")
 
     monkeypatch.setattr("main._run_promptfoo_cli", run)
     result = adapter.run_benchmark_job(config, create_autospec(JobCallbacks))
-    assert result.num_examples_evaluated == 1
+    assert result.num_examples_evaluated == len(_OWASP_DEFAULT_PLUGINS)
     for call, role in zip(calls, ("generation_provider", "judge"), strict=True):
         assert call["api_key"] == entries.get(f"{role}_api-key", "api-key:ref")
         assert call["base_url"].rstrip("/") == entries.get(f"{role}_url", config.model.url).rstrip("/")
