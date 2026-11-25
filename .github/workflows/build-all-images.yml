@@ -28,6 +28,8 @@ jobs:
           - lighteval
           - mteb
           - nemo-guardrails
+          - promptfoo
+          - pyrit
           - ragas
           - ruler
           - skillevaluator
