@@ -14,6 +14,14 @@ WORKDIR /app
 
 USER 0
 
+# Strip unused native/tooling binaries that fail check-payload (static
+# esbuild, OpenAI Codex musl binaries, Playwright cache, Claude agent
+# SDK). EvalHub only needs the promptfoo CLI for eval/redteam; these
+# transitive packages are not invoked by adapters/promptfoo/main.py.
+#
+# PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 stops Chromium/ffmpeg from being
+# fetched during npm install. Also rm both /root and common cache
+# paths in case a prior layer or postinstall still wrote them.
 RUN microdnf -y module enable nodejs:24 \
     && microdnf -y install \
         nodejs \
@@ -22,8 +30,16 @@ RUN microdnf -y module enable nodejs:24 \
         shadow-utils \
     && microdnf clean all \
     && ln -sf /usr/bin/python3.12 /usr/bin/python \
-    && npm install -g "promptfoo@${PROMPTFOO_VERSION}" \
+    && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g "promptfoo@${PROMPTFOO_VERSION}" \
     && npm cache clean --force \
+    && rm -rf \
+        /root/.cache/ms-playwright \
+        /opt/app-root/src/.cache/ms-playwright \
+        /usr/local/lib/node_modules/promptfoo/node_modules/@esbuild \
+        /usr/local/lib/node_modules/promptfoo/node_modules/esbuild \
+        /usr/local/lib/node_modules/promptfoo/node_modules/@openai/codex-linux-* \
+        /usr/local/lib/node_modules/promptfoo/node_modules/@openai/codex-security \
+        /usr/local/lib/node_modules/promptfoo/node_modules/@anthropic-ai/claude-agent-sdk-linux-* \
     && useradd -u 1001 -g 0 -M -d /app -s /sbin/nologin default
 
 COPY requirements.txt .

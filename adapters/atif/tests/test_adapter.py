@@ -1169,6 +1169,149 @@ def test_discover_directory(tmp_path: Path):
     assert len(files) == 2
 
 
+def test_manifest_selects_files_and_preserves_manifest_order(tmp_path: Path):
+    import hashlib
+
+    first = _valid_trajectory() | {"trajectory_id": "first"}
+    second = _valid_trajectory() | {"trajectory_id": "second"}
+    first_path = tmp_path / "first.json"
+    second_path = tmp_path / "second.json"
+    first_bytes = (json.dumps(first, indent=2) + "\n").encode()
+    second_bytes = (json.dumps(second, indent=2) + "\n").encode()
+    first_path.write_bytes(first_bytes)
+    second_path.write_bytes(second_bytes)
+    (tmp_path / "unlisted.json").write_text("not an ATIF trajectory")
+    rows = [
+        {
+            "trajectory_path": "second.json",
+            "_ng_task_index": 4,
+            "_ng_rollout_index": 1,
+            "expected_sha256": hashlib.sha256(second_bytes).hexdigest(),
+        },
+        {
+            "trajectory_path": "first.json",
+            "_ng_task_index": 3,
+            "_ng_rollout_index": 0,
+            "expected_sha256": hashlib.sha256(first_bytes).hexdigest(),
+        },
+    ]
+    (tmp_path / "manifest.jsonl").write_text(
+        "".join(
+            json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n"
+            for row in rows
+        )
+    )
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+
+    files = adapter._discover_atif_files(str(tmp_path), max_files=2)
+    loaded = adapter._load_trajectories(files, max_files=2)
+
+    assert [path.name for path in files] == ["second.json", "first.json"]
+    assert [item["trajectory_id"] for item in loaded] == ["second", "first"]
+    assert [
+        item["_provenance"]["nemo_gym_manifest"]["task_index"] for item in loaded
+    ] == [4, 3]
+    assert all(
+        item["_provenance"]["nemo_gym_manifest"]["digest_verified"] for item in loaded
+    )
+
+
+def test_manifest_digest_mismatch_is_rejected(tmp_path: Path):
+    trajectory = _valid_trajectory()
+    trajectory_path = _write_json(tmp_path / "trajectory.json", trajectory)
+    (tmp_path / "manifest.jsonl").write_text(
+        json.dumps(
+            {
+                "trajectory_path": trajectory_path.name,
+                "_ng_task_index": 0,
+                "_ng_rollout_index": 0,
+                "expected_sha256": "0" * 64,
+            }
+        )
+        + "\n"
+    )
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+    files = adapter._discover_atif_files(str(tmp_path))
+
+    with pytest.raises(ATIFLoadError, match="SHA-256 mismatch"):
+        adapter._load_trajectories(files, invalid_input_policy="fail_fast")
+
+
+def test_a_mismatched_digest_is_not_reported_as_verified(tmp_path: Path):
+    trajectory_path = _write_json(tmp_path / "trajectory.json", _valid_trajectory())
+    (tmp_path / "manifest.jsonl").write_text(
+        json.dumps(
+            {
+                "trajectory_path": trajectory_path.name,
+                "_ng_task_index": 0,
+                "_ng_rollout_index": 0,
+                "expected_sha256": "0" * 64,
+            }
+        )
+        + "\n"
+    )
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+    files = adapter._discover_atif_files(str(tmp_path))
+
+    loaded = adapter._load_trajectories(
+        files,
+        invalid_input_policy="skip_invalid",
+        partial_result_policy="skip_failed_trajectory",
+    )
+
+    assert loaded == []
+    outcome = adapter._input_outcomes[0]
+    assert outcome["status"] == "failed"
+    assert outcome["nemo_gym_manifest"]["digest_verified"] is False
+    assert outcome["nemo_gym_manifest"]["expected_sha256"] == "0" * 64
+
+
+def test_manifest_rejects_path_traversal(tmp_path: Path):
+    (tmp_path / "manifest.jsonl").write_text(
+        json.dumps(
+            {
+                "trajectory_path": "../outside.json",
+                "_ng_task_index": 0,
+                "_ng_rollout_index": 0,
+                "expected_sha256": "0" * 64,
+            }
+        )
+        + "\n"
+    )
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+
+    with pytest.raises(ATIFLoadError, match="unsafe manifest path"):
+        adapter._discover_atif_files(str(tmp_path))
+
+
+def test_manifest_must_be_a_readable_regular_file(tmp_path: Path):
+    (tmp_path / "manifest.jsonl").mkdir()
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+
+    with pytest.raises(ATIFLoadError, match="cannot read ATIF manifest"):
+        adapter._discover_atif_files(str(tmp_path))
+
+
+def test_manifest_rejects_symlinked_trajectory(tmp_path: Path):
+    target = tmp_path / "target.json"
+    target.write_text(json.dumps(_valid_trajectory()))
+    (tmp_path / "linked.json").symlink_to(target)
+    (tmp_path / "manifest.jsonl").write_text(
+        json.dumps(
+            {
+                "trajectory_path": "linked.json",
+                "_ng_task_index": 0,
+                "_ng_rollout_index": 0,
+            }
+        )
+        + "\n"
+    )
+    adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
+
+    with pytest.raises(ATIFLoadError, match="symlinks are not allowed"):
+        adapter._discover_atif_files(str(tmp_path))
+
+
 def _valid_trajectory() -> dict:
     return json.loads(
         (Path(__file__).resolve().parent / "fixtures" / "trajectory.json").read_text()
@@ -1254,7 +1397,10 @@ def test_load_rejects_malformed_json(tmp_path: Path):
     [
         ("malformed_trajectory.json", "invalid ATIF trajectory"),
         ("invalid_trajectory.json", "invalid_schema"),
-        ("unsupported_schema_version.json", "unsupported schema_version"),
+        (
+            "unsupported_schema_version.json",
+            "supported range is ATIF-v1.0 through ATIF-v1.8",
+        ),
     ],
 )
 def test_representative_invalid_fixtures_have_clear_diagnostics(
@@ -1283,7 +1429,9 @@ def test_load_rejects_unsupported_schema_version(tmp_path: Path):
     trajectory_file = _write_json(tmp_path / "unsupported-version.json", trajectory)
     adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
 
-    with pytest.raises(ATIFLoadError, match="unsupported schema_version"):
+    with pytest.raises(
+        ATIFLoadError, match="supported range is ATIF-v1.0 through ATIF-v1.8"
+    ):
         adapter._load_trajectories([trajectory_file])
 
 
@@ -1804,12 +1952,26 @@ def test_local_judge_uses_configured_endpoint_and_ca_bundle(
     assert isinstance(client_options["verify"], ssl.SSLContext)
 
 
+def _patch_meter_provider(monkeypatch, provider) -> None:
+    """Route the adapter's meters to ``provider``.
+
+    The SDK telemetry facade gained a ``metrics`` submodule after 1.1.0; with an
+    older SDK the adapter falls back to ``opentelemetry.metrics`` directly.
+    """
+    try:
+        import evalhub.adapter.telemetry.metrics as sdk_metrics
+    except ModuleNotFoundError:
+        from opentelemetry import metrics as otel_metrics
+
+        monkeypatch.setattr(otel_metrics, "get_meter", provider.get_meter)
+    else:
+        monkeypatch.setattr(sdk_metrics, "get_meter", provider.get_meter)
+
+
 def test_judge_telemetry_exports_counts_latency_and_tokens(job_spec, monkeypatch):
     reader = InMemoryMetricReader()
     provider = MeterProvider(metric_readers=[reader])
-    monkeypatch.setattr(
-        "evalhub.adapter.telemetry.metrics.get_meter", provider.get_meter
-    )
+    _patch_meter_provider(monkeypatch, provider)
     adapter = ATIFAdapter(job_spec_path=JOB_SPEC_PATH)
 
     def response(content, prompt_tokens, completion_tokens):
@@ -1860,9 +2022,7 @@ def test_judge_telemetry_exports_counts_latency_and_tokens(job_spec, monkeypatch
 def test_judge_telemetry_records_errors_and_scoring_mode(monkeypatch):
     reader = InMemoryMetricReader()
     provider = MeterProvider(metric_readers=[reader])
-    monkeypatch.setattr(
-        "evalhub.adapter.telemetry.metrics.get_meter", provider.get_meter
-    )
+    _patch_meter_provider(monkeypatch, provider)
     telemetry = _JudgeTelemetry("job-telemetry", "custom")
     telemetry.record(12.5, success=False, error_type="timeout")
 

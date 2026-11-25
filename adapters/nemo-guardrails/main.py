@@ -25,6 +25,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 
 import jq
 import requests
@@ -38,8 +39,11 @@ from evalhub.adapter import (
     JobSpec,
     JobStatus,
     JobStatusUpdate,
+    MessageInfo,
+    OCIArtifactSpec,
 )
 from evalhub.adapter.callbacks import DefaultCallbacks
+from evalhub.adapter.mlflow import MlflowArtifact
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from tqdm import tqdm
 
@@ -823,7 +827,7 @@ def _start_server(
     if verbose:
         cmd.append("--verbose")
     if log_path is None:
-        log_path = os.path.join(os.path.dirname(config_dir), "server.log")
+        log_path = os.path.join(server_root, "server.log")
     log_file = open(log_path, "w")
     proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file)
     return proc, os.path.abspath(log_path), server_root
@@ -1376,6 +1380,15 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         start_time = time.monotonic()
         params = config.parameters or {}
+        save_samples = params.get("save_sample_results", False)
+        if type(save_samples) is not bool:
+            raise ValueError("parameters.save_sample_results must be a boolean")
+
+        local_base = self.local_jobs_base_path
+        if not save_samples and local_base:
+            # Do not expose samples from a previous local replay after opting out.
+            for name in ("sample_results.jsonl", "manifest.json"):
+                (Path(local_base) / "results" / name).unlink(missing_ok=True)
 
         nemo_config_name = params.get("nemo_config", config.benchmark_id)
         server_port = int(params.get("server_port", 9999))
@@ -1524,7 +1537,7 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
             JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)
         )
 
-        return JobResults(
+        job_results = JobResults(
             id=config.id,
             benchmark_id=config.benchmark_id,
             benchmark_index=config.benchmark_index,
@@ -1550,6 +1563,39 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
                 "parameters": params,
             },
         )
+
+        if save_samples:
+            # Classification scores match the accuracy denominator; masking uses a different observation unit.
+            if any(row.get("dataset_type") == "masking" or row.get("error") or row["predicted_blocked"] == NemoResponses.ERROR for row in results):
+                raise ValueError("Per-sample export currently requires error-free classification results")
+            records = [{"sample_id": str(i),
+                        "prediction": float((row["predicted_blocked"] != NemoResponses.ALLOW) == row["expected_blocked"])}
+                       for i, row in enumerate(results)]
+            artifacts = [
+                MlflowArtifact("sample_results.jsonl", "".join(json.dumps(row, allow_nan=False) + "\n" for row in records).encode(), "application/x-ndjson"),
+                MlflowArtifact("manifest.json", json.dumps({"primary_score": {"metric": "accuracy"}, "estimand": "mean"}).encode(), "application/json"),
+            ]
+            directory = (Path(local_base) / "results" if local_base
+                         else Path(tempfile.mkdtemp(prefix="nemo-samples-")))
+            directory.mkdir(parents=True, exist_ok=True)
+            for artifact in artifacts:
+                (directory / artifact.path).write_bytes(artifact.content)
+            job_results.evaluation_metadata["sample_results_path"] = str(directory / "sample_results.jsonl")
+            if config.exports and config.exports.oci:
+                # The OCI SDK uploads directories, so use an isolated current-run staging directory.
+                with tempfile.TemporaryDirectory(prefix="nemo-results-") as directory:
+                    for artifact in artifacts:
+                        (Path(directory) / artifact.path).write_bytes(artifact.content)
+                    job_results.oci_artifact = callbacks.create_oci_artifact(
+                        OCIArtifactSpec(files_path=Path(directory), coordinates=config.exports.oci.coordinates)
+                    )
+            if config.exports and config.exports.oci and job_results.oci_artifact is None:
+                raise RuntimeError("OCI per-sample export returned no artifact reference")
+            if config.experiment_name:
+                job_results.mlflow_run_id = callbacks.mlflow.save(job_results, config, artifacts=artifacts)
+                if not job_results.mlflow_run_id:
+                    raise RuntimeError("MLflow per-sample export returned no run ID")
+        return job_results
 
 
 # ---------------------------------------------------------------------------
@@ -1578,6 +1624,7 @@ def _default_job_spec_path() -> str:
 
 def main() -> None:
     logger.info("Starting NeMo Guardrails adapter")
+    callbacks = None
     try:
         job_spec_path = _default_job_spec_path()
         adapter = NemoGuardrailsAdapter(job_spec_path=job_spec_path)
@@ -1586,7 +1633,7 @@ def main() -> None:
             JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
         )
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
-        run_id = callbacks.mlflow.save(results, adapter.job_spec)
+        run_id = None if results.mlflow_run_id else callbacks.mlflow.save(results, adapter.job_spec)
         if run_id:
             results.mlflow_run_id = run_id
             logger.info("MLflow run created: %s", run_id)
@@ -1594,6 +1641,11 @@ def main() -> None:
         logger.info("EVALUATION COMPLETE")
     except Exception as e:
         logger.error("Evaluation failed: %s", e, exc_info=True)
+        if callbacks is not None:
+            callbacks.report_status(JobStatusUpdate(
+                status=JobStatus.FAILED,
+                error_message=MessageInfo(message=str(e), message_code="evaluation_error"),
+            ))
         raise
 
 

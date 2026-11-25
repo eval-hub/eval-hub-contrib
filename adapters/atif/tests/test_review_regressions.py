@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -10,11 +11,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 import respx
 from evalhub.adapter import DefaultCallbacks
-from evalhub.adapter.callbacks import _MlflowOps
 from evalhub.models.api import ModelConfig
 from test_adapter import JOB_SPEC_PATH, FakeCallbacks, _valid_trajectory, _write_json
 
-from input_collection import read_bounded, read_bounded_config
+from input_collection import (
+    ATIFDigestMismatchError,
+    read_bounded,
+    read_bounded_config,
+)
 from judge_auth import resolve_job_credentials
 from main import (
     ATIFAdapter,
@@ -104,6 +108,22 @@ def test_missing_task_fails_auto_but_explicit_rubric_works(adapter, monkeypatch)
         )
     )
     assert results[0]["score"] == 0.9
+
+
+def test_all_failed_trajectories_complete_unscored(adapter, monkeypatch):
+    async def failed_judge(_):
+        raise JudgeResponseError("mocked judge failure")
+
+    monkeypatch.setattr(adapter, "_judge_call", failed_judge)
+
+    # Nothing scored completes as unscored; the report carries no overall score
+    # rather than a fabricated 0.0.
+    scored = asyncio.run(
+        adapter._score_trajectories(
+            [_valid_trajectory()], 1, partial_result_policy="skip_failed_trajectory"
+        )
+    )
+    assert [item["status"] for item in scored] == ["failed"]
 
 
 def test_real_harbor_task_history_and_id(adapter, monkeypatch):
@@ -198,9 +218,7 @@ def test_sdk_counts_and_completion_artifact_index(adapter, job_spec, monkeypatch
     job_spec.parameters["training_threshold"] = 0.8
     callbacks = FakeCallbacks()
     result = adapter.run_benchmark_job(job_spec, callbacks)
-    saved_result, saved_spec, artifacts = callbacks.mlflow.calls[0]
-    params, _ = _MlflowOps._build_params_metrics(saved_result, saved_spec)
-    assert {p.key: p.value for p in params}["atif.training_eligible_count"] == "1"
+    _, _, artifacts = callbacks.mlflow.calls[0]
     http = MagicMock()
     with patch.object(DefaultCallbacks, "_create_http_client", return_value=http):
         wire = DefaultCallbacks(
@@ -242,8 +260,8 @@ def test_partial_and_all_failed_combinations(adapter, monkeypatch, aggregation):
     )
     assert scored[0]["status"] == "failed" and scored[1]["status"] == "scored"
     assert "sensitive" not in json.dumps(scored)
-    with pytest.raises(JudgeResponseError, match="No usable"):
-        asyncio.run(adapter._score_trajectories([failed], 2, **options))
+    all_failed = asyncio.run(adapter._score_trajectories([failed], 2, **options))
+    assert [item["status"] for item in all_failed] == ["failed"]
 
 
 @pytest.mark.parametrize("depth", [0, 1])
@@ -337,8 +355,9 @@ def test_cohorts_are_disjoint_and_embedded_selections_addressable(
     assert eligible["manifest"][0]["selector"] == "/subagent_trajectories/0"
     assert eligible["manifest"][0]["source_uri"].endswith("trajectory.json")
     assert eligible["trajectories"][0]["parent_trajectory_id"] == "t1"
-    params, _ = _MlflowOps._build_params_metrics(*callbacks.mlflow.calls[0][:2])
-    assert {p.key: p.value for p in params}["atif.training_eligible_count"] == "1"
+    # Training-selection counts ride on the artifact index: the adapter cannot
+    # set MLflow params itself, and released SDKs do not project them.
+    assert eligible["manifest"][0]["trajectory_id"] == "child"
 
 
 def test_mixed_input_outcomes_and_collection_budgets(adapter, tmp_path):
@@ -625,3 +644,370 @@ def test_projection_omits_media_and_producer_extras():
     assert projected["observation"]["results"][0]["content"] == "result"
     assert "private" not in json.dumps(projected)
     assert "prompt_token_ids" not in json.dumps(projected)
+
+
+# --- RHAI-22310: manifest joining, provenance, unscored reporting, version range ---
+
+
+def _write_manifest(directory: Path, rows: list[dict[str, object]]) -> Path:
+    path = directory / "manifest.jsonl"
+    path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
+    return path
+
+
+def _manifest_row(
+    name: str, task: int, rollout: int, payload: bytes | None = None
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "trajectory_path": name,
+        "_ng_task_index": task,
+        "_ng_rollout_index": rollout,
+    }
+    if payload is not None:
+        row["expected_sha256"] = hashlib.sha256(payload).hexdigest()
+    return row
+
+
+def _write_entry(directory: Path, name: str, value: dict) -> bytes:
+    payload = (json.dumps(value) + "\n").encode()
+    (directory / name).write_bytes(payload)
+    return payload
+
+
+def _metrics(result):
+    return {metric.metric_name: metric.metric_value for metric in result.results}
+
+
+def test_manifest_entry_count_and_unlisted_files_are_ignored(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    first = _write_entry(
+        tmp_path, "0-0.json", {**_valid_trajectory(), "trajectory_id": "a"}
+    )
+    second = _write_entry(
+        tmp_path, "0-1.json", {**_valid_trajectory(), "trajectory_id": "b"}
+    )
+    (tmp_path / "stray.json").write_text("not even JSON")
+    _write_manifest(
+        tmp_path,
+        [
+            _manifest_row("0-0.json", 0, 0, first),
+            _manifest_row("0-1.json", 0, 1, second),
+        ],
+    )
+    job_spec.parameters.update(trajectory_path=str(tmp_path))
+
+    callbacks = FakeCallbacks()
+    result = adapter.run_benchmark_job(job_spec, callbacks)
+
+    assert _metrics(result)["atif_manifest_entry_count"] == 2.0
+    assert _metrics(result)["atif_trajectory_count"] == 2.0
+    assert result.evaluation_metadata["atif_complete"] is True
+    # The stray file is authoritative-excluded, not an invalid input.
+    detailed = callbacks.mlflow.calls[0][0]
+    assert [
+        item["status"] for item in detailed.evaluation_metadata["atif_input_outcomes"]
+    ] == ["accepted", "accepted"]
+
+
+def test_a_single_manifest_entry_is_a_complete_result(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    payload = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
+    _write_manifest(tmp_path, [_manifest_row("0-0.json", 0, 0, payload)])
+    job_spec.parameters.update(trajectory_path=str(tmp_path))
+
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+    metrics = _metrics(result)
+    assert metrics["atif_manifest_entry_count"] == 1.0
+    assert metrics["atif_trajectory_count"] == 1.0
+    assert result.evaluation_metadata["atif_complete"] is True
+
+
+def test_unscored_job_publishes_no_overall_score(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    async def failed_judge(_):
+        raise JudgeResponseError("judge failure")
+
+    monkeypatch.setattr(adapter, "_judge_call", failed_judge)
+    path = _write_json(tmp_path / "trajectory.json", _valid_trajectory())
+    job_spec.parameters.update(
+        trajectory_path=str(path), partial_result_policy="skip_failed_trajectory"
+    )
+
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+    metrics = _metrics(result)
+    assert "atif_overall_score" not in metrics
+    assert metrics["atif_trajectory_count"] == 0.0
+    assert result.overall_score is None
+    assert result.evaluation_metadata["atif_complete"] is False
+    assert result.evaluation_metadata["atif_failed_trajectory_count"] == 1
+    assert result.num_examples_evaluated == 0
+
+
+def test_zero_scoring_job_keeps_zero_overall_score(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch, score=0.0)
+    path = _write_json(tmp_path / "trajectory.json", _valid_trajectory())
+    job_spec.parameters.update(trajectory_path=str(path))
+
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+    metrics = _metrics(result)
+    assert metrics["atif_overall_score"] == 0.0
+    assert metrics["atif_trajectory_count"] == 1.0
+    assert result.evaluation_metadata["atif_complete"] is True
+
+
+def test_empty_manifest_is_invalid_under_skip_invalid_only(adapter, job_spec, tmp_path):
+    _write_manifest(tmp_path, [])
+    job_spec.parameters.update(
+        trajectory_path=str(tmp_path), invalid_input_policy="skip_invalid"
+    )
+
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+    assert _metrics(result)["atif_trajectory_count"] == 0.0
+    assert "atif_overall_score" not in _metrics(result)
+    assert result.evaluation_metadata["atif_invalid_input_count"] == 1
+    assert result.evaluation_metadata["atif_complete"] is False
+
+    job_spec.parameters.update(invalid_input_policy="fail_fast")
+    with pytest.raises(ATIFLoadError, match="contains no entries"):
+        adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+
+def test_a_withheld_entry_makes_the_run_incomplete(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    scored = _write_entry(
+        tmp_path, "0-0.json", {**_valid_trajectory(), "trajectory_id": "a"}
+    )
+    withheld = _write_entry(
+        tmp_path, "0-1.json", {**_valid_trajectory(), "trajectory_id": "b"}
+    )
+    bad = _manifest_row("0-1.json", 0, 1, withheld)
+    bad["expected_sha256"] = "0" * 64
+    _write_manifest(tmp_path, [_manifest_row("0-0.json", 0, 0, scored), bad])
+    job_spec.parameters.update(
+        trajectory_path=str(tmp_path),
+        invalid_input_policy="skip_invalid",
+        partial_result_policy="skip_failed_trajectory",
+    )
+
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+    metrics = _metrics(result)
+    assert metrics["atif_trajectory_count"] == 1.0
+    assert metrics["atif_manifest_entry_count"] == 2.0
+    assert result.evaluation_metadata["atif_failed_trajectory_count"] == 1
+    # One entry scored, so a score is published - but the export was not fully scored.
+    assert metrics["atif_overall_score"] > 0.0
+    assert result.evaluation_metadata["atif_complete"] is False
+
+
+def test_a_fully_withheld_export_completes_under_fail_fast_input_policy(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    payload = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
+    row = _manifest_row("0-0.json", 0, 0, payload)
+    row["expected_sha256"] = "0" * 64
+    _write_manifest(tmp_path, [row])
+    job_spec.parameters.update(
+        trajectory_path=str(tmp_path),
+        invalid_input_policy="fail_fast",
+        partial_result_policy="skip_failed_trajectory",
+    )
+
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+    metrics = _metrics(result)
+    assert "atif_overall_score" not in metrics
+    assert metrics["atif_trajectory_count"] == 0.0
+    assert metrics["atif_manifest_entry_count"] == 1.0
+    assert result.evaluation_metadata["atif_failed_trajectory_count"] == 1
+    assert result.evaluation_metadata["atif_invalid_input_count"] == 0
+
+
+def test_manifest_duplicate_identity_follows_invalid_input_policy(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    payload = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
+    rows = [
+        _manifest_row("0-0.json", 0, 0, payload),
+        # Repeated rollout identity: the second row repeats the first entry.
+        _manifest_row("0-0.json", 0, 0, payload),
+    ]
+    _write_manifest(tmp_path, rows)
+
+    job_spec.parameters.update(
+        trajectory_path=str(tmp_path), invalid_input_policy="skip_invalid"
+    )
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+    assert _metrics(result)["atif_trajectory_count"] == 1.0
+    assert result.evaluation_metadata["atif_invalid_input_count"] == 1
+
+    job_spec.parameters.update(invalid_input_policy="fail_fast")
+    with pytest.raises(ATIFLoadError, match="row 2"):
+        adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+
+def test_manifest_content_errors_follow_invalid_input_policy(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    payload = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
+    bad_digest = _manifest_row("0-0.json", 1, 0, payload)
+    bad_digest["expected_sha256"] = "not-a-digest"
+    _write_manifest(tmp_path, [_manifest_row("0-0.json", 0, 0, payload), bad_digest])
+
+    job_spec.parameters.update(
+        trajectory_path=str(tmp_path), invalid_input_policy="skip_invalid"
+    )
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+    assert _metrics(result)["atif_trajectory_count"] == 1.0
+    assert result.evaluation_metadata["atif_invalid_input_count"] == 1
+
+    job_spec.parameters.update(invalid_input_policy="fail_fast")
+    with pytest.raises(ATIFLoadError, match="row 2"):
+        adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+
+def test_a_manifest_listed_non_trajectory_is_invalid_input(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    good = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
+    empty = tmp_path / "0-1.json"
+    empty.write_text("{}")
+    _write_manifest(
+        tmp_path,
+        [
+            _manifest_row("0-0.json", 0, 0, good),
+            _manifest_row("0-1.json", 0, 1, empty.read_bytes()),
+        ],
+    )
+    job_spec.parameters.update(
+        trajectory_path=str(tmp_path), invalid_input_policy="skip_invalid"
+    )
+
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+    assert _metrics(result)["atif_trajectory_count"] == 1.0
+    assert result.evaluation_metadata["atif_invalid_input_count"] == 1
+
+    job_spec.parameters.update(invalid_input_policy="fail_fast")
+    with pytest.raises(ATIFLoadError, match="0-1.json"):
+        adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+
+def test_undeclared_root_provenance_is_preserved_in_the_report(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    good = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
+    trajectory = {
+        **_valid_trajectory(),
+        "producer_sha256": "abc123",
+        "nemo_gym_task": {"id": "mcqa-1", "split": "train"},
+    }
+    undeclared = _write_entry(tmp_path, "0-1.json", trajectory)
+    _write_manifest(
+        tmp_path,
+        [
+            _manifest_row("0-0.json", 0, 0, good),
+            _manifest_row("0-1.json", 0, 1, undeclared),
+        ],
+    )
+    job_spec.parameters.update(
+        trajectory_path=str(tmp_path), invalid_input_policy="skip_invalid"
+    )
+
+    callbacks = FakeCallbacks()
+    result = adapter.run_benchmark_job(job_spec, callbacks)
+
+    # The model stays the contract: the file is invalid input under skip_invalid.
+    assert _metrics(result)["atif_trajectory_count"] == 1.0
+    assert result.evaluation_metadata["atif_invalid_input_count"] == 1
+    outcomes = callbacks.mlflow.calls[0][0].evaluation_metadata["atif_input_outcomes"]
+    assert outcomes[-1]["reason"] == "invalid_schema"
+    # ... and what the producer wrote before validation is still recoverable.
+    assert outcomes[-1]["producer_undeclared_root"] == {
+        "producer_sha256": "abc123",
+        "nemo_gym_task": {"id": "mcqa-1", "split": "train"},
+    }
+
+
+def test_absent_manifest_entry_is_invalid_under_skip_invalid(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    payload = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
+    _write_manifest(
+        tmp_path,
+        [
+            _manifest_row("0-0.json", 0, 0, payload),
+            _manifest_row("gone.json", 1, 0),
+        ],
+    )
+    job_spec.parameters.update(
+        trajectory_path=str(tmp_path), invalid_input_policy="skip_invalid"
+    )
+
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+    assert _metrics(result)["atif_trajectory_count"] == 1.0
+    assert result.evaluation_metadata["atif_invalid_input_count"] == 1
+
+
+def test_digest_mismatch_follows_partial_result_policy(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    payload = _write_entry(tmp_path, "0-0.json", _valid_trajectory())
+    row = _manifest_row("0-0.json", 0, 0, payload)
+    row["expected_sha256"] = "0" * 64
+    _write_manifest(tmp_path, [row])
+    job_spec.parameters.update(trajectory_path=str(tmp_path))
+
+    with pytest.raises(ATIFDigestMismatchError, match="SHA-256 mismatch"):
+        adapter.run_benchmark_job(job_spec, FakeCallbacks())
+
+    job_spec.parameters.update(partial_result_policy="skip_failed_trajectory")
+    result = adapter.run_benchmark_job(job_spec, FakeCallbacks())
+    assert _metrics(result)["atif_trajectory_count"] == 0.0
+    assert "atif_overall_score" not in _metrics(result)
+    assert result.evaluation_metadata["atif_failed_trajectory_count"] == 1
+
+
+def test_producer_extra_is_preserved_and_undeclared_fields_rejected(
+    adapter, job_spec, tmp_path, monkeypatch
+):
+    install_judge(adapter, monkeypatch)
+    base = _valid_trajectory()
+    provenance = {**base["extra"], "producer_sha256": "abc123", "agent": "gym"}
+    trajectory = {**base, "extra": provenance}
+    path = _write_json(tmp_path / "trajectory.json", trajectory)
+    job_spec.parameters.update(trajectory_path=str(path))
+
+    callbacks = FakeCallbacks()
+    adapter.run_benchmark_job(job_spec, callbacks)
+    committed = callbacks.mlflow.calls[0][0].evaluation_metadata["atif_trajectories"]
+    assert committed[0]["provenance"]["producer_extra"] == provenance
+
+    undeclared = _write_json(
+        tmp_path / "undeclared.json", {**_valid_trajectory(), "producer_sha256": "abc"}
+    )
+    with pytest.raises(ATIFLoadError, match="No usable"):
+        adapter._load_trajectories([undeclared], invalid_input_policy="skip_invalid")
+    assert adapter._input_outcomes[-1]["status"] == "invalid"
+    assert adapter._input_outcomes[-1]["reason"] == "invalid_schema"

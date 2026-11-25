@@ -36,6 +36,48 @@ explicit candidates; other JSON objects with ATIF-like fields (`schema_version`,
 collections is ignored. Malformed JSON is recorded as invalid rather than guessed
 to be unrelated. A single explicitly supplied file is always validated.
 
+A directory containing a top-level `manifest.jsonl` uses it as the authoritative
+input list instead of recursive discovery. This matches NeMo Gym's
+`gym eval export atif` output: each JSONL row has `trajectory_path`,
+`_ng_task_index`, `_ng_rollout_index`, and optional `expected_sha256`. Paths are
+relative to the manifest directory; absolute paths, traversal, symlinks, duplicate
+paths and repeated task/rollout identities are rejected. Row order determines
+evaluation order, and unlisted JSON files are not loaded. The manifest has its own
+4 MiB bound and is not charged to trajectory file or collection-byte accounting.
+When `expected_sha256` is present it is compared with SHA-256 of the exact
+trajectory file bytes (the Gym exporter hashes the UTF-8 JSON bytes it writes,
+including the final newline); absent digests are recorded as unverified. NeMo Gym
+writes no digest inside the trajectory document, so there is no in-file value to
+leave unverified. Manifest task/rollout identifiers and verification status are
+carried in persisted provenance. Without `manifest.jsonl`, legacy recursive discovery
+is unchanged.
+
+The ATIF model stays the contract: a root field it does not declare is rejected as
+`invalid_schema`, and producer metadata belongs in the declared `extra` object, which
+is copied to `provenance.producer_extra`. So that a rejected file is still
+diagnosable, the undeclared root fields are captured from the raw payload before
+validation and recorded under `producer_undeclared_root` on that file's entry in
+`atif_input_outcomes`, which the `atif/evaluation_results.json` report artifact
+carries. The copy is capped at 4 KiB per file; past the cap only the key names are
+kept, with `_preserved: false`.
+
+Manifest rows follow `invalid_input_policy`. `skip_invalid` records the rejected
+row as an invalid input (`ATIF manifest contains no entries` included) and keeps
+the remaining entries, so a partially corrupt export scores what it can and
+reports its counts; `fail_fast` aborts naming the row. A digest mismatch is not an
+invalid input: it is governed by `partial_result_policy`, failing the job with the
+offending file named under `fail_fast`, or withholding that entry's score and
+incrementing `atif_failed_trajectory_count` under `skip_failed_trajectory`.
+A row that repeats a path or a task/rollout identity is one the producer wrote
+twice, so it follows the same policy: `skip_invalid` keeps the first and counts the
+second, `fail_fast` names it. Unreadable manifests, unsafe paths (absolute,
+traversal, symlink, outside the input root, non-regular) and exceeded entry budgets
+stay fatal under both policies, because a manifest whose file list cannot be trusted
+no longer describes the export. Manifest-driven discovery accepts an empty result
+instead of failing - with `skip_invalid` because nothing usable survived, and under
+either policy when every entry was withheld for a digest mismatch, since a producer's
+wrong digest is not malformed input.
+
 The default `invalid_input_policy=skip_invalid` skips invalid candidates and records
 per-file outcomes. `fail_fast` aborts instead. No usable input always fails. Limits
 on total collection bytes and accepted steps are fatal, independently of the
@@ -52,7 +94,19 @@ Duplicate non-null IDs across accepted trees are invalid.
 Producer trajectory IDs are preserved. ID-less roots receive a stable
 source-qualified SHA-256 evaluation ID. Each node records the original producer
 ID, input SHA-256, local path, source URI, and a JSON Pointer selector (empty for a
-root; e.g. `/subagent_trajectories/0` for an embedded child).
+root; e.g. `/subagent_trajectories/0` for an embedded child). For manifest-backed
+Gym input, the report also records the manifest's task/rollout indices, expected
+hash and whether that hash was verified. This is distinct from the SHA-256 over
+raw input bytes that the adapter records for every input.
+
+Producer provenance is preserved through ATIF's declared `extra` object, copied
+verbatim into each node's `provenance.producer_extra` in the persisted report
+(`atif/evaluation_results.json`, indexed by `evalhub.atif_report`). The SDK rejects
+undeclared root fields by design, so a producer field must live in `extra` to be
+retained; such files are recorded as invalid input (`invalid_schema`) instead of
+being silently dropped. There is no canonical-form digest re-derivation: NeMo Gym
+declares `expected_sha256` in its manifest over the exact bytes it writes, which is
+what the adapter verifies.
 
 When `TEST_DATA_S3_BUCKET`/`TEST_DATA_S3_KEY` are available and files are under
 `/test_data`, source URIs are reconstructed using the generic init's layout,
@@ -174,16 +228,30 @@ A node's own score is its mean step score. Its subtree aggregate is weighted by
 scored step counts: `(own_mean * own_steps + sum(child_aggregate * child_steps)) /
 (own_steps + sum(child_steps))`. Root depth is zero. Nodes beyond
 `max_subagent_depth` remain explicitly unscored; a child that fails or is omitted
-makes every ancestor `complete=false`. The all-failed-root case always fails the
-job.
-`partial_result_policy=skip_failed_trajectory` otherwise retains failed nodes and
-allows successful roots to contribute. Repeated agent names are not cycles.
+makes every ancestor `complete=false`.
+`partial_result_policy=skip_failed_trajectory` retains failed nodes and allows
+successful roots to contribute. Repeated agent names are not cycles.
 
 Collection `atif_overall_score` depends on `subagent_aggregation`:
 
 - `flat`: mean of each scored node's own mean (not a global step-weighted mean).
 - `hierarchical`: mean of root subtree aggregates.
 - `separate`: mean of root own scores; descendants remain in detail artifacts.
+
+### Unscored reporting
+
+A job that scored nothing still completes. It publishes `atif_trajectory_count`
+(and `atif_manifest_entry_count` when a manifest drove discovery), plus the
+`atif_complete`, failed/unscored and invalid-input counts in the report metadata,
+but **no `atif_overall_score`** and no `atif_failure_categorization_rate`, so an
+unscored job cannot be mistaken for a passing one. This covers every root beyond
+`max_subagent_depth` and every judge call failing under
+`skip_failed_trajectory`. A genuine zero keeps `atif_overall_score=0.0` with
+`atif_trajectory_count > 0`, and `atif_complete` is only ever true when at least
+one trajectory scored and no input was left unscored, invalid or withheld for a
+digest mismatch. Downstream, an absent score means the
+platform test result is nil and `EvaluationThresholdViolated` does not fire; the
+adapter emits one warning per unscored job.
 
 ### Failure categorization
 
@@ -282,13 +350,23 @@ make smoke-atif REGISTRY=localhost VERSION=dev  # build + non-root, no-network s
 make lock-atif                                 # regenerate Python 3.12 dependency pins
 ```
 
+A genuine export is worth generating once when a producer field changes: NeMo Gym
+writes one ATIF document per rollout plus `manifest.jsonl`, whose `expected_sha256`
+covers exactly the bytes it wrote (`json.dumps(indent=2)` plus a newline) - what this
+adapter hashes. The k8s-tests `adapters-atif` section generates that shape (documents,
+rows carrying `_ng_task_index` and `_ng_rollout_index`, digests) and runs it through a
+real job, so the manifest and provenance paths are exercised without a Gym checkout. A
+live capture needs a Gym environment and a model deployment; it is not part of this
+repository's tests.
+
 The container includes every application module and tests installed-image imports,
 JobSpec parsing, scoring, and artifact construction without host mounts. The smoke
 judge/backend are mocked; this is not a live inference or upload test. PR CI runs
 unit/contract tests and the container smoke. Python runtime dependencies are pinned
-in `requirements.lock`; the SDK uses an immutable public HTTPS Git commit rather
-than an SSH development branch. **That integration commit is not an approved SDK
-release.** The UBI base tag/build toolchain also need release-managed provenance.
+in `requirements.lock`; the SDK is pinned to the approved `eval-hub-sdk~=1.1.0`
+release, which carries the ATIF v1.0-v1.8 models, the declared-`extra` provenance
+policy and typed trajectory score summaries. The UBI base tag/build toolchain also
+need release-managed provenance.
 
 Inputs and results are retained in memory under collection budgets, not streamed
 or sharded. Large-collection memory/throughput sizing, real-judge categorization,

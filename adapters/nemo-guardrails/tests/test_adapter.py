@@ -87,7 +87,8 @@ def _load_job_spec(tmp_path, benchmark_id="prompt_injection", nemo_config="/tmp/
         spec = json.load(f)
     spec["benchmark_id"] = benchmark_id
     spec["parameters"]["nemo_config"] = nemo_config
-    out_path = tmp_path / "job.json"
+    out_path = tmp_path / "meta" / "job.json"
+    out_path.parent.mkdir(exist_ok=True)
     out_path.write_text(json.dumps(spec))
     return str(out_path)
 
@@ -1101,3 +1102,240 @@ def test_job_spec_path_falls_back_to_local_sample(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "_K8S_JOB_SPEC_PATH", str(tmp_path / "absent.json"))
     monkeypatch.delenv("EVALHUB_JOB_SPEC_PATH", raising=False)
     assert main._default_job_spec_path() == os.path.join(main.ADAPTER_DIR, "meta", "job.json")
+
+
+@pytest.mark.parametrize("enabled", [None, False, True])
+def test_classification_sample_exports(tmp_path, monkeypatch, enabled):
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    from evalhub.adapter import OCIArtifactResult
+    from evalhub.adapter.models.job import JobSpecExports
+
+    config_dir = tmp_path / "guardrail"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text("rails: {}")
+    adapter = NemoGuardrailsAdapter(job_spec_path=_load_job_spec(tmp_path, nemo_config=str(config_dir)))
+    config = adapter.job_spec
+    config.experiment_name = "unit-sample-export" if enabled is True else None
+    if enabled is not None:
+        config.parameters["save_sample_results"] = enabled
+    config.exports = JobSpecExports.model_validate({"oci": {"coordinates": {
+        "oci_host": "quay.io", "oci_repository": "test/results", "oci_tag": "test"
+    }}})
+    callbacks = create_autospec(JobCallbacks)
+    captured = {}
+
+    def upload(spec):
+        from pathlib import Path
+        captured.update({p.name: p.read_bytes() for p in Path(spec.files_path).iterdir()})
+        return OCIArtifactResult(digest="sha256:test", reference="quay.io/test/results@sha256:test")
+
+    callbacks.create_oci_artifact.side_effect = upload
+    from unittest.mock import MagicMock
+    callbacks.mlflow = MagicMock()
+    callbacks.mlflow.save.return_value = "sample-run"
+    results = _make_canned_results()
+    results[0]["predicted_blocked"] = NemoResponses.ALLOW
+    monkeypatch.setattr("main.managed_server", _fake_managed_server)
+    monkeypatch.setattr("main.warmup_server", lambda *a, **k: None)
+    monkeypatch.setattr("main.load_samples", lambda *a, **k: _make_canned_samples())
+    monkeypatch.setattr("main.run_evaluation", lambda *a, **k: results)
+    final = adapter.run_benchmark_job(config, callbacks)
+    if enabled is True:
+        rows = [json.loads(row) for row in captured["sample_results.jsonl"].splitlines()]
+        assert len(rows) == 10
+        assert all(set(row) == {"sample_id", "prediction"} for row in rows)
+        assert rows[0]["prediction"] == 0.0
+        assert sum(row["prediction"] for row in rows) / len(rows) == final.overall_score == 0.9
+        assert json.loads(captured["manifest.json"])["primary_score"]["metric"] == "accuracy"
+        assert final.mlflow_run_id == "sample-run"
+        callbacks.mlflow.save.assert_called_once()
+        assert {a.path: a.content for a in callbacks.mlflow.save.call_args.kwargs["artifacts"]} == captured
+    else:
+        callbacks.create_oci_artifact.assert_not_called()
+
+
+def test_server_log_uses_writable_staging_root(tmp_path, monkeypatch):
+    from pathlib import Path
+    from unittest.mock import MagicMock
+    import main
+
+    source = tmp_path / "read-only-test-data" / "guardrail"
+    source.mkdir(parents=True)
+    staged = tmp_path / "staged-server"
+    staged.mkdir()
+    monkeypatch.setattr(main, "_ensure_nemo_examples_dir", lambda: None)
+    monkeypatch.setattr(main, "_resolve_config_dir", lambda path: (str(source), "guardrail"))
+    monkeypatch.setattr(main, "_stage_server_config", lambda path: (str(staged), "guardrail"))
+    spawn = MagicMock()
+    monkeypatch.setattr(main.subprocess, "Popen", spawn)
+    _, log_path, server_root = main._start_server(str(source))
+    assert Path(log_path) == staged / "server.log"
+    assert server_root == str(staged)
+    assert not (source.parent / "server.log").exists()
+    spawn.call_args.kwargs["stdout"].close()
+
+
+def test_error_decision_without_message_cannot_be_exported(tmp_path, monkeypatch):
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    config_dir = tmp_path / "guardrail"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text("rails: {}")
+    adapter = NemoGuardrailsAdapter(job_spec_path=_load_job_spec(tmp_path, nemo_config=str(config_dir)))
+    adapter.job_spec.parameters["save_sample_results"] = True
+    result = _make_canned_results()
+    result[0]["predicted_blocked"] = NemoResponses.ERROR
+    result[0]["error"] = None
+    monkeypatch.setattr("main.managed_server", _fake_managed_server)
+    monkeypatch.setattr("main.warmup_server", lambda *a, **k: None)
+    monkeypatch.setattr("main.load_samples", lambda *a, **k: _make_canned_samples())
+    monkeypatch.setattr("main.run_evaluation", lambda *a, **k: result)
+    callbacks = create_autospec(JobCallbacks)
+    with pytest.raises(ValueError, match="error-free classification"):
+        adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    callbacks.create_oci_artifact.assert_not_called()
+
+
+def test_local_opt_out_replay_removes_only_owned_sample_files(tmp_path, monkeypatch):
+    from pathlib import Path
+    monkeypatch.setenv("EVALHUB_MODE", "local")
+    config_dir = tmp_path / "guardrail"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text("rails: {}")
+    adapter = NemoGuardrailsAdapter(job_spec_path=_load_job_spec(tmp_path, nemo_config=str(config_dir)))
+    config = adapter.job_spec
+    config.experiment_name = None
+    config.parameters["save_sample_results"] = True
+    monkeypatch.setattr("main.managed_server", _fake_managed_server)
+    monkeypatch.setattr("main.warmup_server", lambda *a, **k: None)
+    monkeypatch.setattr("main.load_samples", lambda *a, **k: _make_canned_samples())
+    monkeypatch.setattr("main.run_evaluation", lambda *a, **k: _make_canned_results())
+    callbacks = create_autospec(JobCallbacks)
+    first = adapter.run_benchmark_job(config, callbacks)
+    path = Path(first.evaluation_metadata["sample_results_path"])
+    assert path.exists()
+    (path.parent / "keep.txt").write_text("unrelated")
+    config.parameters["save_sample_results"] = False
+    adapter.run_benchmark_job(config, callbacks)
+    assert not path.exists()
+    assert not (path.parent / "manifest.json").exists()
+    assert (path.parent / "keep.txt").read_text() == "unrelated"
+
+
+@pytest.fixture
+def sample_export_job(tmp_path, monkeypatch):
+    """Run native adapter plumbing with deterministic classification observations."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    config_dir = tmp_path / "guardrail"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text("rails: {}")
+    adapter = NemoGuardrailsAdapter(job_spec_path=_load_job_spec(tmp_path, nemo_config=str(config_dir)))
+    adapter.job_spec.parameters["save_sample_results"] = True
+    adapter.job_spec.experiment_name = None
+    callbacks = create_autospec(JobCallbacks)
+    callbacks.mlflow = MagicMock()
+    monkeypatch.setattr("main.managed_server", _fake_managed_server)
+    monkeypatch.setattr("main.warmup_server", lambda *a, **k: None)
+    monkeypatch.setattr("main.load_samples", lambda *a, **k: _make_canned_samples())
+    monkeypatch.setattr("main.run_evaluation", lambda *a, **k: _make_canned_results())
+    return adapter, callbacks
+
+
+@pytest.mark.parametrize("value", ["true", "false", 0, 1, None, [], {}])
+def test_sample_flag_requires_boolean(sample_export_job, value):
+    adapter, callbacks = sample_export_job
+    adapter.job_spec.parameters["save_sample_results"] = value
+    with pytest.raises(ValueError, match="must be a boolean"):
+        adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    callbacks.report_status.assert_not_called()
+
+
+@pytest.mark.parametrize("destination", ["oci", "mlflow"])
+@pytest.mark.parametrize("failure", ["exception", "missing_reference"])
+def test_configured_sample_export_failures(sample_export_job, destination, failure):
+    from evalhub.adapter.models.job import JobSpecExports
+
+    adapter, callbacks = sample_export_job
+    if destination == "oci":
+        adapter.job_spec.exports = JobSpecExports.model_validate({"oci": {"coordinates": {
+            "oci_host": "quay.io", "oci_repository": "test/results", "oci_tag": "test"
+        }}})
+        upload = callbacks.create_oci_artifact
+        missing = "no artifact reference"
+    else:
+        adapter.job_spec.experiment_name = "unit-export"
+        upload = callbacks.mlflow.save
+        missing = "no run ID"
+    if failure == "exception":
+        upload.side_effect = RuntimeError("backend denied sample upload")
+    else:
+        upload.return_value = None
+    with pytest.raises(RuntimeError, match="backend denied sample upload" if failure == "exception" else missing):
+        adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    upload.assert_called_once()
+
+
+def test_masking_samples_cannot_be_exported(sample_export_job, monkeypatch):
+    adapter, callbacks = sample_export_job
+    monkeypatch.setattr("main.run_evaluation", lambda *a, **k: [_make_masking_result(["secret"], "safe")])
+    with pytest.raises(ValueError, match="error-free classification"):
+        adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    callbacks.create_oci_artifact.assert_not_called()
+    callbacks.mlflow.save.assert_not_called()
+
+
+def test_empty_sample_export_is_empty_jsonl_with_manifest(sample_export_job, monkeypatch):
+    from pathlib import Path
+
+    adapter, callbacks = sample_export_job
+    monkeypatch.setattr("main.run_evaluation", lambda *a, **k: [])
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    path = Path(results.evaluation_metadata["sample_results_path"])
+    assert path.read_bytes() == b""
+    assert json.loads(path.with_name("manifest.json").read_text())["primary_score"]["metric"] == "accuracy"
+    assert results.num_examples_evaluated == 0
+
+
+@pytest.mark.parametrize("existing_run", [None, "existing-run"])
+def test_main_reuses_existing_mlflow_run(monkeypatch, existing_run):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    import main
+
+    adapter = MagicMock()
+    results = SimpleNamespace(mlflow_run_id=existing_run)
+    adapter.run_benchmark_job.return_value = results
+    callbacks = MagicMock()
+    callbacks.mlflow.save.return_value = "new-run"
+    monkeypatch.setattr(main, "NemoGuardrailsAdapter", MagicMock(return_value=adapter))
+    monkeypatch.setattr(main.DefaultCallbacks, "from_adapter", MagicMock(return_value=callbacks))
+    main.main()
+    if existing_run:
+        callbacks.mlflow.save.assert_not_called()
+    else:
+        callbacks.mlflow.save.assert_called_once_with(results, adapter.job_spec)
+    assert results.mlflow_run_id == (existing_run or "new-run")
+    callbacks.report_results.assert_called_once_with(results)
+
+
+@pytest.mark.parametrize("stage", ["evaluation", "mlflow"])
+def test_main_reports_actual_failure(monkeypatch, stage):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from evalhub.adapter import JobStatus
+    import main
+
+    adapter, callbacks = MagicMock(), MagicMock()
+    adapter.run_benchmark_job.return_value = SimpleNamespace(mlflow_run_id=None)
+    target = adapter.run_benchmark_job if stage == "evaluation" else callbacks.mlflow.save
+    target.side_effect = RuntimeError("backend denied sample upload")
+    monkeypatch.setattr(main, "NemoGuardrailsAdapter", MagicMock(return_value=adapter))
+    monkeypatch.setattr(main.DefaultCallbacks, "from_adapter", MagicMock(return_value=callbacks))
+    with pytest.raises(RuntimeError, match="backend denied sample upload"):
+        main.main()
+    failure = callbacks.report_status.call_args.args[0]
+    assert failure.status == JobStatus.FAILED
+    assert failure.error_message.message == "backend denied sample upload"
+    assert failure.error_message.message_code == "evaluation_error"
+    callbacks.report_results.assert_not_called()
