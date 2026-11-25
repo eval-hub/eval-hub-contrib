@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
 from pathlib import Path
@@ -129,6 +130,7 @@ def build_env(
     aws_access_key_id: str | None,
     aws_secret_access_key: str | None,
     allow_code_execution: bool = False,
+    hf_offline: bool = False,
 ) -> dict[str, str]:
     """Build environment variables for the lm_eval subprocess."""
     env = dict(os.environ)
@@ -137,6 +139,10 @@ def build_env(
     env["OPENAI_API_KEY"] = api_key if api_key else "dummy"
     # Prevent HuggingFace tokenizer parallelism warnings in the subprocess.
     env["TOKENIZERS_PARALLELISM"] = "false"
+    if hf_offline:
+        env["HF_HUB_OFFLINE"] = "1"
+        env["HF_DATASETS_OFFLINE"] = "1"
+        env["TRANSFORMERS_OFFLINE"] = "1"
     if allow_code_execution:
         # Required by the HF code_eval metric before it will exec() model output.
         env["HF_ALLOW_CODE_EVAL"] = "1"
@@ -150,6 +156,35 @@ def build_env(
         if aws_secret_access_key:
             env["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
     return env
+
+
+def prepare_offline_hf_datasets_cache(
+    staged_cache: str | None, writable_cache: Path
+) -> str:
+    """Copy a read-only staged HF cache to a writable path for datasets locks.
+
+    EvalHub mounts test_data read-only in the adapter container. Hugging Face
+    Datasets still creates lock files in ``HF_DATASETS_CACHE`` while reading
+    cached data, so disconnected jobs need a writable copy before launch.
+    """
+    if not staged_cache:
+        raise ValueError(
+            "hf_offline=true requires hf_datasets_cache to point at the staged "
+            "Hugging Face datasets cache"
+        )
+
+    source = Path(staged_cache)
+    if not source.is_dir():
+        raise ValueError(
+            f"hf_offline=true requires a staged Hugging Face datasets cache at {source}"
+        )
+
+    destination = writable_cache
+    if source.resolve() == destination.resolve():
+        raise ValueError("offline Hugging Face cache destination must be writable and separate")
+
+    shutil.copytree(source, destination, dirs_exist_ok=True, copy_function=shutil.copy2)
+    return str(destination)
 
 
 def redact_model_args(model_args: str) -> str:
