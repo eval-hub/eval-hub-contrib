@@ -30,7 +30,7 @@ agent:
   summary: >-
     EleutherAI lm-evaluation-harness — academic accuracy benchmarks (MMLU, GSM8K,
     HellaSwag, BBH, GPQA, IFEval, etc.) against any OpenAI-compatible endpoint.
-    No local model loading. 201 benchmarks: 21 curated (lm-eval/*) plus 180 under
+    No local model loading. 200 benchmarks: 21 curated (lm-eval/*) plus 179 under
     the same bare IDs as the LMEvalJob-based lm_evaluation_harness provider
     (RHOAI 3.5 live list unioned with server main), excluding the unsupported
     datasets described above the bare-ID section.
@@ -552,6 +552,8 @@ benchmarks:
   # cmmlu_high_school_mathematics, cmmlu_professional_medicine,
   # cmmlu_traditional_chinese_medicine, ethics_cm, qasper_freeform. These require
   # external dataset loading scripts, which datasets 5.2.0 does not support.
+  # scrolls_qasper is also omitted: its task imports transformers.data.metrics,
+  # which is unavailable in the pinned Transformers 5.22.2. See issue #330.
   # -------------------------------------------------------------------------
 
   - id: arc_easy
@@ -2450,31 +2452,6 @@ benchmarks:
         meaning: Random baseline for 4-choice questions
       - range: 0.25-1.0
         meaning: Meets default pass threshold (0.25 or above)
-  - id: scrolls_qasper
-    url: null
-    name: Long-document comprehension (SCROLLS)
-    description: Question answering over lengthy scientific documents from the SCROLLS suite.
-    category: reading_comprehension
-    num_few_shot: 0
-    dataset_size: 3000
-    tags:
-    - reading_comprehension
-    - lm_eval
-    - generation-safe
-    - lmevaljob-compatible
-    agent:
-      result_interpretation: Rouge; higher is better.
-      score_ranges:
-      - range: 0.0-0.1
-        meaning: Below default pass threshold
-      - range: 0.1-1.0
-        meaning: Meets default pass threshold (0.1 or above)
-    metrics: [exact_match]
-    primary_score:
-      metric: exact_match
-      lower_is_better: false
-    pass_criteria:
-      threshold: 0.25
   - id: AraDiCE_ArabicMMLU_high_social-science_economics_egy
     url: null
     name: Economics knowledge (high school, Egyptian)

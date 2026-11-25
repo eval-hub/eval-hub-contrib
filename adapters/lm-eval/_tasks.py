@@ -86,6 +86,11 @@ UNSUPPORTED_BENCHMARKS.update(
         "Use a data-only Parquet, JSON, or CSV dataset through lm-eval/custom",
     )
 )
+UNSUPPORTED_BENCHMARKS["scrolls_qasper"] = (
+    "the pinned lm-eval 0.4.13 task imports transformers.data.metrics, which "
+    "Transformers 5.22.2 does not provide; this benchmark cannot run with the "
+    "adapter's pinned dependencies. Choose a supported benchmark"
+)
 
 
 def task_for(benchmark_id: str) -> str | None:

@@ -127,5 +127,6 @@ def test_catalog_retains_other_benchmarks():
             "cmmlu_traditional_chinese_medicine",
             "ethics_cm",
             "qasper_freeform",
+            "scrolls_qasper",
         }
     )
