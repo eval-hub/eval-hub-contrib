@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -22,7 +23,6 @@ from typing import Any, Optional
 
 from evalhub.adapter import (
     DefaultCallbacks,
-    ErrorInfo,
     EvaluationResult,
     FrameworkAdapter,
     JobCallbacks,
@@ -88,6 +88,39 @@ def _normalize_clear_agent_entry(agent_data: Any) -> dict[str, Any]:
     if "agent_summary" in agent_data or "issues_catalog" in agent_data:
         return agent_data
     return {}
+
+
+def _interaction_samples(document: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract native scored interactions, deduplicating repeated issue occurrences."""
+    samples: dict[str, dict[str, Any]] = {}
+    for agent, entry in document.get("agents", {}).items():
+        blocks = [(kind, entry[kind]) for kind in ("reasoning_eval", "tools_eval") if isinstance(entry.get(kind), dict)]
+        if not blocks:
+            blocks = [("reasoning_eval", entry)]
+        for kind, block in blocks:
+            observations = list(block.get("no_issues", []))
+            for issue in block.get("issues", []):
+                observations.extend(issue.get("occurrences", [issue]))
+            for observation in observations:
+                pair = observation.get("input_output_pair", {})
+                native_id, score = pair.get("id"), pair.get("score")
+                trace_id = observation.get("trace_id")
+                if not isinstance(native_id, str) or not native_id or not isinstance(trace_id, str) or not trace_id:
+                    raise ValueError("CLEAR sample export requires native interaction and trace IDs")
+                if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
+                    raise ValueError(f"Invalid CLEAR interaction score for {native_id}")
+                sample_id = json.dumps([agent, kind, native_id], separators=(",", ":"))
+                row = {"sample_id": sample_id, "trace_id": trace_id, "prediction": float(score)}
+                if sample_id in samples and samples[sample_id] != row:
+                    raise ValueError(f"Conflicting CLEAR observations for {native_id}")
+                samples[sample_id] = row
+    rows = list(samples.values())
+    expected = document.get("metadata", {}).get("statistics", {}).get("total_interactions_analyzed")
+    if expected is not None and len(rows) != expected:
+        raise ValueError("CLEAR sample count does not match total_interactions_analyzed")
+    if not rows:
+        raise ValueError("CLEAR sample export requires at least one scored interaction")
+    return rows
 
 
 def _local_only_run() -> bool:
@@ -455,6 +488,9 @@ class ClearAdapter(FrameworkAdapter):
             )
 
             self._validate_config(config)
+            save_samples = config.parameters.get("save_sample_results", False)
+            if type(save_samples) is not bool:
+                raise ValueError("parameters.save_sample_results must be a boolean")
 
             # Allow job to override the MLflow workspace (e.g. when EvalHub sidecar
             # sets it to the tenant namespace but traces live in a different workspace).
@@ -638,6 +674,23 @@ class ClearAdapter(FrameworkAdapter):
 
             evaluation_results = self._extract_agentic_results(str(json_results_path))
             overall_score = self._compute_overall_score(evaluation_results)
+            if save_samples:
+                rows = _interaction_samples(json.loads(Path(json_results_path).read_text()))
+                # This is an interaction-weighted mean; keep CLEAR's agent-weighted average unchanged.
+                evaluation_results.append(EvaluationResult(
+                    metric_name="interaction_average_score",
+                    metric_value=sum(row["prediction"] for row in rows) / len(rows),
+                    metric_type="float",
+                ))
+                (output_dir / "sample_results.jsonl").write_text(
+                    "".join(json.dumps(row, allow_nan=False) + "\n" for row in rows)
+                )
+                (output_dir / "manifest.json").write_text(json.dumps({
+                    "primary_score": {"metric": "interaction_average_score"}, "estimand": "mean"
+                }))
+            else:
+                for name in ("sample_results.jsonl", "manifest.json"):
+                    (output_dir / name).unlink(missing_ok=True)
             num_evaluated = self._extract_num_evaluated(str(json_results_path))
 
             metrics_summary = self._metrics_summary_dict(
@@ -659,7 +712,9 @@ class ClearAdapter(FrameworkAdapter):
                 evaluation_results=evaluation_results,
                 overall_score=overall_score,
                 num_evaluated=num_evaluated,
-                extra_files=clear_html_artifacts,
+                extra_files=clear_html_artifacts + (
+                    [output_dir / "sample_results.jsonl", output_dir / "manifest.json"] if save_samples else []
+                ),
             )
 
             duration = time.time() - start_time
@@ -683,6 +738,10 @@ class ClearAdapter(FrameworkAdapter):
             rid = self._save_results_to_mlflow(
                 callbacks, config, job_results, output_dir, metrics_summary, clear_html_artifacts
             )
+            if save_samples and (config.experiment_name or config.parameters.get("mlflow_experiment_name")) and not rid:
+                raise RuntimeError("MLflow per-sample export returned no run ID")
+            if save_samples and config.exports and config.exports.oci and not oci_artifact:
+                raise RuntimeError("OCI per-sample export returned no artifact reference")
             if rid:
                 job_results = job_results.model_copy(update={"mlflow_run_id": rid})
             return job_results
@@ -697,7 +756,7 @@ class ClearAdapter(FrameworkAdapter):
                         message=error_msg,
                         message_code="failed",
                     ),
-                    error=ErrorInfo(
+                    error_message=MessageInfo(
                         message=error_msg,
                         message_code="evaluation_error",
                     ),
@@ -1025,7 +1084,7 @@ class ClearAdapter(FrameworkAdapter):
         if self.local_jobs_base_path is not None:
             results_dir = self.local_jobs_base_path / "results"
         else:
-            results_dir = Path(__file__).parent / "results"
+            results_dir = Path(tempfile.mkdtemp(prefix="clear-artifacts-"))
         results_dir.mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(results_path, results_dir / "clear_results.json")
@@ -1038,11 +1097,16 @@ class ClearAdapter(FrameworkAdapter):
             encoding="utf-8",
         )
 
+        # Remove stale samples on opt-out replay before staging the current artifacts.
+        for name in ("sample_results.jsonl", "manifest.json"):
+            (results_dir / name).unlink(missing_ok=True)
         for html_f in extra_files or []:
             if isinstance(html_f, Path) and html_f.is_file():
                 try:
                     shutil.copy2(html_f, results_dir / html_f.name)
                 except OSError as exc:
+                    if config.parameters.get("save_sample_results") is True:
+                        raise
                     logger.warning("OCI: could not copy %s: %s", html_f, exc)
 
         oci_artifact = callbacks.create_oci_artifact(
@@ -1111,6 +1175,12 @@ class ClearAdapter(FrameworkAdapter):
                 "application/json",
             ),
         ]
+        if config.parameters.get("save_sample_results") is True:
+            for name in ("sample_results.jsonl", "manifest.json"):
+                mlflow_artifacts.append(MlflowFileArtifact(
+                    name, output_dir / name,
+                    "application/x-ndjson" if name.endswith("jsonl") else "application/json",
+                ))
         for h in clear_html_artifacts or []:
             if h.is_file():
                 mlflow_artifacts.append(
@@ -1129,6 +1199,8 @@ class ClearAdapter(FrameworkAdapter):
                 artifacts=mlflow_artifacts,
             )
         except Exception as e:
+            if config.parameters.get("save_sample_results") is True:
+                raise
             logger.warning("MLflow artifact save failed (job still completes): %s", e, exc_info=True)
             return None
 

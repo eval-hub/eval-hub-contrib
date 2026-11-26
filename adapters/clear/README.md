@@ -200,3 +200,19 @@ Set **`parameters.separate_tools: true`** to enable SPARC mode. In this mode, CL
 
 - [IBM CLEAR](https://github.com/IBM/CLEAR)
 - [eval-hub](https://github.com/eval-hub/eval-hub) / [eval-hub-sdk](https://github.com/eval-hub/eval-hub-sdk)
+
+## Per-interaction CI artifacts
+
+Set `parameters.save_sample_results: true` (strict boolean; default false) to
+export native interaction IDs, trace IDs and scores as `sample_results.jsonl`
+with a primary-metric manifest. Repeated issue occurrences are deduplicated;
+conflicting scores, invalid scores and incomplete interaction counts fail export.
+Raw prompts and responses are not copied into these sample records.
+
+The opt-in `interaction_average_score` is the mean of those observations. The
+existing `average_score` remains CLEAR's mean of agent averages. Select
+`interaction_average_score` as the evaluation and CI primary metric.
+
+Configured OCI/MLflow destinations receive the same samples and manifest;
+opted-in persistence failures fail the job. Without a remote export, files are
+local to the output directory and are ephemeral in Kubernetes.

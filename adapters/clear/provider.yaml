@@ -14,7 +14,7 @@ type: builtin
 runtime:
   k8s:
     image: quay.io/evalhub/community-ibm-clear:latest
-    image_pull_policy: Always
+    image_pull_policy: always
     entrypoint:
       - python
       - main.py
@@ -41,6 +41,7 @@ benchmarks:
       - pct_interactions_with_issues
       - issues_per_interaction
       - average_score
+      - interaction_average_score
     tags:
       - erroranalysis
       - ibmclear
@@ -59,6 +60,7 @@ benchmarks:
       - pct_interactions_with_issues
       - issues_per_interaction
       - average_score
+      - interaction_average_score
     tags:
       - ibmclear
       - custom-rubric
@@ -77,11 +79,16 @@ benchmarks:
       - pct_interactions_with_issues
       - issues_per_interaction
       - average_score
+      - interaction_average_score
     tags:
       - ibmclear
       - predefined-issues
 
 parameters:
+  - name: save_sample_results
+    type: boolean
+    default: false
+    description: Opt in to native interaction samples and interaction_average_score; configured persistence failures fail the job.
   - name: data_dir
     type: string
     description: >

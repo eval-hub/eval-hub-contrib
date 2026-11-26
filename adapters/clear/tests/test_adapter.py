@@ -194,7 +194,6 @@ def test_clear_happy_path(monkeypatch, tmp_path):
 
     # Control output location via results_dir/run_name parameters
     results_base = tmp_path / "results"
-    output_dir = results_base / "test_run"
 
     # Override data_dir and output paths in job spec
     config = copy.deepcopy(adapter.job_spec)
@@ -296,3 +295,146 @@ def test_artifacts_use_local_jobs_base_path(tmp_path):
     assert (expected_results_dir / "clear_results.json").exists()
     assert (expected_results_dir / "metrics_summary.json").exists()
     assert "/tmp/clear_results" not in str(expected_results_dir)
+
+
+def _native_interactions():
+    return {"metadata": {"statistics": {"total_interactions_analyzed": 2}}, "agents": {
+        "judge": {"reasoning_eval": {"no_issues": [
+            {"trace_id": "trace-a", "input_output_pair": {"id": "a", "score": 1.0}},
+            {"trace_id": "trace-b", "input_output_pair": {"id": "b", "score": 0.0}},
+        ], "issues": []}}
+    }}
+
+
+def test_interaction_export_uses_native_scores_and_no_prompts():
+    rows = main._interaction_samples(_native_interactions())
+    assert [r["prediction"] for r in rows] == [1.0, 0.0]
+    assert len({r["sample_id"] for r in rows}) == 2
+    assert all(set(r) == {"sample_id", "trace_id", "prediction"} for r in rows)
+
+
+def test_repeated_issue_occurrences_are_deduplicated():
+    document = _native_interactions()
+    block = document["agents"]["judge"]["reasoning_eval"]
+    row = block["no_issues"].pop()
+    block["issues"] = [{"occurrences": [row]}, {"occurrences": [copy.deepcopy(row)]}]
+    assert len(main._interaction_samples(document)) == 2
+    block["issues"][1]["occurrences"][0]["input_output_pair"]["score"] = 0.4
+    with pytest.raises(ValueError, match="Conflicting"):
+        main._interaction_samples(document)
+
+
+@pytest.mark.parametrize("score", [None, True, "1", float("nan"), float("inf")])
+def test_invalid_interaction_scores_are_rejected(score):
+    document = _native_interactions()
+    document["agents"]["judge"]["reasoning_eval"]["no_issues"][0]["input_output_pair"]["score"] = score
+    with pytest.raises(ValueError, match="Invalid CLEAR interaction score"):
+        main._interaction_samples(document)
+
+
+def test_missing_interactions_are_not_silently_omitted():
+    document = _native_interactions()
+    document["agents"]["judge"]["reasoning_eval"]["no_issues"].pop()
+    with pytest.raises(ValueError, match="count"):
+        main._interaction_samples(document)
+
+
+@pytest.mark.parametrize("enabled,failure", [
+    (None, None), (False, None), (True, None), ("false", None),
+    (True, "oci_exception"), (True, "oci_missing"),
+    (True, "mlflow_exception"), (True, "mlflow_missing"),
+])
+def test_sample_persistence_full_adapter(tmp_path, monkeypatch, enabled, failure):
+    from unittest.mock import MagicMock
+    from evalhub.models.api import OCICoordinates
+
+    meta = tmp_path / "meta"
+    meta.mkdir()
+    job = meta / "job.json"
+    job.write_text(Path("meta/job.json").read_text())
+    adapter = ClearAdapter(job_spec_path=str(job))
+    config = copy.deepcopy(adapter.job_spec)
+    data = tmp_path / "traces"
+    data.mkdir()
+    (data / "trace.json").write_text('{}')
+    config.parameters.update(data_dir=str(data), results_dir=str(tmp_path), run_name="native")
+    if enabled is not None:
+        config.parameters["save_sample_results"] = enabled
+    config.experiment_name = "clear-unit-export"
+    config.exports = MagicMock()
+    config.exports.oci.coordinates = OCICoordinates(oci_host="quay.io", oci_repository="test/results")
+    callbacks = create_autospec(JobCallbacks)
+    callbacks.mlflow = MagicMock()
+    callbacks.mlflow.save.return_value = "unit-run"
+    captured = {}
+
+    def upload(spec):
+        captured.update({p.name: p.read_bytes() for p in spec.files_path.iterdir()})
+        return OCIArtifactResult(digest="sha256:unit", reference="test/results@sha256:unit")
+
+    callbacks.create_oci_artifact.side_effect = upload
+    if failure == "oci_exception":
+        callbacks.create_oci_artifact.side_effect = RuntimeError("OCI upload denied")
+    elif failure == "oci_missing":
+        callbacks.create_oci_artifact.side_effect = None
+        callbacks.create_oci_artifact.return_value = None
+    elif failure == "mlflow_exception":
+        callbacks.mlflow.save.side_effect = RuntimeError("MLflow upload denied")
+    elif failure == "mlflow_missing":
+        callbacks.mlflow.save.return_value = None
+
+    def pipeline(params, output):
+        document = _native_interactions()
+        document["agents"]["judge"]["reasoning_eval"]["agent_summary"] = {"avg_score": 0.6}
+        (output / "clear_results.json").write_text(json.dumps(document))
+
+    monkeypatch.setattr(main, "_run_clear_unified_pipeline", pipeline)
+    monkeypatch.setattr(main, "read_model_auth_key", {"api-key": "api-key:ref"}.get)
+    monkeypatch.setattr(main, "resolve_model_credentials", lambda: type("Credentials", (), {"api_key": "api-key:ref"})())
+    if enabled == "false":
+        with pytest.raises(ValueError, match="must be a boolean"):
+            adapter.run_benchmark_job(config, callbacks)
+        callbacks.create_oci_artifact.assert_not_called()
+        return
+    if failure:
+        with pytest.raises(RuntimeError):
+            adapter.run_benchmark_job(config, callbacks)
+        event = callbacks.report_status.call_args.args[0]
+        assert event.status.value == "failed" and event.error_message.message
+        return
+    result = adapter.run_benchmark_job(config, callbacks)
+    assert result.overall_score == 0.6
+    metrics = {m.metric_name: m.metric_value for m in result.results}
+    assert ("sample_results.jsonl" in captured) == (enabled is True)
+    if enabled is True:
+        assert metrics["interaction_average_score"] == 0.5
+        mlflow_files = {a.path: a.local_path.read_bytes() for a in callbacks.mlflow.save.call_args.kwargs["artifacts"] if hasattr(a, "local_path")}
+        assert mlflow_files["sample_results.jsonl"] == captured["sample_results.jsonl"]
+        assert mlflow_files["manifest.json"] == captured["manifest.json"]
+    else:
+        assert "interaction_average_score" not in metrics
+
+
+def test_export_matches_checked_in_clear_native_report():
+    document = json.loads(Path("examples/output/local/clear_results.json").read_text())
+    rows = main._interaction_samples(document)
+    assert len(rows) == document["metadata"]["statistics"]["total_interactions_analyzed"] == 6
+
+
+def test_interaction_and_agent_weighted_means_are_distinct(tmp_path):
+    document = _native_interactions()
+    first = document["agents"]["judge"]["reasoning_eval"]
+    first["no_issues"][1]["input_output_pair"]["score"] = 1.0
+    first["agent_summary"] = {"avg_score": 1.0}
+    document["agents"]["other"] = {"reasoning_eval": {
+        "agent_summary": {"avg_score": 0.0}, "no_issues": [
+            {"trace_id": "trace-c", "input_output_pair": {"id": "c", "score": 0.0}}
+        ], "issues": []}}
+    document["metadata"]["statistics"]["total_interactions_analyzed"] = 3
+    path = tmp_path / "clear_results.json"
+    path.write_text(json.dumps(document))
+    adapter = ClearAdapter(job_spec_path="meta/job.json")
+    original = adapter._compute_overall_score(adapter._extract_agentic_results(str(path)))
+    samples = main._interaction_samples(document)
+    assert original == 0.5
+    assert sum(row["prediction"] for row in samples) / len(samples) == pytest.approx(2 / 3)
