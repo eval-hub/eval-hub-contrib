@@ -38,6 +38,19 @@ def test_infer_offline_from_tokenizer_and_bundle(fake_test_data: Path) -> None:
     assert should_use_hf_offline(params, test_data_root=fake_test_data)
 
 
+def test_infer_offline_from_tokenizer_and_prepared_datasets_cache(tmp_path: Path) -> None:
+    tokenizer = tmp_path / "tokenizer"
+    _touch(tokenizer / "tokenizer.json")
+    cache = tmp_path / "datasets" / "EleutherAI___drop" / "default" / "0.0.0" / "revision"
+    cache.mkdir(parents=True)
+    parameters = {"tokenizer": str(tokenizer)}
+    job_spec_path = str(tmp_path / "job.json")
+    assert not should_use_hf_offline(parameters, job_spec_path=job_spec_path, test_data_root=tmp_path)
+
+    _touch(cache / "dataset_info.json")
+    assert should_use_hf_offline(parameters, job_spec_path=job_spec_path, test_data_root=tmp_path)
+
+
 def test_infer_offline_from_test_data_ref_in_job_spec(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "test_data"
     root.mkdir()
@@ -94,6 +107,23 @@ def test_configure_hf_offline_environment_updates_os_environ(monkeypatch, tmp_pa
     assert env["HF_XET_CACHE"] == str(writable / "xet")
     assert env["HF_ASSETS_CACHE"] == str(writable / "assets")
     assert env["HF_HUB_OFFLINE"] == "1"
+
+
+def test_configure_hf_offline_environment_uses_staged_tiktoken_cache(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", "/configured-tiktoken")
+    root = tmp_path / "test_data"
+    root.mkdir()
+    writable = tmp_path / "writable"
+    env: dict[str, str] = {}
+    configure_hf_offline_environment(str(root), env, writable_cache_home=str(writable))
+    assert "TIKTOKEN_CACHE_DIR" not in env
+
+    staged = root / "tiktoken"
+    staged.mkdir()
+    configure_hf_offline_environment(str(root), env, writable_cache_home=str(writable))
+    assert env["TIKTOKEN_CACHE_DIR"] == str(staged)
 
 
 def test_read_only_staged_dataset_directories_mirror_to_writable_cache(tmp_path: Path) -> None:

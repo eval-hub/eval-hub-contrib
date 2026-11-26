@@ -103,6 +103,7 @@ STANDARD_TASK_MAP: dict[str, str | None] = {
     "inspect/aime2024":               "inspect_evals/aime2024",
     "inspect/aime2025":               "inspect_evals/aime2025",
     # Knowledge & reasoning
+    "inspect/drop":                   "inspect_evals/drop",
     "inspect/mmlu":                   "inspect_evals/mmlu",
     "inspect/mmlu-pro":               "inspect_evals/mmlu_pro",
     "inspect/gpqa":                   "inspect_evals/gpqa",

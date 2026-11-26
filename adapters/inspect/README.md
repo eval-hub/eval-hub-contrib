@@ -127,6 +127,20 @@ writable **`/data/huggingface`** volume. Disconnected FVT jobs also set
 `/test_data/tokenizer` alongside **`test_data_ref`**; either signal enables
 offline mode when `/test_data` is populated.
 
+For DROP, stage the Hugging Face cache with both the validation and training
+splits and the serving model's tokenizer. Inspect counts tokens with tiktoken's
+`o200k_base` fallback for OpenAI-compatible models. On a connected machine,
+populate the tiktoken cache with `TIKTOKEN_CACHE_DIR=/path/to/bundle/tiktoken
+python -c 'import tiktoken; tiktoken.get_encoding("o200k_base")'` and include
+`tiktoken/` in the bundle. The adapter uses `/test_data/tiktoken` when present
+during an offline run.
+
+DROP defaults to three shuffled examples. Set `parameters.task_args.fewshot`
+to `0` for zero-shot prompting. Set `fewshot_seed` to choose the shuffle seed
+(default `42`) or `fewshot_shuffle` to `false` to use training examples in
+dataset order. EvalHub reports mean token F1 and its passage-clustered standard
+error.
+
 To build the tree to upload, run the benchmark once on a connected machine with a
 throwaway `HF_HOME` and a mock model, then sync `hub/` and `datasets/` to the bucket
 prefix (shown for MMLU-Pro; about 13 MB):

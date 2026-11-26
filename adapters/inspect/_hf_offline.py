@@ -4,9 +4,9 @@ Eval Hub stages benchmark data under ``/test_data``. Inspect tasks (Open-Telco, 
 load datasets via ``datasets`` / the Hub. Without offline env vars they call huggingface.co and
 fail on air-gapped clusters.
 
-Detection mirrors ``lm-evaluation-harness`` (tokenizer under ``/test_data`` + co-located
-``dataset_dict.json`` bundles) and extends it for Inspect jobs that only set ``test_data_ref``
-(e.g. Open-Telco collections) without a tokenizer parameter.
+Offline mode can be inferred from a local tokenizer alongside prepared datasets.
+A populated test-data mount referenced by the job spec also enables offline mode,
+including for jobs without a tokenizer parameter.
 """
 
 from __future__ import annotations
@@ -85,6 +85,10 @@ def _dataset_material_present_under_test_data(
             if tokenizer_resolved.is_relative_to(cres):
                 continue
             if (child / "dataset_dict.json").is_file():
+                return True
+            if child.name == "datasets" and any(
+                info.is_file() for info in child.glob("*/*/*/*/dataset_info.json")
+            ):
                 return True
     except OSError:
         return False
@@ -256,6 +260,9 @@ def configure_hf_offline_environment(
         "HF_EVALUATE_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
     }
+    tiktoken_cache = staged_root / "tiktoken"
+    if tiktoken_cache.is_dir():
+        values["TIKTOKEN_CACHE_DIR"] = str(tiktoken_cache)
     for key, value in values.items():
         os.environ[key] = value
         if env is not None:
