@@ -256,6 +256,9 @@ def configure_hf_offline_environment(
         "HF_EVALUATE_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
     }
+    tiktoken_cache = staged_root / "tiktoken"
+    if tiktoken_cache.is_dir():
+        values["TIKTOKEN_CACHE_DIR"] = str(tiktoken_cache)
     for key, value in values.items():
         os.environ[key] = value
         if env is not None:

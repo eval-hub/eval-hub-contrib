@@ -96,6 +96,23 @@ def test_configure_hf_offline_environment_updates_os_environ(monkeypatch, tmp_pa
     assert env["HF_HUB_OFFLINE"] == "1"
 
 
+def test_configure_hf_offline_environment_uses_staged_tiktoken_cache(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", "/configured-tiktoken")
+    root = tmp_path / "test_data"
+    root.mkdir()
+    writable = tmp_path / "writable"
+    env: dict[str, str] = {}
+    configure_hf_offline_environment(str(root), env, writable_cache_home=str(writable))
+    assert "TIKTOKEN_CACHE_DIR" not in env
+
+    staged = root / "tiktoken"
+    staged.mkdir()
+    configure_hf_offline_environment(str(root), env, writable_cache_home=str(writable))
+    assert env["TIKTOKEN_CACHE_DIR"] == str(staged)
+
+
 def test_read_only_staged_dataset_directories_mirror_to_writable_cache(tmp_path: Path) -> None:
     staged_root = tmp_path / "test_data"
     source = staged_root / "datasets" / "datasets--example" / "snapshots" / "revision"
