@@ -1,8 +1,9 @@
 """NeMo Guardrails adapter for EvalHub.
 
 Evaluates NeMo Guardrails configurations against classification datasets.
-Starts a local NeMo Guardrails server, sends prompts to the /v1/checks
-endpoint, and computes accuracy, precision, recall, F1, and latency metrics.
+Starts a local NeMo Guardrails server or connects to an external server,
+sends prompts to /v1/checks, and computes accuracy, precision, recall, F1,
+and latency metrics.
 """
 
 import asyncio
@@ -23,9 +24,10 @@ import statistics
 import subprocess
 import tempfile
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import jq
 import requests
@@ -833,8 +835,11 @@ def _start_server(
     return proc, os.path.abspath(log_path), server_root
 
 
-def warmup_server(port: int, attempts: int = 30, timeout: int = 15) -> None:
-    url = f"http://localhost:{port}/v1/checks"
+def warmup_server(
+    port: int, attempts: int = 30, timeout: int = 15, *, server_url: str | None = None,
+) -> None:
+    """Wait for a successful check before collecting latency measurements."""
+    url = f"{server_url.rstrip('/') if server_url else f'http://localhost:{port}'}/v1/checks"
     payload = {
         "model": "dummy",
         "messages": [{"role": "user", "content": "hello"}],
@@ -1380,6 +1385,19 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
     def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
         start_time = time.monotonic()
         params = config.parameters or {}
+        override = params.get("external_server", False)
+        external_server = override is True or (
+            isinstance(override, str) and override.lower() == "true"
+        )
+        external_url = None
+        if external_server:
+            external_url = str(config.model.url) if config.model and config.model.url else ""
+            parsed = urlsplit(external_url)
+            if (parsed.scheme not in ("http", "https") or not parsed.hostname
+                    or parsed.query or parsed.fragment or parsed.username or parsed.password):
+                raise ValueError("external_server requires model.url to be an HTTP(S) base URL without credentials, query, or fragment")
+            external_url = external_url.rstrip("/")
+
         save_samples = params.get("save_sample_results", False)
         if type(save_samples) is not bool:
             raise ValueError("parameters.save_sample_results must be a boolean")
@@ -1418,13 +1436,17 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
             JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.INITIALIZING)
         )
 
-        config_path = _validate_nemo_config_path(nemo_config_name)
-        nemo_version = _get_nemo_version()
-        nemo_commit = _get_nemo_commit()
-        config_hash = _hash_config_dir(config_path)
-
-        logger.info("NeMo Guardrails version: %s (commit: %s)", nemo_version, nemo_commit)
-        logger.info("Config: %s (hash: %s)", config_path, config_hash)
+        config_path = None
+        nemo_version = None
+        nemo_commit = None
+        config_hash = None
+        if not external_server:
+            config_path = _validate_nemo_config_path(nemo_config_name)
+            nemo_version = _get_nemo_version()
+            nemo_commit = _get_nemo_commit()
+            config_hash = _hash_config_dir(config_path)
+            logger.info("NeMo Guardrails version: %s (commit: %s)", nemo_version, nemo_commit)
+            logger.info("Config: %s (hash: %s)", config_path, config_hash)
 
         callbacks.report_status(
             JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.LOADING_DATA)
@@ -1446,12 +1468,21 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
             JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.RUNNING_EVALUATION)
         )
 
-        logger.info("Starting NeMo server on port %d", server_port)
+        if external_server:
+            assert external_url is not None  # Validated before loading datasets.
+            logger.info("Using externally managed NeMo server")
+            server_context = nullcontext((external_url, None))
+        else:
+            assert config_path is not None  # Resolved in local mode above.
+            logger.info("Starting NeMo server on port %d", server_port)
+            server_context = managed_server(config_path, server_port, startup_timeout, verbose=verbose)
 
-        with managed_server(config_path, server_port, startup_timeout, verbose=verbose) as (server_url, _):
-            logger.info("NeMo server ready at %s", server_url)
+        with server_context as (server_url, _):
             logger.info("Warming up server...")
-            warmup_server(server_port)
+            if external_server:
+                warmup_server(server_port, server_url=server_url)
+            else:
+                warmup_server(server_port)
             logger.info("Server warm-up complete")
             logger.info("Evaluating %d samples with %d worker(s)", len(samples), workers)
 
@@ -1562,7 +1593,8 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
                 "nemo_version": nemo_version,
                 "nemo_commit": nemo_commit,
                 "config_hash": config_hash,
-                "nemo_config": nemo_config_name,
+                "nemo_config": None if external_server else nemo_config_name,
+                "external_server": external_server,
                 "datasets": [dc.get("name", dc.get("hf_name", "unknown")) for dc in dataset_configs],
                 "workers": workers,
                 "errors": total_errors,

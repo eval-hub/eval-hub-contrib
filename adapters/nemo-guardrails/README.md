@@ -1,6 +1,6 @@
 # NeMo Guardrails Adapter
 
-Evaluates [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) configurations against labeled datasets. The adapter starts a local NeMo Guardrails server, sends prompts to the `/v1/checks` endpoint, and computes accuracy, precision, recall, F1, masking score, and latency metrics.
+Evaluates [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) configurations against labeled datasets. The adapter starts a local NeMo Guardrails server (or connects to an externally managed server), sends prompts to the `/v1/checks` endpoint, and computes accuracy, precision, recall, F1, masking score, and latency metrics.
 
 ## Benchmarks
 
@@ -55,6 +55,7 @@ Metrics produced: `masking_accuracy` (mean score across all individual value che
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
+| `external_server` | `false` | Use `model.url` as an existing server only when explicitly enabled (`true` or CLI string `true`); otherwise start a local server |
 | `nemo_config` | benchmark ID | Path to the NeMo Guardrails config directory (absolute, or a name relative to `NEMO_CONFIGS_DIR`; falls back to the benchmark ID) |
 | `server_port` | `9999` | Port for the NeMo Guardrails server |
 | `server_host` | `localhost` | Host for the NeMo Guardrails server |
@@ -70,7 +71,61 @@ Metrics produced: `masking_accuracy` (mean score across all individual value che
 ## Prerequisites
 
 - Python 3.12 (the NeMo Guardrails dependency stack includes native extensions that may fail to build on newer Python versions)
-- NeMo Guardrails config directory with a `config.yaml`
+- For local-server mode only: NeMo Guardrails config directory with a `config.yaml`
+
+## External Server Evaluation
+
+To evaluate an existing server (for example, one deployed by the TrustyAI
+operator on OpenShift), supply the server **base URL** in `model.url` and set
+`parameters.external_server: true` (CLI: `--param external_server=true`).
+This explicit opt-in is required for every hostname, including remote services
+and localhost proxies. Do not append `/v1/checks`.
+The server must expose `/v1/checks` with a default NeMo configuration; the
+adapter does not deploy or select a server-side configuration.
+
+Example EvalHub evaluation request (replace the provider ID with the ID returned
+when registering this provider):
+
+```json
+{
+  "name": "external-nemo-prompt-injection",
+  "model": {
+    "name": "nemo-guardrails",
+    "url": "http://my-nemo-service.my-namespace.svc:8000"
+  },
+  "benchmarks": [
+    {
+      "id": "prompt_injection",
+      "provider_id": "<registered-provider-id>",
+      "parameters": {"external_server": true, "workers": 1}
+    }
+  ]
+}
+```
+
+Use the actual Service name and port from your deployment. The endpoint must be
+reachable from the adapter job (or via EvalHub's model proxy). HTTP and HTTPS
+base URLs are supported, including proxy path prefixes. Inline URL credentials,
+query strings, and fragments are rejected; use EvalHub's model authentication
+configuration for credentials rather than embedding them in the URL.
+
+External mode skips `nemo_config` validation, hashing, local server startup,
+and shutdown. It uses the same warm-up check and retry policy as local mode
+(30 attempts, 15-second timeout per request), targeting the external URL;
+warm-up requests are excluded from the evaluation latency statistics.
+A warm-up failure fails the job without stopping the external server.
+`server_host`, `server_port`, and `startup_timeout` do not configure the external
+endpoint. The `nemo_version`, `nemo_commit`, `config_hash`, and `nemo_config`
+metadata fields are `null` because the adapter cannot discover those properties
+of the remote deployment. Capture the server image and configuration separately
+for reproducibility.
+
+Keep `workers: 1` and submit jobs sequentially for isolated latency measurements.
+Ensure no other clients are loading the same server. External mode is enabled
+only when `external_server` is boolean `true` or the string `"true"`
+(case-insensitive). Missing or other values retain the original adapter-managed
+local server, regardless of `model.url`. No hostname-based detection is used,
+so the behavior also works when EvalHub rewrites the URL to a localhost proxy.
 
 ## Local Evaluation Example
 
