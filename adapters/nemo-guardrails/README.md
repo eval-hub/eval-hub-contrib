@@ -68,7 +68,7 @@ Metrics produced: `masking_accuracy` (mean score across all individual value che
 
 ## Prerequisites
 
-- Python 3.12+
+- Python 3.12 (the NeMo Guardrails dependency stack includes native extensions that may fail to build on newer Python versions)
 - NeMo Guardrails config directory with a `config.yaml`
 
 ## Local Evaluation Example
@@ -78,7 +78,7 @@ This example evaluates a DeBERTa-based prompt injection config against three lab
 ### 1. Install dependencies
 
 ```bash
-uv venv --python 3.12 .venv
+uv venv --python 3.12 --clear .venv
 source .venv/bin/activate
 uv pip install -r requirements.txt "eval-hub-sdk[server,cli]>=0.4.3"
 ```
