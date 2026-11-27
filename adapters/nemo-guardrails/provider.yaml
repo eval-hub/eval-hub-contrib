@@ -331,7 +331,7 @@ benchmarks:
         split: "test"
         prompt_column: "text"
         label_column: "labels"
-        block_labels: [ ar, bg, de, el, es, fr, it, ja, nl, pl, pt, ru, sw, th, tr, ur, vi, zh ]
+        block_labels: [ ar, bg, de, el, es, fr, hi, it, ja, nl, pl, pt, ru, sw, th, tr, ur, vi, zh ]
         pass_labels: [ en ]
 parameters:
   - name: save_sample_results

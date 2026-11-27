@@ -11,6 +11,7 @@ Evaluates [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) configura
 | `pii` | Personally Identifiable Information | ai4privacy (classification) | safety |
 | `pii_masking` | PII Masking Quality | ai4privacy (masking score) | safety |
 | `tool_response_injection` | Tool Response Injection | rgeada/tool_response_injections | safety |
+| `language_detection_en` |English Language Detection | npapluca-language-identification | safety |
 
 ## Dataset Types
 
