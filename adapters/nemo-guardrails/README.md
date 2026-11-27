@@ -11,6 +11,7 @@ Evaluates [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) configura
 | `pii` | Personally Identifiable Information | ai4privacy (classification) | safety |
 | `pii_masking` | PII Masking Quality | ai4privacy (masking score) | safety |
 | `tool_response_injection` | Tool Response Injection | rgeada/tool_response_injections | safety |
+| `language_detection_en` |English Language Detection | npapluca-language-identification | safety |
 
 ## Dataset Types
 
@@ -68,7 +69,7 @@ Metrics produced: `masking_accuracy` (mean score across all individual value che
 
 ## Prerequisites
 
-- Python 3.12+
+- Python 3.12 (the NeMo Guardrails dependency stack includes native extensions that may fail to build on newer Python versions)
 - NeMo Guardrails config directory with a `config.yaml`
 
 ## Local Evaluation Example
@@ -78,7 +79,7 @@ This example evaluates a DeBERTa-based prompt injection config against three lab
 ### 1. Install dependencies
 
 ```bash
-uv venv --python 3.12 .venv
+uv venv --python 3.12 --clear .venv
 source .venv/bin/activate
 uv pip install -r requirements.txt "eval-hub-sdk[server,cli]>=0.4.3"
 ```

@@ -10,8 +10,17 @@ import pytest
 from evalhub.adapter import JobCallbacks, JobResults
 
 from main import (
+    ChunkStrategy,
     NemoGuardrailsAdapter,
     NemoResponses,
+)
+
+
+CONFUSION_METRIC_NAMES = (
+    "confusion_true_negative_(correctly_blocked)",
+    "confusion_false_positive_(incorrectly_allowed)",
+    "confusion_false_negative_(incorrectly_blocked)",
+    "confusion_true_positive_(correctly_allowed)",
 )
 
 
@@ -100,17 +109,32 @@ def _fake_managed_server(*args, **kwargs):
 
 @pytest.mark.integration
 class TestNemoGuardrailsAdapter:
-    def test_prompt_injection_benchmark(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("benchmark_id", ["prompt_injection", "language_detection_en"])
+    @pytest.mark.parametrize("n_blocked,n_allowed,fp,fn", [
+        (5, 5, 0, 0),
+        (3, 7, 1, 3),
+        (5, 0, 0, 0),
+        (0, 5, 0, 0),
+    ])
+    def test_classification_benchmark(
+        self, tmp_path, monkeypatch, benchmark_id, n_blocked, n_allowed, fp, fn
+    ):
         config_dir = tmp_path / "test_config"
         config_dir.mkdir()
         (config_dir / "config.yaml").write_text("rails: {}")
 
-        job_spec_path = _load_job_spec(tmp_path, nemo_config=str(config_dir))
+        job_spec_path = _load_job_spec(
+            tmp_path, benchmark_id=benchmark_id, nemo_config=str(config_dir)
+        )
         adapter = NemoGuardrailsAdapter(job_spec_path=job_spec_path)
         callbacks = create_autospec(JobCallbacks)
 
-        canned_samples = _make_canned_samples()
-        canned_results = _make_canned_results()
+        canned_samples = _make_canned_samples(n_blocked, n_allowed)
+        canned_results = _make_canned_results(n_blocked, n_allowed)
+        for result in canned_results[:fp]:
+            result["predicted_blocked"] = NemoResponses.ALLOW
+        for result in canned_results[n_blocked:n_blocked + fn]:
+            result["predicted_blocked"] = NemoResponses.BLOCKED
 
         monkeypatch.setattr("main.managed_server", _fake_managed_server)
         monkeypatch.setattr("main.warmup_server", lambda *a, **k: None)
@@ -120,9 +144,19 @@ class TestNemoGuardrailsAdapter:
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
 
         assert isinstance(results, JobResults)
-        assert results.benchmark_id == "prompt_injection"
-        assert results.overall_score == 1.0
-        assert results.num_examples_evaluated == 10
+        assert results.benchmark_id == benchmark_id
+        total = n_blocked + n_allowed
+        assert results.overall_score == pytest.approx((total - fp - fn) / total)
+        assert results.num_examples_evaluated == total
+
+        expected_matrix = [n_blocked - fp, fp, fn, n_allowed - fn]
+        metrics = {r.metric_name: r.metric_value for r in results.results}
+        for name, value in zip(CONFUSION_METRIC_NAMES, expected_matrix, strict=True):
+            assert metrics[name] == value
+        assert results.evaluation_metadata["confusion_matrix"] == {
+            "labels": ["blocked", "allowed"],
+            "matrix": expected_matrix,
+        }
 
         metric_names = {r.metric_name for r in results.results}
         assert "accuracy" in metric_names
@@ -141,6 +175,7 @@ class TestNemoGuardrailsAdapter:
         "pii",
         "pii_masking",
         "tool_response_injection",
+        "language_detection_en",
     ])
     def test_all_benchmarks_have_datasets(self, benchmark_id):
         from main import _load_benchmark_datasets
@@ -160,6 +195,46 @@ class TestNemoGuardrailsAdapter:
             else:
                 assert "label_column" in ds
 
+    def test_provider_declares_classification_confusion_metrics(self):
+        import yaml
+
+        from main import ADAPTER_DIR
+
+        with open(os.path.join(ADAPTER_DIR, "provider.yaml")) as f:
+            benchmarks = yaml.safe_load(f)["benchmarks"]
+        for benchmark in benchmarks:
+            declared = set(benchmark["metrics"])
+            if "accuracy" in declared:
+                assert set(CONFUSION_METRIC_NAMES) <= declared, benchmark["id"]
+            else:
+                assert not set(CONFUSION_METRIC_NAMES) & declared, benchmark["id"]
+
+    def test_language_detection_dataset(self):
+        from main import _huggingface_rows_to_samples, _load_benchmark_datasets
+
+        datasets = _load_benchmark_datasets("language_detection_en")
+        assert len(datasets) == 1
+        config = datasets[0]
+        assert config["source"] == "huggingface"
+        assert config["hf_name"] == "papluca/language-identification"
+        assert config["subset"] == "default"
+        assert config["split"] == "test"
+        non_english = [
+            "ar", "bg", "de", "el", "es", "fr", "it", "ja", "nl",
+            "pl", "pt", "ru", "sw", "th", "tr", "ur", "vi", "zh",
+        ]
+        rows = [{"text": f"text in {label}", "labels": label}
+                for label in ["en", *non_english, "unknown"]]
+        samples = _huggingface_rows_to_samples(config, rows)
+        assert samples == [
+            {
+                "prompt": row["text"],
+                "expected_blocked": row["labels"] != "en",
+                "dataset_type": "classification",
+            }
+            for row in rows[:-1]
+        ]
+
     def test_unknown_benchmark_raises(self):
         from main import _load_benchmark_datasets
         with pytest.raises(ValueError, match="not found"):
@@ -172,6 +247,9 @@ class TestNemoGuardrailsAdapter:
         assert metrics["accuracy"] == 1.0
         assert metrics["errors"] == 0
         assert metrics["total"] == 10
+        assert metrics["confusion_matrix"] == {
+            "labels": ["blocked", "allowed"], "matrix": [5, 0, 0, 5],
+        }
 
     def test_classification_metrics_with_errors(self):
         from main import _compute_classification_metrics
@@ -189,6 +267,10 @@ class TestNemoGuardrailsAdapter:
         metrics, _errors = _compute_classification_metrics(results)
         assert metrics["errors"] == 1
         assert metrics["total"] == 6
+        assert metrics["confusion_matrix"] == {
+            "labels": ["blocked", "allowed"], "matrix": [3, 0, 0, 3],
+        }
+        assert _errors == [results[-1]]
 
     def test_classification_metrics_ignores_masking_results(self):
         from main import _compute_classification_metrics
@@ -344,7 +426,7 @@ class TestNemoGuardrailsAdapter:
             }
 
         monkeypatch.setattr(main, "_evaluate_chunk", fake_chunk)
-        result = main._evaluate_prompt("http://x", long_prompt, chunk_strategy="chunk", chunk_size=2000)
+        result = main._evaluate_prompt("http://x", long_prompt, chunk_strategy=ChunkStrategy.CHUNK, chunk_size=2000)
         assert result["predicted_blocked"] == NemoResponses.BLOCKED
         assert calls["n"] == 2
 
@@ -362,7 +444,7 @@ class TestNemoGuardrailsAdapter:
             }
 
         monkeypatch.setattr(main, "_evaluate_chunk", fake_chunk)
-        result = main._evaluate_prompt("http://x", long_prompt, chunk_strategy="chunk", chunk_size=2000)
+        result = main._evaluate_prompt("http://x", long_prompt, chunk_strategy=ChunkStrategy.CHUNK, chunk_size=2000)
         assert result["predicted_blocked"] == NemoResponses.ALLOW
         assert result["error"] is None
 
@@ -382,7 +464,7 @@ class TestNemoGuardrailsAdapter:
             }
 
         monkeypatch.setattr(main, "_evaluate_chunk", fake_chunk)
-        main._evaluate_prompt("http://x", long_prompt, chunk_strategy="limit", chunk_size=2000)
+        main._evaluate_prompt("http://x", long_prompt, chunk_strategy=ChunkStrategy.LIMIT, chunk_size=2000)
         assert len(seen) == 1
         assert seen[0] == "A" * 2000
 
@@ -402,7 +484,7 @@ class TestNemoGuardrailsAdapter:
             }
 
         monkeypatch.setattr(main, "_evaluate_chunk", fake_chunk)
-        main._evaluate_prompt("http://x", long_prompt, chunk_strategy="none", chunk_size=2000)
+        main._evaluate_prompt("http://x", long_prompt, chunk_strategy=ChunkStrategy.NONE, chunk_size=2000)
         assert len(seen) == 1
         assert seen[0] == long_prompt
 
@@ -507,7 +589,7 @@ def test_staged_jsonl_bare_array_line(tmp_path, monkeypatch):
 
 
 def test_staged_parquet_rows(tmp_path, monkeypatch):
-    pytest.importorskip("pyarrow.parquet")
+    parquet = pytest.importorskip("pyarrow.parquet")
     import pyarrow
 
     import main
@@ -527,7 +609,7 @@ def test_staged_parquet_rows(tmp_path, monkeypatch):
             "label": ["blocked", "allowed"],
         }
     )
-    pyarrow.parquet.write_table(table, str(test_data / "data.parquet"))
+    parquet.write_table(table, str(test_data / "data.parquet"))
 
     samples = main._load_huggingface(_classification_config())
     assert len(samples) == 2
@@ -810,7 +892,9 @@ def test_mount_without_spec_key_is_treated_as_staged_job(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("EVALHUB_TEST_DATA_DIR", str(root))
 
-    assert len(main._load_staged_rows(_multi_dataset_config("deepset/prompt-injections"), "test")) == 1
+    rows = main._load_staged_rows(_multi_dataset_config("deepset/prompt-injections"), "test")
+    assert rows is not None
+    assert len(rows) == 1
     with pytest.raises(RuntimeError, match=r"Stage it under .*other-dataset/"):
         main._load_staged_rows(_multi_dataset_config("acme/other-dataset"), "test")
 
@@ -1240,6 +1324,33 @@ def sample_export_job(tmp_path, monkeypatch):
     monkeypatch.setattr("main.load_samples", lambda *a, **k: _make_canned_samples())
     monkeypatch.setattr("main.run_evaluation", lambda *a, **k: _make_canned_results())
     return adapter, callbacks
+
+
+@pytest.mark.parametrize("scenario", ["empty", "error_only", "masking_only"])
+def test_no_confusion_metrics_without_classification_results(sample_export_job, monkeypatch, scenario):
+    from main import _compute_classification_metrics
+
+    adapter, callbacks = sample_export_job
+    adapter.job_spec.parameters["save_sample_results"] = False
+    if scenario == "error_only":
+        observations = _make_canned_results(n_blocked=1, n_allowed=0)
+        observations[0]["predicted_blocked"] = NemoResponses.ERROR
+        observations[0]["error"] = "timeout"
+    elif scenario == "masking_only":
+        observations = [_make_masking_result(["secret"], "safe")]
+        adapter.job_spec.benchmark_id = "pii_masking"
+    else:
+        observations = []
+    monkeypatch.setattr("main.run_evaluation", lambda *a, **k: observations)
+
+    metrics, errors = _compute_classification_metrics(observations)
+    assert metrics["total"] == 0
+    assert metrics["confusion_matrix"] == {}
+    assert metrics["errors"] == len(errors) == (1 if scenario == "error_only" else 0)
+
+    results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+    assert not set(CONFUSION_METRIC_NAMES) & {r.metric_name for r in results.results}
+    assert results.evaluation_metadata["confusion_matrix"] == {}
 
 
 @pytest.mark.parametrize("value", ["true", "false", 0, 1, None, [], {}])

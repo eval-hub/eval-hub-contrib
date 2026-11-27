@@ -1292,7 +1292,7 @@ def _compute_classification_metrics(results: list[dict]) -> tuple[dict, list]:
             }
             for label in labels
         },
-        "confusion_matrix": {"labels": labels, "matrix": cm.tolist()},
+        "confusion_matrix": {"labels": labels, "matrix": cm.ravel().tolist()},
     }, others
 
 
@@ -1532,6 +1532,15 @@ class NemoGuardrailsAdapter(FrameworkAdapter):
             EvaluationResult(metric_name="p95_latency_ms", metric_value=timing["p95_ms"]),
             EvaluationResult(metric_name="errors", metric_value=float(total_errors)),
         ])
+
+        if cls_metrics.get("confusion_matrix"):
+            tn, fp, fn, tp =  cls_metrics["confusion_matrix"]["matrix"]
+            eval_results.extend([
+                EvaluationResult(metric_name="confusion_true_negative_(correctly_blocked)", metric_value=tn),
+                EvaluationResult(metric_name="confusion_false_positive_(incorrectly_allowed)", metric_value=fp),
+                EvaluationResult(metric_name="confusion_false_negative_(incorrectly_blocked)", metric_value=fn),
+                EvaluationResult(metric_name="confusion_true_positive_(correctly_allowed)", metric_value=tp),
+            ])
 
         callbacks.report_status(
             JobStatusUpdate(status=JobStatus.RUNNING, phase=JobPhase.PERSISTING_ARTIFACTS)

@@ -1,5 +1,5 @@
 eval-hub-sdk[adapter]~=1.0.6
-nemoguardrails[all] @ git+https://github.com/trustyai-explainability/NeMo-Guardrails.git@facc255fa5d7839f306851c312fb5821a126545f
+nemoguardrails[all] @ git+https://github.com/trustyai-explainability/NeMo-Guardrails.git@8fd20b42611a06df62e2461347d28c0b3dd9838b
 datasets
 requests
 pyyaml
