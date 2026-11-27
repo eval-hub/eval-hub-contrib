@@ -107,6 +107,147 @@ def _fake_managed_server(*args, **kwargs):
     yield "http://localhost:9999", "/tmp/server.log"
 
 
+class TestExternalServer:
+    @pytest.mark.parametrize("url,override", [
+        ("http://nemo.test:8000/", "true"),
+        ("http://nemo.test:8000/", True),
+        ("https://proxy.test/model/nemo/", True),
+        ("http://localhost:9999", True),
+        ("http://localhost:9999", "true"),
+        ("http://127.0.0.1:9999", True),
+        ("http://[::1]:9999", True),
+    ])
+    def test_uses_remote_url_without_local_lifecycle(self, tmp_path, monkeypatch, url, override):
+        adapter = NemoGuardrailsAdapter(job_spec_path=_load_job_spec(tmp_path))
+        config = adapter.job_spec
+        config.parameters = {"workers": 1}
+        if override is not None:
+            config.parameters["external_server"] = override
+        config.model.url = url
+        calls = []
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("External mode must not inspect or manage a local server")
+
+        for name in ("managed_server", "_start_server", "_stop_server",
+                     "_validate_nemo_config_path", "_hash_config_dir",
+                     "_get_nemo_version", "_get_nemo_commit"):
+            monkeypatch.setattr(f"main.{name}", forbidden)
+        monkeypatch.setattr("main.load_samples", lambda *a, **kw: _make_canned_samples())
+        monkeypatch.setattr("main.warmup_server", lambda *a, **kw: calls.append(("warmup", kw)))
+
+        def evaluate(server_url, samples, **kwargs):
+            calls.append(("evaluate", server_url))
+            assert kwargs["workers"] == 1
+            return _make_canned_results()
+
+        monkeypatch.setattr("main.run_evaluation", evaluate)
+        result = adapter.run_benchmark_job(config, create_autospec(JobCallbacks))
+        assert calls == [("warmup", {"server_url": url.rstrip("/")}),
+                         ("evaluate", url.rstrip("/"))]
+        assert result.overall_score == 1.0
+        assert result.evaluation_metadata["external_server"] is True
+        for key in ("nemo_version", "nemo_commit", "config_hash", "nemo_config"):
+            assert result.evaluation_metadata[key] is None
+
+    @pytest.mark.parametrize("url", [
+        "http://localhost:9999", "http://LOCALHOST.:9999",
+        "http://127.0.0.1:9999", "http://127.0.0.2:9999", "http://[::1]:9999",
+        "http://nemo.namespace.svc:8000", "https://proxy.test/model/nemo/",
+    ])
+    @pytest.mark.parametrize("override", [None, False, "false", "anything", 1])
+    def test_without_opt_in_preserves_managed_server(self, tmp_path, monkeypatch, url, override):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text("rails: {}")
+        adapter = NemoGuardrailsAdapter(job_spec_path=_load_job_spec(tmp_path, nemo_config=str(config_dir)))
+        adapter.job_spec.model.url = url
+        if override is not None:
+            adapter.job_spec.parameters["external_server"] = override
+        starts = []
+
+        @contextmanager
+        def managed(*args, **kwargs):
+            starts.append(args)
+            yield "http://localhost:9999", "/tmp/server.log"
+
+        monkeypatch.setattr("main.managed_server", managed)
+        monkeypatch.setattr("main.warmup_server", lambda *a, **kw: None)
+        monkeypatch.setattr("main.load_samples", lambda *a, **kw: _make_canned_samples())
+        monkeypatch.setattr("main.run_evaluation", lambda *a, **kw: _make_canned_results())
+        result = adapter.run_benchmark_job(adapter.job_spec, create_autospec(JobCallbacks))
+        assert len(starts) == 1
+        assert starts[0][0] == str(config_dir)
+        assert result.evaluation_metadata["external_server"] is False
+        assert result.evaluation_metadata["config_hash"].startswith("sha256:")
+
+    @pytest.mark.parametrize("url", [
+        "", "nemo.test:8000", "ftp://nemo.test", "http:///missing-host",
+        "http://user:secret@nemo.test", "http://nemo.test?token=secret",
+        "http://nemo.test#fragment",
+    ])
+    def test_rejects_invalid_base_url(self, tmp_path, url):
+        adapter = NemoGuardrailsAdapter(job_spec_path=_load_job_spec(tmp_path))
+        adapter.job_spec.parameters["external_server"] = True
+        adapter.job_spec.model.url = url
+        with pytest.raises(ValueError, match="external_server requires model.url"):
+            adapter.run_benchmark_job(adapter.job_spec, create_autospec(JobCallbacks))
+
+    def test_requires_model(self, tmp_path, monkeypatch):
+        adapter = NemoGuardrailsAdapter(job_spec_path=_load_job_spec(tmp_path))
+        adapter.job_spec.parameters["external_server"] = True
+        monkeypatch.setattr(adapter.job_spec, "model", None)
+        with pytest.raises(ValueError, match="external_server requires model.url"):
+            adapter.run_benchmark_job(adapter.job_spec, create_autospec(JobCallbacks))
+
+    def test_warmup_failure_prevents_evaluation(self, tmp_path, monkeypatch):
+        adapter = NemoGuardrailsAdapter(job_spec_path=_load_job_spec(tmp_path))
+        adapter.job_spec.parameters["external_server"] = True
+        adapter.job_spec.model.url = "http://nemo.test:8000"
+        monkeypatch.setattr("main.load_samples", lambda *a, **kw: _make_canned_samples())
+
+        def warmup(*args, **kwargs):
+            raise TimeoutError("not ready")
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("Must not evaluate or manage an external server after failed warm-up")
+
+        monkeypatch.setattr("main.warmup_server", warmup)
+        monkeypatch.setattr("main.run_evaluation", forbidden)
+        monkeypatch.setattr("main._stop_server", forbidden)
+        monkeypatch.setattr("main._start_server", forbidden)
+        with pytest.raises(TimeoutError, match="not ready"):
+            adapter.run_benchmark_job(adapter.job_spec, create_autospec(JobCallbacks))
+
+
+@pytest.mark.parametrize("server_url,expected", [
+    (None, "http://localhost:9999/v1/checks"),
+    ("https://proxy.test/nemo/", "https://proxy.test/nemo/v1/checks"),
+])
+def test_warmup_endpoint(monkeypatch, server_url, expected):
+    from main import warmup_server
+    from unittest.mock import Mock
+    post = Mock()
+    monkeypatch.setattr("main.requests.post", post)
+    warmup_server(9999, server_url=server_url)
+    assert post.call_args.args == (expected,)
+    assert post.call_args.kwargs["timeout"] == 15
+    assert post.call_args.kwargs["json"]["messages"][0]["content"] == "hello"
+    post.return_value.raise_for_status.assert_called_once()
+
+
+def test_warmup_retries_and_times_out(monkeypatch):
+    import requests
+    from main import warmup_server
+    from unittest.mock import Mock
+    post = Mock(side_effect=requests.ConnectionError("unavailable"))
+    monkeypatch.setattr("main.requests.post", post)
+    monkeypatch.setattr("main.time.sleep", lambda _: None)
+    with pytest.raises(TimeoutError, match="after 2 attempts"):
+        warmup_server(9999, attempts=2, server_url="http://nemo.test")
+    assert post.call_count == 2
+
+
 @pytest.mark.integration
 class TestNemoGuardrailsAdapter:
     @pytest.mark.parametrize("benchmark_id", ["prompt_injection", "language_detection_en"])
@@ -144,6 +285,8 @@ class TestNemoGuardrailsAdapter:
         results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
 
         assert isinstance(results, JobResults)
+        assert results.evaluation_metadata["external_server"] is False
+        assert results.evaluation_metadata["config_hash"].startswith("sha256:")
         assert results.benchmark_id == benchmark_id
         total = n_blocked + n_allowed
         assert results.overall_score == pytest.approx((total - fp - fn) / total)

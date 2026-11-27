@@ -334,6 +334,14 @@ benchmarks:
         block_labels: [ ar, bg, de, el, es, fr, hi, it, ja, nl, pl, pt, ru, sw, th, tr, ur, vi, zh ]
         pass_labels: [ en ]
 parameters:
+  - name: external_server
+    type: boolean
+    default: false
+    description: >-
+      Use model.url as an existing server only when explicitly set to true,
+      regardless of hostname. False or unset preserves local server startup.
+      External mode skips local config validation and hashing, warms up
+      /v1/checks, and never stops the server. Requires a default config.
   - name: save_sample_results
     type: boolean
     default: false
