@@ -4,8 +4,11 @@
 # Refresh both together — see "Updating dependencies" in README.md.
 eval-hub-sdk[adapter]~=1.0.7
 inspect-ai==0.3.278
+# Inspect's ACP integration imports acp.helpers, which was removed in 1.x.
+# Keep ACP on 0.x until Inspect supports the 1.x API.
+agent-client-protocol<1
 openai==3.24.0
-inspect-evals[math,bfcl]==0.26.0
+inspect-evals[math,bfcl,agentdojo]==0.26.0
 inspect-petri==3.1.1
 petri-bloom==0.2.6
 # Required by inspect_evals/makemesay for word tokenization and lemmatization.

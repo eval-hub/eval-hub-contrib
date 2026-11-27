@@ -354,15 +354,24 @@ The `ifeval` task from `inspect-evals` is not available in this image: it needs
 
 ### Updating dependencies
 
-Bump the pins in `requirements.txt`, then regenerate the lock and audit it. Run
-from `adapters/inspect/`:
+Bump or add direct dependencies in `requirements.txt`, then regenerate and audit
+the transitive pins. For a focused dependency change, constrain the compile to
+the versions already used on `main`; this avoids unrelated upgrades. To do an
+intentional full refresh, omit the `-c` constraint and review all resulting
+version changes. Run from `adapters/inspect/`:
 
 ```bash
 # 1. Regenerate the transitive pins (platform-independent; git lines are
 #    excluded because pip does not accept URLs in constraints files)
+git show origin/main:adapters/inspect/constraints.txt > /tmp/inspect-main-constraints.txt
 { echo "# Transitive dependency pins for the Inspect adapter image, applied with: pip install -r requirements.txt -c constraints.txt"
   echo "# Generated; do not edit by hand. Regenerate (and re-audit) with the command in README.md → Updating dependencies."
-  uv pip compile requirements.txt --universal --python-version 3.12 --no-header --no-annotate | grep -v " @ git"
+  uv pip compile requirements.txt \
+    -c /tmp/inspect-main-constraints.txt \
+    --index https://packages.redhat.com/api/pypi/public-rhai/cpu-torch2.13-el9.8/simple/ \
+    --default-index https://pypi.org/simple \
+    --index-strategy first-index \
+    --universal --python-version 3.12 --no-header --no-annotate | grep -v " @ git"
 } > constraints.txt
 
 # 2. Audit every pinned version for known vulnerabilities
