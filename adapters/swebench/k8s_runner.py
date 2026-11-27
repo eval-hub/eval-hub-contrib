@@ -11,12 +11,10 @@ import json
 import logging
 import threading
 import time
-from pathlib import Path
 
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.client.rest import ApiException
-
 from swebench.harness.constants import (
     APPLY_PATCH_FAIL,
     APPLY_PATCH_PASS,
@@ -160,6 +158,9 @@ def _create_job(
                 spec=k8s_client.V1PodSpec(
                     restart_policy="Never",
                     service_account_name=service_account,
+                    # Model patches and test code need no Kubernetes API credentials.
+                    # Pod-level false overrides service-account automount defaults.
+                    automount_service_account_token=False,
                     # Init container runs as root to fix permissions
                     # on /testbed so the eval container can run as a
                     # non-root UID on OpenShift.
@@ -257,6 +258,9 @@ def _wait_for_job(
             return True
         if job.status.failed and job.status.failed > 0:
             return False
+        # DeadlineExceeded can be terminal before Kubernetes records a failed pod count.
+        if any(c.type == "Failed" and c.status == "True" for c in (job.status.conditions or [])):
+            return False
 
         time.sleep(poll_interval)
 
@@ -315,7 +319,17 @@ def run_instance_k8s(
         logger.info("Created job %s for %s", job_name, instance_id)
     except ApiException as e:
         if e.status == 409:
-            logger.info("Job %s already exists, waiting for it", job_name)
+            # A retry may encounter a Job created before token automounting was disabled.
+            try:
+                existing = batch_v1.read_namespaced_job(job_name, namespace)
+            except ApiException as read_error:
+                logger.error("Cannot verify existing job %s: %s", job_name, read_error.reason)
+                return {"completed": False, "resolved": False}
+            if existing.spec.template.spec.automount_service_account_token is not False:
+                logger.error("Refusing existing job %s without explicit token protection", job_name)
+                _delete_job(batch_v1, job_name, namespace)
+                return {"completed": False, "resolved": False}
+            logger.info("Job %s already exists with token protection, waiting for it", job_name)
         else:
             logger.error("Error creating job %s: %s", job_name, e.reason)
             return {"completed": False, "resolved": False}
@@ -331,14 +345,15 @@ def run_instance_k8s(
     test_output_path = log_dir / LOG_TEST_OUTPUT
     test_output_path.write_text(logs)
 
+    # A rejected model patch is an evaluated attempt, not an infrastructure failure.
+    if not success and APPLY_PATCH_FAIL in logs.splitlines():
+        logger.info("Model patch could not be applied for %s", instance_id)
+        return {"completed": True, "resolved": False}
+
     if not success:
-        logger.info(
-            "Job %s exited non-zero for %s (%s)",
-            job_name, instance_id,
-            "patch apply failed" if APPLY_PATCH_FAIL in logs else "non-zero exit",
-        )
-        if APPLY_PATCH_FAIL in logs:
-            return {"completed": False, "resolved": False}
+        # Partial test output from evictions/timeouts is diagnostic, never a scored failure.
+        logger.error("Job %s did not complete successfully for %s; skipping grading", job_name, instance_id)
+        return {"completed": False, "resolved": False}
 
     if not logs.strip():
         logger.error("No logs captured for %s", instance_id)
@@ -434,19 +449,25 @@ def run_instances_k8s(
     lock = threading.Lock()
 
     def process(ts: TestSpec):
-        pred = predictions[ts.instance_id]
-        result = run_instance_k8s(
-            test_spec=ts,
-            prediction=pred,
-            run_id=run_id,
-            registry=registry,
-            namespace=namespace,
-            timeout=timeout,
-            batch_v1=batch_v1,
-            core_v1=core_v1,
-            image_tag=instance_image_tag,
-            service_account=service_account,
-        )
+        try:
+            pred = predictions[ts.instance_id]
+            result = run_instance_k8s(
+                test_spec=ts,
+                prediction=pred,
+                run_id=run_id,
+                registry=registry,
+                namespace=namespace,
+                timeout=timeout,
+                batch_v1=batch_v1,
+                core_v1=core_v1,
+                image_tag=instance_image_tag,
+                service_account=service_account,
+            )
+        except Exception as exc:
+            # Threads must report every attempted instance, including unexpected local failures.
+            logger.exception("Runner failed for %s", ts.instance_id)
+            result = {"completed": False, "resolved": False,
+                      "error": str(exc) or type(exc).__name__}
         with lock:
             results[ts.instance_id] = result
             if result["completed"]:
